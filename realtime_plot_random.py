@@ -204,7 +204,7 @@ def update_chart(n):
         ]
     )
     fig.update_layout(
-        title=f"Realtime OHLC: {STOCK_ID} ({INTERVAL_STR})",
+        title=f"{STOCK_ID} ({INTERVAL_STR})",
         xaxis_rangeslider_visible=False,
         template="plotly_dark"
     )
