@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 import copy
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, dcc, html
@@ -114,6 +115,7 @@ app.layout = html.Div([
     Input("interval-component", "n_intervals")
 )
 def update_chart(n):
+    MIN_BARS = 90  # minimal number of bars on x-axis
     with ohlc_lock:
         completed = list(completed_ohlc[STOCK_ID])
         current = copy.deepcopy(current_bars.get(STOCK_ID)) if current_bars.get(STOCK_ID) else None
@@ -122,11 +124,41 @@ def update_chart(n):
     if current is not None:
         df = pd.concat([df, pd.DataFrame([current])], ignore_index=True)
 
-    if df.empty:
-        return go.Figure()
+    interval_sec = interval_seconds
 
-    df["start_time"] = pd.to_datetime(df["start_time"])
-    df = df.sort_values("start_time")
+    if df.empty:
+        # create empty placeholder dataframe with 90 bars
+        now = datetime.now()
+        start_time = now - timedelta(seconds=interval_sec * MIN_BARS)
+        df = pd.DataFrame([{
+            "start_time": start_time + timedelta(seconds=i*interval_sec),
+            "open": None,
+            "high": None,
+            "low": None,
+            "close": None
+        } for i in range(MIN_BARS)])
+    else:
+        df["start_time"] = pd.to_datetime(df["start_time"])
+        df = df.sort_values("start_time")
+
+        # pad at the beginning if fewer than MIN_BARS
+        if len(df) < MIN_BARS:
+            missing = MIN_BARS - len(df)
+            first_time = df["start_time"].iloc[0] - pd.to_timedelta(interval_sec * missing, unit='s')
+
+            # ensure the dtype matches the real data
+            pad_df = pd.DataFrame({
+                "start_time": [first_time + pd.to_timedelta(interval_sec * i, unit='s') for i in range(missing)],
+                "open": [np.nan] * missing,
+                "high": [np.nan] * missing,
+                "low": [np.nan] * missing,
+                "close": [np.nan] * missing
+            })
+
+            df = pd.concat([pad_df, df], ignore_index=True)
+
+        # sliding window: keep only the latest MIN_BARS
+        df = df.iloc[-MIN_BARS:]
 
     fig = go.Figure(
         data=[
@@ -135,13 +167,18 @@ def update_chart(n):
                 open=df["open"],
                 high=df["high"],
                 low=df["low"],
-                close=df["close"]
+                close=df["close"],
+                increasing_line_color='green',
+                decreasing_line_color='red',
+                showlegend=False
             )
         ]
     )
-    fig.update_layout(title=f"Realtime OHLC: {STOCK_ID} ({INTERVAL_STR})",
-                    xaxis_rangeslider_visible=False,
-                    template="plotly_dark")
+    fig.update_layout(
+        title=f"Realtime OHLC: {STOCK_ID} ({INTERVAL_STR})",
+        xaxis_rangeslider_visible=False,
+        template="plotly_dark"
+    )
     return fig
 
 if __name__ == "__main__":
