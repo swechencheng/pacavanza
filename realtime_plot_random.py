@@ -26,18 +26,35 @@ INTERVAL_MAP = {
     "1h": 3600
 }
 
+# --- Default values ---
+INTERVAL_STR = "5m"  # default
+interval_seconds = INTERVAL_MAP.get("5m")  # default 5m
+STOCK_ID = "TEST"
+PORT = 8050  # default Dash port
+
 # --- Parse command line args ---
-if len(sys.argv) < 2:
-    print("Usage: python3 realtime_plot_random.py -i <interval> [STOCK_ID]")
-    print("Intervals: 10s, 1m, 5m, 15m, 1h")
-    sys.exit(1)
+args = sys.argv[1:]
+i = 0
+while i < len(args):
+    if args[i] == "-i" and i + 1 < len(args):
+        if args[i+1] not in INTERVAL_MAP:
+            print("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
+            sys.exit(1)
+        INTERVAL_STR = args[i+1]   # store the string
+        interval_seconds = INTERVAL_MAP[args[i+1]]
+        i += 2
+    elif args[i] == "-p" and i + 1 < len(args):
+        try:
+            PORT = int(args[i+1])
+        except ValueError:
+            print("Port must be an integer")
+            sys.exit(1)
+        i += 2
+    else:
+        STOCK_ID = args[i]
+        i += 1
 
-if sys.argv[1] != "-i" or sys.argv[2] not in INTERVAL_MAP:
-    print("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
-    sys.exit(1)
-
-interval_seconds = INTERVAL_MAP[sys.argv[2]]
-STOCK_ID = "TEST" if len(sys.argv) < 4 else sys.argv[3]
+print(f"Using STOCK_ID={STOCK_ID}, interval={interval_seconds}s, port={PORT}")
 
 # --- Initialize new bar ---
 def initialize_new_bar(timestamp, price, interval_sec):
@@ -122,11 +139,13 @@ def update_chart(n):
             )
         ]
     )
-    fig.update_layout(title=f"Realtime OHLC: {STOCK_ID} ({sys.argv[2]})", xaxis_rangeslider_visible=False, template="plotly_dark")
+    fig.update_layout(title=f"Realtime OHLC: {STOCK_ID} ({INTERVAL_STR})",
+                    xaxis_rangeslider_visible=False,
+                    template="plotly_dark")
     return fig
 
 if __name__ == "__main__":
     new_loop = asyncio.new_event_loop()
     t = threading.Thread(target=start_background_loop, args=(new_loop,), daemon=True)
     t.start()
-    app.run(debug=False, use_reloader=False)
+    app.run(debug=False, use_reloader=False, port=PORT)
