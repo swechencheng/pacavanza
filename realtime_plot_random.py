@@ -106,9 +106,38 @@ server = Flask(__name__)
 app = Dash(__name__, server=server)
 
 app.layout = html.Div([
+
+    # --- Header with realtime clock ---
+    html.Div([
+        html.Div(
+            id="live-clock",
+            children=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            style={
+                'textAlign': 'center',
+                'fontSize': '18px',
+                'color': 'blue',
+                'padding': '3px',
+                'width': '99%'
+            }
+        ),
+        dcc.Interval(
+            id="clock-interval",
+            interval=1000,  # update every second
+            n_intervals=0
+        )
+    ]),
+
+    # --- OHLC chart ---
     dcc.Graph(id="ohlc-chart"),
     dcc.Interval(id="interval-component", interval=3000, n_intervals=0)
 ])
+
+@app.callback(
+    Output('live-clock', 'children'),
+    Input('clock-interval', 'n_intervals')
+)
+def update_clock(n):
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 @app.callback(
     Output("ohlc-chart", "figure"),
