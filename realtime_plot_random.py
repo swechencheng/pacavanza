@@ -79,6 +79,14 @@ def update_ohlc_bar(price, timestamp):
         if current_bar is None or timestamp >= current_bar["end_time"]:
             if current_bar is not None:
                 completed_ohlc[STOCK_ID].append(current_bar.copy())
+
+                # --- cleanup step: keep only last 96h ---
+                cutoff = datetime.now() - timedelta(hours=96)
+                completed_ohlc[STOCK_ID] = [
+                    bar for bar in completed_ohlc[STOCK_ID]
+                    if bar["end_time"] >= cutoff
+                ]
+
             initialize_new_bar(timestamp, price, interval_seconds)
         else:
             current_bar["high"] = max(current_bar["high"], price)
