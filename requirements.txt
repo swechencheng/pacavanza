@@ -1,0 +1,6 @@
+pandas
+numpy
+avanza-api
+flask
+plotly
+dash
