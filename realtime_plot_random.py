@@ -28,7 +28,7 @@ INTERVAL_MAP = {
 
 # --- Parse command line args ---
 if len(sys.argv) < 2:
-    print("Usage: python3 realtime_plot_random.py -i <interval> <STOCK_ID>")
+    print("Usage: python3 realtime_plot_random.py -i <interval> [STOCK_ID]")
     print("Intervals: 10s, 1m, 5m, 15m, 1h")
     sys.exit(1)
 
@@ -37,7 +37,7 @@ if sys.argv[1] != "-i" or sys.argv[2] not in INTERVAL_MAP:
     sys.exit(1)
 
 interval_seconds = INTERVAL_MAP[sys.argv[2]]
-STOCK_ID = sys.argv[3] if len(sys.argv) >= 3 else "TEST"
+STOCK_ID = "TEST" if len(sys.argv) < 4 else sys.argv[3]
 
 # --- Initialize new bar ---
 def initialize_new_bar(timestamp, price, interval_sec):
