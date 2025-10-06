@@ -1,0 +1,84 @@
+{
+    "orderbookId": "1153662",
+    "name": "MINI L OMX AVA 468",
+    "isin": "GB00BL03RG09",
+    "tradable": "BUYABLE_AND_SELLABLE",
+    "listing": {
+        "shortName": "MINI L OMX AVA 468",
+        "tickerSymbol": "MINI L OMX AVA 468",
+        "countryCode": "SE",
+        "currency": "SEK",
+        "marketPlaceCode": "FNSE",
+        "marketPlaceName": "First North Stockholm",
+        "tickSizeListId": "1851",
+        "marketTradesAvailable": true
+    },
+    "historicalClosingPrices": {
+        "oneDay": 883.84,
+        "oneWeek": 890.44,
+        "oneMonth": 924.34,
+        "threeMonths": 754.81,
+        "startOfYear": 745.19,
+        "oneYear": 920.15,
+        "threeYears": 233.01,
+        "start": 126.43,
+        "startDate": "2020-10-30"
+    },
+    "keyIndicators": {
+        "parity": 1,
+        "barrierLevel": 1796.5,
+        "financingLevel": 1761.991904,
+        "direction": "L\u00e5ng",
+        "strikePrice": 1593.14,
+        "leverage": 2.98,
+        "isAza": true,
+        "numberOfOwners": 4,
+        "subType": "MINI_FUTURE"
+    },
+    "quote": {
+        "buy": 885.65,
+        "sell": 888.15,
+        "last": 891.03,
+        "highest": 899.92,
+        "lowest": 890.25,
+        "change": 7.19,
+        "changePercent": 0.81,
+        "spread": 0.28,
+        "timeOfLast": 1759169806000,
+        "totalValueTraded": 1447714.8,
+        "totalVolumeTraded": 1620,
+        "updated": 1759169806935,
+        "volumeWeightedAveragePrice": 893.65,
+        "isRealTime": true
+    },
+    "type": "WARRANT",
+    "underlying": {
+        "orderbookId": "19002",
+        "name": "OMX Stockholm 30",
+        "instrumentType": "INDEX",
+        "instrumentSubType": "SECTOR",
+        "quote": {
+            "last": 2652.03,
+            "highest": 2662.42,
+            "lowest": 2643.97,
+            "change": 7.41,
+            "changePercent": 0.28,
+            "timeOfLast": 1759159797000,
+            "totalValueTraded": 11772378472.44,
+            "totalVolumeTraded": 63611715,
+            "updated": 1759159797163,
+            "isRealTime": true
+        },
+        "listing": {
+            "shortName": "OMXS30",
+            "tickerSymbol": "OMXS30",
+            "countryCode": "SE",
+            "currency": "SEK",
+            "marketPlaceCode": "XXXX",
+            "marketPlaceName": "Inofficiella (beQuoted)",
+            "tickSizeListId": "7700011",
+            "marketTradesAvailable": true
+        },
+        "previousClosingPrice": 2644.62
+    }
+}

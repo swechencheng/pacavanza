@@ -1,0 +1,53 @@
+{
+    "data": {
+        "orderbookId": "2141626",
+        "receivedTime": "2025-10-01T08:47:10.515+0200",
+        "totalLevel": {
+            "buySide": {
+                "price": 1698800.0,
+                "volume": 2090.0,
+                "volumePercent": 48,
+                "priceString": "1698800.00"
+            },
+            "sellSide": {
+                "price": 1850760.0,
+                "volume": 2264.0,
+                "volumePercent": 51,
+                "priceString": "1850760.00"
+            }
+        },
+        "levels": [
+            {
+                "buySide": {
+                    "price": 815.65,
+                    "volume": 2000,
+                    "volumePercent": 100,
+                    "priceString": "815.65"
+                },
+                "sellSide": {
+                    "price": 816.14,
+                    "volume": 264,
+                    "volumePercent": 13,
+                    "priceString": "816.14"
+                }
+            },
+            {
+                "buySide": {
+                    "price": 750.0,
+                    "volume": 90,
+                    "volumePercent": 4,
+                    "priceString": "750.00"
+                },
+                "sellSide": {
+                    "price": 817.65,
+                    "volume": 2000,
+                    "volumePercent": 100,
+                    "priceString": "817.65"
+                }
+            }
+        ],
+        "marketMakerLevelAsk": 1,
+        "marketMakerLevelBid": 0
+    },
+    "channel": "/orderdepths/2141626"
+}

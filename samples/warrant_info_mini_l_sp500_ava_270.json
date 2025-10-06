@@ -1,0 +1,52 @@
+{
+    "orderbookId": "2026354",
+    "name": "MINI L SP500 AVA 270",
+    "isin": "GB00BTKZK639",
+    "tradable": "BUYABLE_AND_SELLABLE",
+    "listing": {
+        "shortName": "MINI L SP500 AVA 270",
+        "tickerSymbol": "MINI L SP500 AVA 270",
+        "countryCode": "SE",
+        "currency": "SEK",
+        "marketPlaceCode": "FNSE",
+        "marketPlaceName": "First North Stockholm",
+        "tickSizeListId": "1851",
+        "marketTradesAvailable": true
+    },
+    "historicalClosingPrices": {
+        "oneDay": 209.8,
+        "oneWeek": 210.88,
+        "oneMonth": 147.14,
+        "threeMonths": 147.14,
+        "start": 91.16,
+        "startDate": "2025-04-08"
+    },
+    "keyIndicators": {
+        "parity": 100,
+        "barrierLevel": 4506.94,
+        "financingLevel": 4418.562793,
+        "direction": "L\u00e5ng",
+        "strikePrice": 4289.22,
+        "leverage": 2.97,
+        "isAza": true,
+        "numberOfOwners": 0,
+        "subType": "MINI_FUTURE"
+    },
+    "quote": {
+        "buy": 210.79,
+        "sell": 210.82,
+        "last": 210.51,
+        "highest": 212.16,
+        "lowest": 210.51,
+        "change": 0.71,
+        "changePercent": 0.34,
+        "spread": 0.01,
+        "timeOfLast": 1759172350000,
+        "totalValueTraded": 279085.8,
+        "totalVolumeTraded": 1320,
+        "updated": 1759172350670,
+        "volumeWeightedAveragePrice": 211.43,
+        "isRealTime": true
+    },
+    "type": "WARRANT"
+}

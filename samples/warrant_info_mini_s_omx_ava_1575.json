@@ -1,0 +1,75 @@
+{
+    "orderbookId": "2141626",
+    "name": "MINI S OMX AVA 1575",
+    "isin": "GB00BTL6KG56",
+    "tradable": "BUYABLE_AND_SELLABLE",
+    "listing": {
+        "shortName": "MINI S OMX AVA 1575",
+        "tickerSymbol": "MINI S OMX AVA 1575",
+        "countryCode": "SE",
+        "currency": "SEK",
+        "marketPlaceCode": "FNSE",
+        "marketPlaceName": "First North Stockholm",
+        "tickSizeListId": "1851",
+        "marketTradesAvailable": true
+    },
+    "historicalClosingPrices": {
+        "oneDay": 811.35,
+        "oneWeek": 818.44,
+        "oneMonth": 844.84,
+        "start": 857.35,
+        "startDate": "2025-08-18"
+    },
+    "keyIndicators": {
+        "parity": 1,
+        "barrierLevel": 3403.99,
+        "financingLevel": 3472.94418,
+        "direction": "Kort",
+        "strikePrice": 3479.59,
+        "leverage": 3.26,
+        "isAza": true,
+        "numberOfOwners": 1,
+        "subType": "MINI_FUTURE"
+    },
+    "quote": {
+        "buy": 812.91,
+        "sell": 814.91,
+        "last": 811.35,
+        "change": 0.0,
+        "changePercent": 0.0,
+        "spread": 0.25,
+        "timeOfLast": 1759301024000,
+        "totalValueTraded": 0,
+        "totalVolumeTraded": 0,
+        "updated": 1759301025031,
+        "isRealTime": true
+    },
+    "type": "WARRANT",
+    "underlying": {
+        "orderbookId": "19002",
+        "name": "OMX Stockholm 30",
+        "instrumentType": "INDEX",
+        "instrumentSubType": "SECTOR",
+        "quote": {
+            "last": 2662.8,
+            "change": 0.0,
+            "changePercent": 0.0,
+            "timeOfLast": 1759246200000,
+            "totalValueTraded": 0,
+            "totalVolumeTraded": 0,
+            "updated": 1759298400168,
+            "isRealTime": true
+        },
+        "listing": {
+            "shortName": "OMXS30",
+            "tickerSymbol": "OMXS30",
+            "countryCode": "SE",
+            "currency": "SEK",
+            "marketPlaceCode": "XXXX",
+            "marketPlaceName": "Inofficiella (beQuoted)",
+            "tickSizeListId": "7700011",
+            "marketTradesAvailable": true
+        },
+        "previousClosingPrice": 2662.8
+    }
+}
