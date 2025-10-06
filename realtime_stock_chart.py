@@ -3,8 +3,9 @@ import random
 import sys
 import threading
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import copy
+import json
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,8 @@ import plotly.graph_objects as go
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
+from avanza import Avanza, ChannelType
+from websockets.exceptions import ConnectionClosedError
 
 # --- OHLC Storage + lock ---
 current_bars = defaultdict(dict)
@@ -26,6 +29,10 @@ INTERVAL_MAP = {
     "15m": 900,
     "1h": 3600
 }
+
+# --- Load secrets and warrant list ---
+secret = json.load(open("secret.json"))
+warrant_list = json.load(open("warrant_list.json"))
 
 # --- Default values ---
 INTERVAL_STR = "5m"  # default
@@ -57,6 +64,17 @@ while i < len(args):
 
 print(f"Using STOCK_ID={STOCK_ID}, interval={interval_seconds}s, port={PORT}")
 
+# Global variables to store the latest values
+financing_level = None
+
+USE_REAL_DATA = False if STOCK_ID not in warrant_list.keys() else True
+
+if USE_REAL_DATA:
+    WARRANT_ID = warrant_list.get(STOCK_ID, {}).get("ID")
+    if WARRANT_ID is None:
+        print("WARRANT_ID not found in warrant_list.json")
+        exit(1)
+
 # --- Initialize new bar ---
 def initialize_new_bar(timestamp, price, interval_sec):
     seconds_since_midnight = timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second
@@ -81,7 +99,7 @@ def update_ohlc_bar(price, timestamp):
                 completed_ohlc[STOCK_ID].append(current_bar.copy())
 
                 # --- cleanup step: keep only last 96h ---
-                cutoff = datetime.now() - timedelta(hours=96)
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=96)
                 completed_ohlc[STOCK_ID] = [
                     bar for bar in completed_ohlc[STOCK_ID]
                     if bar["end_time"] >= cutoff
@@ -104,10 +122,103 @@ async def generate_stock_price(start_price=100.0):
         price = round(price * change_factor, 2)
         price = max(1.00, min(price, 300.00))
 
+def callback_orderdepths(data):
+    """
+    This runs in the websocket callback from Avanza.
+    """
+    d = data.get("data", {})
+    ts = d.get("receivedTime")
+
+    # format readable timestamp from the message if needed
+    try:
+        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z").astimezone(timezone.utc)
+        milli = dt.microsecond // 1000
+        readable_ts = f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{milli:03d} {dt.strftime('%Z')}"
+    except Exception:
+        readable_ts = ts
+
+    levels = d.get("levels", [])
+    if not levels:
+        print("No levels data")
+        return
+
+    # Track the max volume sides
+    max_buy = {"volume": 0, "price": None}
+    max_sell = {"volume": 0, "price": None}
+
+    for level in levels:
+        buy_side = level.get("buySide", {})
+        sell_side = level.get("sellSide", {})
+
+        if buy_side.get("volume", 0) and buy_side.get("volume", 0) > max_buy["volume"]:
+            max_buy["volume"] = buy_side.get("volume", 0)
+            max_buy["price"] = float(buy_side.get("price"))
+
+        if sell_side.get("volume", 0) and sell_side.get("volume", 0) > max_sell["volume"]:
+            max_sell["volume"] = sell_side.get("volume", 0)
+            max_sell["price"] = float(sell_side.get("price"))
+
+    # Ensure valid and consistent MM detection
+    if (
+        max_buy["price"] is None
+        or max_sell["price"] is None
+        or max_buy["volume"] <= 0
+        or max_sell["volume"] <= 0
+    ):
+        print("Valid buy/sell price not found")
+        return
+
+    if max_buy["volume"] != max_sell["volume"]:
+        print(f"Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}")
+        return
+
+    print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
+    update_ohlc_bar(max_buy['price'], dt)
+
+async def subscribe_to_channel(avanza: Avanza):
+    global financing_level
+    warrant_info = avanza.get_warrant_info(WARRANT_ID)
+    underlying_id = warrant_info.get('underlying', {}).get('orderbookId')
+    financing_level = warrant_info.get('keyIndicators', {}).get('financingLevel')
+    if underlying_id is None:
+        print("Failed to get underlying ID")
+    if financing_level is None:
+        print("Failed to get financing level")
+        return
+    financing_level = float(financing_level)
+    print(f"Financing Level: {financing_level}")
+
+    await avanza.subscribe_to_id(
+        ChannelType.ORDERDEPTHS,
+        WARRANT_ID,
+        callback_orderdepths
+    )
+    while True:
+        await asyncio.sleep(1)  # keep it alive, but allow exceptions to bubble up
+
+async def resilient_loop():
+    while True:
+        try:
+            avanza = Avanza({
+                'username': secret['username'],
+                'password': secret['password'],
+                'totpSecret': secret['totpSecret']
+            })
+            await subscribe_to_channel(avanza)
+        except (ConnectionClosedError, TimeoutError) as e:
+            print(f"Websocket closed ({e}). Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"Error occurred: {e}. Reconnecting in 5 seconds...")
+            await asyncio.sleep(5)
+
 # --- Background loop ---
 def start_background_loop(loop):
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(generate_stock_price())
+    if not USE_REAL_DATA:
+        loop.run_until_complete(generate_stock_price())
+    else:
+        loop.run_until_complete(resilient_loop())
 
 # --- Dash App ---
 server = Flask(__name__)
@@ -175,7 +286,7 @@ def update_chart(n):
             "close": None
         } for i in range(MIN_BARS)])
     else:
-        df["start_time"] = pd.to_datetime(df["start_time"])
+        df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
         df = df.sort_values("start_time")
 
         # pad at the beginning if fewer than MIN_BARS
