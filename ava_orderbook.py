@@ -50,11 +50,11 @@ def callback_orderdepths(data):
         buy_side = level.get("buySide", {})
         sell_side = level.get("sellSide", {})
 
-        if buy_side.get("volume", 0) > max_buy["volume"]:
+        if buy_side.get("volume", 0) and buy_side.get("volume", 0) > max_buy["volume"]:
             max_buy["volume"] = buy_side.get("volume", 0)
             max_buy["price"] = float(buy_side.get("price"))
 
-        if sell_side.get("volume", 0) > max_sell["volume"]:
+        if sell_side.get("volume", 0) and sell_side.get("volume", 0) > max_sell["volume"]:
             max_sell["volume"] = sell_side.get("volume", 0)
             max_sell["price"] = float(sell_side.get("price"))
 
@@ -72,7 +72,7 @@ def callback_orderdepths(data):
         print(f"Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}")
         return
 
-    print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f} (Vol: {max_buy['volume']})")
+    print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
 
 async def subscribe_to_channel(avanza: Avanza):
     global financing_level
