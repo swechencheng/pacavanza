@@ -116,7 +116,7 @@ async def generate_stock_price(start_price=100.0):
     price = round(start_price, 2)
     while True:
         await asyncio.sleep(random.uniform(0.6, 1.8))
-        dt = datetime.now()
+        dt = datetime.now(timezone.utc)
         update_ohlc_bar(price, dt)
         change_factor = random.uniform(0.9, 1.111111)
         price = round(price * change_factor, 2)
@@ -125,55 +125,86 @@ async def generate_stock_price(start_price=100.0):
 def callback_orderdepths(data):
     """
     This runs in the websocket callback from Avanza.
+    Defensively handles parsing errors and ensures `dt` is always set.
+    Any unexpected exception is caught and logged so it won't kill the websocket task.
     """
-    d = data.get("data", {})
-    ts = d.get("receivedTime")
-
-    # format readable timestamp from the message if needed
     try:
-        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z").astimezone(timezone.utc)
-        milli = dt.microsecond // 1000
-        readable_ts = f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{milli:03d} {dt.strftime('%Z')}"
-    except Exception:
-        readable_ts = ts
+        d = data.get("data", {})
+        ts = d.get("receivedTime")
 
-    levels = d.get("levels", [])
-    if not levels:
-        print("No levels data")
-        return
+        # default fallback timestamp (timezone-aware)
+        dt = datetime.now(timezone.utc)
 
-    # Track the max volume sides
-    max_buy = {"volume": 0, "price": None}
-    max_sell = {"volume": 0, "price": None}
+        # format readable timestamp from the message if needed
+        if ts:
+            try:
+                parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+                dt = parsed.astimezone(timezone.utc)
+                milli = dt.microsecond // 1000
+                readable_ts = f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{milli:03d} {dt.strftime('%Z')}"
+            except Exception:
+                # keep dt as fallback (now in UTC)
+                readable_ts = str(ts)
+        else:
+            readable_ts = "(no timestamp)"
 
-    for level in levels:
-        buy_side = level.get("buySide", {})
-        sell_side = level.get("sellSide", {})
+        levels = d.get("levels", [])
+        if not levels:
+            print(f"{readable_ts} - No levels data")
+            return
 
-        if buy_side.get("volume", 0) and buy_side.get("volume", 0) > max_buy["volume"]:
-            max_buy["volume"] = buy_side.get("volume", 0)
-            max_buy["price"] = float(buy_side.get("price"))
+        # Track the max volume sides
+        max_buy = {"volume": 0, "price": None}
+        max_sell = {"volume": 0, "price": None}
 
-        if sell_side.get("volume", 0) and sell_side.get("volume", 0) > max_sell["volume"]:
-            max_sell["volume"] = sell_side.get("volume", 0)
-            max_sell["price"] = float(sell_side.get("price"))
+        for level in levels:
+            buy_side = level.get("buySide", {})
+            sell_side = level.get("sellSide", {})
 
-    # Ensure valid and consistent MM detection
-    if (
-        max_buy["price"] is None
-        or max_sell["price"] is None
-        or max_buy["volume"] <= 0
-        or max_sell["volume"] <= 0
-    ):
-        print("Valid buy/sell price not found")
-        return
+            bv = buy_side.get("volume", 0) or 0
+            sv = sell_side.get("volume", 0) or 0
 
-    if max_buy["volume"] != max_sell["volume"]:
-        print(f"Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}")
-        return
+            # price may be string -> try convert defensively
+            try:
+                bprice = float(buy_side.get("price")) if buy_side.get("price") is not None else None
+            except Exception:
+                bprice = None
 
-    print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
-    update_ohlc_bar(max_buy['price'], dt)
+            try:
+                sprice = float(sell_side.get("price")) if sell_side.get("price") is not None else None
+            except Exception:
+                sprice = None
+
+            if bv and bv > max_buy["volume"]:
+                max_buy["volume"] = bv
+                max_buy["price"] = bprice
+
+            if sv and sv > max_sell["volume"]:
+                max_sell["volume"] = sv
+                max_sell["price"] = sprice
+
+        # Ensure valid and consistent MM detection
+        if (
+            max_buy["price"] is None
+            or max_sell["price"] is None
+            or max_buy["volume"] <= 0
+            or max_sell["volume"] <= 0
+        ):
+            print(f"{readable_ts} - Valid buy/sell price not found (buy={max_buy}, sell={max_sell})")
+            return
+
+        if max_buy["volume"] != max_sell["volume"]:
+            print(f"{readable_ts} - Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}")
+            return
+
+        print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
+        # `dt` guaranteed to be defined (UTC)
+        update_ohlc_bar(max_buy['price'], dt)
+
+    except Exception as exc:
+        # Catch *anything* so this callback never bubbles an exception to the websocket loop.
+        # Keep the print/log message small but informative.
+        print(f"Exception in callback_orderdepths: {exc!r}")
 
 async def subscribe_to_channel(avanza: Avanza):
     global financing_level
@@ -198,6 +229,7 @@ async def subscribe_to_channel(avanza: Avanza):
 
 async def resilient_loop():
     while True:
+        avanza = None
         try:
             avanza = Avanza({
                 'username': secret['username'],
@@ -209,12 +241,26 @@ async def resilient_loop():
             print(f"Websocket closed ({e}). Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Error occurred: {e}. Reconnecting in 5 seconds...")
+            print(f"Error occurred in resilient_loop: {e}. Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
+        finally:
+            # if avanza has graceful close/shutdown API, call it here to clean internal tasks
+            try:
+                if avanza is not None and hasattr(avanza, "close"):
+                    await avanza.close()
+            except Exception:
+                pass
+            await asyncio.sleep(0.1)
 
 # --- Background loop ---
 def start_background_loop(loop):
     asyncio.set_event_loop(loop)
+
+    def handle_loop_exception(loop, context):
+        print("Asyncio loop exception:", context)
+
+    loop.set_exception_handler(handle_loop_exception)
+
     if not USE_REAL_DATA:
         loop.run_until_complete(generate_stock_price())
     else:
@@ -276,7 +322,7 @@ def update_chart(n):
 
     if df.empty:
         # create empty placeholder dataframe with 90 bars
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         start_time = now - timedelta(seconds=interval_sec * MIN_BARS)
         df = pd.DataFrame([{
             "start_time": start_time + timedelta(seconds=i*interval_sec),
