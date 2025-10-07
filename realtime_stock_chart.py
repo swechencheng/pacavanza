@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import copy
 import json
+import logging
 
 import numpy as np
 import pandas as pd
@@ -267,6 +268,7 @@ def start_background_loop(loop):
         loop.run_until_complete(resilient_loop())
 
 # --- Dash App ---
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 server = Flask(__name__)
 app = Dash(__name__, server=server)
 
