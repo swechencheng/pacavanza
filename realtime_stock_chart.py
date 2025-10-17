@@ -32,12 +32,12 @@ INTERVAL_MAP = {
 }
 
 # --- Load secrets and warrant list ---
-secret = json.load(open("secret.json"))
-warrant_list = json.load(open("warrant_list.json"))
+SECRET = json.load(open("secret.json"))
+WARRANT_LIST = json.load(open("warrant_list.json"))
 
 # --- Default values ---
 INTERVAL_STR = "5m"  # default
-interval_seconds = INTERVAL_MAP.get("5m")  # default 5m
+INTERVAL_SECONDS = INTERVAL_MAP.get(INTERVAL_STR)  # default 5m
 STOCK_ID = "TEST"
 PORT = 8050  # default Dash port
 
@@ -50,7 +50,7 @@ while i < len(args):
             print("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
             sys.exit(1)
         INTERVAL_STR = args[i+1]   # store the string
-        interval_seconds = INTERVAL_MAP[args[i+1]]
+        INTERVAL_SECONDS = INTERVAL_MAP[args[i+1]]
         i += 2
     elif args[i] == "-p" and i + 1 < len(args):
         try:
@@ -63,15 +63,15 @@ while i < len(args):
         STOCK_ID = args[i]
         i += 1
 
-print(f"Using STOCK_ID={STOCK_ID}, interval={interval_seconds}s, port={PORT}")
+print(f"Using STOCK_ID={STOCK_ID}, interval={INTERVAL_SECONDS}s, port={PORT}")
 
 # Global variables to store the latest values
 financing_level = None
 
-USE_REAL_DATA = False if STOCK_ID not in warrant_list.keys() else True
+USE_REAL_DATA = False if STOCK_ID not in WARRANT_LIST.keys() else True
 
 if USE_REAL_DATA:
-    WARRANT_ID = warrant_list.get(STOCK_ID, {}).get("ID")
+    WARRANT_ID = WARRANT_LIST.get(STOCK_ID, {}).get("ID")
     if WARRANT_ID is None:
         print("WARRANT_ID not found in warrant_list.json")
         exit(1)
@@ -106,7 +106,7 @@ def update_ohlc_bar(price, timestamp):
                     if bar["end_time"] >= cutoff
                 ]
 
-            initialize_new_bar(timestamp, price, interval_seconds)
+            initialize_new_bar(timestamp, price, INTERVAL_SECONDS)
         else:
             current_bar["high"] = max(current_bar["high"], price)
             current_bar["low"] = min(current_bar["low"], price)
@@ -233,9 +233,9 @@ async def resilient_loop():
         avanza = None
         try:
             avanza = Avanza({
-                'username': secret['username'],
-                'password': secret['password'],
-                'totpSecret': secret['totpSecret']
+                'username': SECRET['username'],
+                'password': SECRET['password'],
+                'totpSecret': SECRET['totpSecret']
             })
             await subscribe_to_channel(avanza)
         except (ConnectionClosedError, TimeoutError) as e:
@@ -320,7 +320,7 @@ def update_chart(n):
     if current is not None:
         df = pd.concat([df, pd.DataFrame([current])], ignore_index=True)
 
-    interval_sec = interval_seconds
+    interval_sec = INTERVAL_SECONDS
 
     if df.empty:
         # create empty placeholder dataframe with 90 bars
