@@ -23,13 +23,7 @@ completed_ohlc = defaultdict(list)
 ohlc_lock = threading.Lock()
 
 # --- Interval mapping ---
-INTERVAL_MAP = {
-    "10s": 10,
-    "1m": 60,
-    "5m": 300,
-    "15m": 900,
-    "1h": 3600
-}
+INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 # --- Load secrets and warrant list ---
 SECRET = json.load(open("secret.json"))
@@ -46,15 +40,15 @@ args = sys.argv[1:]
 i = 0
 while i < len(args):
     if args[i] == "-i" and i + 1 < len(args):
-        if args[i+1] not in INTERVAL_MAP:
+        if args[i + 1] not in INTERVAL_MAP:
             print("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
             sys.exit(1)
-        INTERVAL_STR = args[i+1]   # store the string
-        INTERVAL_SECONDS = INTERVAL_MAP[args[i+1]]
+        INTERVAL_STR = args[i + 1]  # store the string
+        INTERVAL_SECONDS = INTERVAL_MAP[args[i + 1]]
         i += 2
     elif args[i] == "-p" and i + 1 < len(args):
         try:
-            PORT = int(args[i+1])
+            PORT = int(args[i + 1])
         except ValueError:
             print("Port must be an integer")
             sys.exit(1)
@@ -76,11 +70,16 @@ if USE_REAL_DATA:
         print("WARRANT_ID not found in warrant_list.json")
         exit(1)
 
+
 # --- Initialize new bar ---
 def initialize_new_bar(timestamp, price, interval_sec):
-    seconds_since_midnight = timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second
+    seconds_since_midnight = (
+        timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second
+    )
     floored = (seconds_since_midnight // interval_sec) * interval_sec
-    bar_start = timestamp.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(seconds=floored)
+    bar_start = timestamp.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) + timedelta(seconds=floored)
 
     current_bars[STOCK_ID] = {
         "start_time": bar_start,
@@ -90,6 +89,7 @@ def initialize_new_bar(timestamp, price, interval_sec):
         "close": price,
         "end_time": bar_start + timedelta(seconds=interval_sec),
     }
+
 
 # --- Update OHLC bar ---
 def update_ohlc_bar(price, timestamp):
@@ -102,8 +102,7 @@ def update_ohlc_bar(price, timestamp):
                 # --- cleanup step: keep only last 96h ---
                 cutoff = datetime.now(timezone.utc) - timedelta(hours=96)
                 completed_ohlc[STOCK_ID] = [
-                    bar for bar in completed_ohlc[STOCK_ID]
-                    if bar["end_time"] >= cutoff
+                    bar for bar in completed_ohlc[STOCK_ID] if bar["end_time"] >= cutoff
                 ]
 
             initialize_new_bar(timestamp, price, INTERVAL_SECONDS)
@@ -111,6 +110,7 @@ def update_ohlc_bar(price, timestamp):
             current_bar["high"] = max(current_bar["high"], price)
             current_bar["low"] = min(current_bar["low"], price)
             current_bar["close"] = price
+
 
 # --- Async price generator ---
 async def generate_stock_price(start_price=100.0):
@@ -122,6 +122,7 @@ async def generate_stock_price(start_price=100.0):
         change_factor = random.uniform(0.9, 1.111111)
         price = round(price * change_factor, 2)
         price = max(1.00, min(price, 300.00))
+
 
 def callback_orderdepths(data):
     """
@@ -167,12 +168,20 @@ def callback_orderdepths(data):
 
             # price may be string -> try convert defensively
             try:
-                bprice = float(buy_side.get("price")) if buy_side.get("price") is not None else None
+                bprice = (
+                    float(buy_side.get("price"))
+                    if buy_side.get("price") is not None
+                    else None
+                )
             except Exception:
                 bprice = None
 
             try:
-                sprice = float(sell_side.get("price")) if sell_side.get("price") is not None else None
+                sprice = (
+                    float(sell_side.get("price"))
+                    if sell_side.get("price") is not None
+                    else None
+                )
             except Exception:
                 sprice = None
 
@@ -191,27 +200,32 @@ def callback_orderdepths(data):
             or max_buy["volume"] <= 0
             or max_sell["volume"] <= 0
         ):
-            print(f"{readable_ts} - Valid buy/sell price not found (buy={max_buy}, sell={max_sell})")
+            print(
+                f"{readable_ts} - Valid buy/sell price not found (buy={max_buy}, sell={max_sell})"
+            )
             return
 
         if max_buy["volume"] != max_sell["volume"]:
-            print(f"{readable_ts} - Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}")
+            print(
+                f"{readable_ts} - Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}"
+            )
             return
 
         print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
         # `dt` guaranteed to be defined (UTC)
-        update_ohlc_bar(max_buy['price'], dt)
+        update_ohlc_bar(max_buy["price"], dt)
 
     except Exception as exc:
         # Catch *anything* so this callback never bubbles an exception to the websocket loop.
         # Keep the print/log message small but informative.
         print(f"Exception in callback_orderdepths: {exc!r}")
 
+
 async def subscribe_to_channel(avanza: Avanza):
     global financing_level
     warrant_info = avanza.get_warrant_info(WARRANT_ID)
-    underlying_id = warrant_info.get('underlying', {}).get('orderbookId')
-    financing_level = warrant_info.get('keyIndicators', {}).get('financingLevel')
+    underlying_id = warrant_info.get("underlying", {}).get("orderbookId")
+    financing_level = warrant_info.get("keyIndicators", {}).get("financingLevel")
     if underlying_id is None:
         print("Failed to get underlying ID")
     if financing_level is None:
@@ -221,28 +235,31 @@ async def subscribe_to_channel(avanza: Avanza):
     print(f"Financing Level: {financing_level}")
 
     await avanza.subscribe_to_id(
-        ChannelType.ORDERDEPTHS,
-        WARRANT_ID,
-        callback_orderdepths
+        ChannelType.ORDERDEPTHS, WARRANT_ID, callback_orderdepths
     )
     while True:
         await asyncio.sleep(1)  # keep it alive, but allow exceptions to bubble up
+
 
 async def resilient_loop():
     while True:
         avanza = None
         try:
-            avanza = Avanza({
-                'username': SECRET['username'],
-                'password': SECRET['password'],
-                'totpSecret': SECRET['totpSecret']
-            })
+            avanza = Avanza(
+                {
+                    "username": SECRET["username"],
+                    "password": SECRET["password"],
+                    "totpSecret": SECRET["totpSecret"],
+                }
+            )
             await subscribe_to_channel(avanza)
         except (ConnectionClosedError, TimeoutError) as e:
             print(f"Websocket closed ({e}). Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Error occurred in resilient_loop: {e}. Reconnecting in 5 seconds...")
+            print(
+                f"Error occurred in resilient_loop: {e}. Reconnecting in 5 seconds..."
+            )
             await asyncio.sleep(5)
         finally:
             # if avanza has graceful close/shutdown API, call it here to clean internal tasks
@@ -252,6 +269,7 @@ async def resilient_loop():
             except Exception:
                 pass
             await asyncio.sleep(0.1)
+
 
 # --- Background loop ---
 def start_background_loop(loop):
@@ -267,54 +285,59 @@ def start_background_loop(loop):
     else:
         loop.run_until_complete(resilient_loop())
 
+
 # --- Dash App ---
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 server = Flask(__name__)
 app = Dash(__name__, server=server)
 
-app.layout = html.Div([
-
-    # --- Header with realtime clock ---
-    html.Div([
+app.layout = html.Div(
+    [
+        # --- Header with realtime clock ---
         html.Div(
-            id="live-clock",
-            children=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            style={
-                'textAlign': 'center',
-                'fontSize': '18px',
-                'color': 'blue',
-                'padding': '3px',
-                'width': '99%'
-            }
+            [
+                html.Div(
+                    id="live-clock",
+                    children=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    style={
+                        "textAlign": "center",
+                        "fontSize": "18px",
+                        "color": "blue",
+                        "padding": "3px",
+                        "width": "99%",
+                    },
+                ),
+                dcc.Interval(
+                    id="clock-interval",
+                    interval=1000,  # update every second
+                    n_intervals=0,
+                ),
+            ]
         ),
-        dcc.Interval(
-            id="clock-interval",
-            interval=1000,  # update every second
-            n_intervals=0
-        )
-    ]),
-
-    # --- OHLC chart ---
-    dcc.Graph(id="ohlc-chart"),
-    dcc.Interval(id="interval-component", interval=3000, n_intervals=0)
-])
-
-@app.callback(
-    Output('live-clock', 'children'),
-    Input('clock-interval', 'n_intervals')
+        # --- OHLC chart ---
+        dcc.Graph(id="ohlc-chart"),
+        dcc.Interval(id="interval-component", interval=3000, n_intervals=0),
+    ]
 )
+
+
+@app.callback(Output("live-clock", "children"), Input("clock-interval", "n_intervals"))
 def update_clock(n):
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 @app.callback(
-    Output("ohlc-chart", "figure"),
-    Input("interval-component", "n_intervals")
+    Output("ohlc-chart", "figure"), Input("interval-component", "n_intervals")
 )
 def update_chart(n):
     MIN_BARS = 90  # minimal number of bars on x-axis
     with ohlc_lock:
         completed = list(completed_ohlc[STOCK_ID])
-        current = copy.deepcopy(current_bars.get(STOCK_ID)) if current_bars.get(STOCK_ID) else None
+        current = (
+            copy.deepcopy(current_bars.get(STOCK_ID))
+            if current_bars.get(STOCK_ID)
+            else None
+        )
 
     df = pd.DataFrame(completed) if completed else pd.DataFrame()
     if current is not None:
@@ -326,13 +349,18 @@ def update_chart(n):
         # create empty placeholder dataframe with 90 bars
         now = datetime.now(timezone.utc)
         start_time = now - timedelta(seconds=interval_sec * MIN_BARS)
-        df = pd.DataFrame([{
-            "start_time": start_time + timedelta(seconds=i*interval_sec),
-            "open": None,
-            "high": None,
-            "low": None,
-            "close": None
-        } for i in range(MIN_BARS)])
+        df = pd.DataFrame(
+            [
+                {
+                    "start_time": start_time + timedelta(seconds=i * interval_sec),
+                    "open": None,
+                    "high": None,
+                    "low": None,
+                    "close": None,
+                }
+                for i in range(MIN_BARS)
+            ]
+        )
     else:
         df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
         df = df.sort_values("start_time")
@@ -340,16 +368,23 @@ def update_chart(n):
         # pad at the beginning if fewer than MIN_BARS
         if len(df) < MIN_BARS:
             missing = MIN_BARS - len(df)
-            first_time = df["start_time"].iloc[0] - pd.to_timedelta(interval_sec * missing, unit='s')
+            first_time = df["start_time"].iloc[0] - pd.to_timedelta(
+                interval_sec * missing, unit="s"
+            )
 
             # ensure the dtype matches the real data
-            pad_df = pd.DataFrame({
-                "start_time": [first_time + pd.to_timedelta(interval_sec * i, unit='s') for i in range(missing)],
-                "open": [np.nan] * missing,
-                "high": [np.nan] * missing,
-                "low": [np.nan] * missing,
-                "close": [np.nan] * missing
-            })
+            pad_df = pd.DataFrame(
+                {
+                    "start_time": [
+                        first_time + pd.to_timedelta(interval_sec * i, unit="s")
+                        for i in range(missing)
+                    ],
+                    "open": [np.nan] * missing,
+                    "high": [np.nan] * missing,
+                    "low": [np.nan] * missing,
+                    "close": [np.nan] * missing,
+                }
+            )
 
             df = pd.concat([pad_df, df], ignore_index=True)
 
@@ -364,18 +399,19 @@ def update_chart(n):
                 high=df["high"],
                 low=df["low"],
                 close=df["close"],
-                increasing_line_color='green',
-                decreasing_line_color='red',
-                showlegend=False
+                increasing_line_color="green",
+                decreasing_line_color="red",
+                showlegend=False,
             )
         ]
     )
     fig.update_layout(
         title=f"{STOCK_ID} ({INTERVAL_STR})",
         xaxis_rangeslider_visible=False,
-        template="plotly_dark"
+        template="plotly_dark",
     )
     return fig
+
 
 if __name__ == "__main__":
     new_loop = asyncio.new_event_loop()
