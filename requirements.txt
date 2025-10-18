@@ -4,3 +4,4 @@ avanza-api
 flask
 plotly
 dash
+curl_cffi

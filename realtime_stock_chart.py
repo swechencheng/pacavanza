@@ -15,6 +15,7 @@ from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
 from avanza import Avanza, ChannelType
+from avanza_sse_client import AvanzaSSEClient as SSEClient
 from websockets.exceptions import ConnectionClosedError
 
 # --- OHLC Storage + lock ---
@@ -34,6 +35,7 @@ INTERVAL_STR = "5m"  # default
 INTERVAL_SECONDS = INTERVAL_MAP.get(INTERVAL_STR)  # default 5m
 STOCK_ID = "TEST"
 PORT = 8050  # default Dash port
+QUOTE_BASE_URL = "https://www.avanza.se/_push/quote-web-push/"
 
 # --- Parse command line args ---
 args = sys.argv[1:]
@@ -124,15 +126,20 @@ async def generate_stock_price(start_price=100.0):
         price = max(1.00, min(price, 300.00))
 
 
-def callback_orderdepths(data):
+async def callback_quote_web_push(id, event, data):
     """
-    This runs in the websocket callback from Avanza.
+    This runs in the SSE callback from Avanza.
     Defensively handles parsing errors and ensures `dt` is always set.
-    Any unexpected exception is caught and logged so it won't kill the websocket task.
+    An example QUOTE event callback:
+    [RdvXmj1XLHFj_AEZKkiSmbcFx] [QUOTE] {'orderbookId': '2026354', 'buyPrice': 201.57, 'sellPrice': 201.63, 'closingPrice': 204.51, 'highestPrice': 201.98, 'lowestPrice': 200.25, 'lastPrice': 201.98, 'totalValueTraded': 21043.55, 'totalVolumeTraded': 105, 'change': -2.53, 'changePercent': -0.0124, 'spreadPercent': 0.0003, 'volumeWeightedAveragePrice': 200.41, 'updated': '2025-10-17T09:54:00.916Z', 'lastPriceUpdated': '2025-10-17T09:54:00.000Z'}
     """
     try:
-        d = data.get("data", {})
-        ts = d.get("receivedTime")
+        # Check if data is a dict or not
+        if event != "QUOTE" or not isinstance(data, dict):
+            print(f"[{id}] [{event}] {data}")
+            return
+
+        ts = data.get("updated")
 
         # default fallback timestamp (timezone-aware)
         dt = datetime.now(timezone.utc)
@@ -150,101 +157,31 @@ def callback_orderdepths(data):
         else:
             readable_ts = "(no timestamp)"
 
-        levels = d.get("levels", [])
-        if not levels:
-            print(f"{readable_ts} - No levels data")
-            return
-
-        # Track the max volume sides
-        max_buy = {"volume": 0, "price": None}
-        max_sell = {"volume": 0, "price": None}
-
-        for level in levels:
-            buy_side = level.get("buySide", {})
-            sell_side = level.get("sellSide", {})
-
-            bv = buy_side.get("volume", 0) or 0
-            sv = sell_side.get("volume", 0) or 0
-
-            # price may be string -> try convert defensively
-            try:
-                bprice = (
-                    float(buy_side.get("price"))
-                    if buy_side.get("price") is not None
-                    else None
-                )
-            except Exception:
-                bprice = None
-
-            try:
-                sprice = (
-                    float(sell_side.get("price"))
-                    if sell_side.get("price") is not None
-                    else None
-                )
-            except Exception:
-                sprice = None
-
-            if bv and bv > max_buy["volume"]:
-                max_buy["volume"] = bv
-                max_buy["price"] = bprice
-
-            if sv and sv > max_sell["volume"]:
-                max_sell["volume"] = sv
-                max_sell["price"] = sprice
+        buy_price = data.get("buyPrice")
+        sell_price = data.get("sellPrice")
 
         # Ensure valid and consistent MM detection
-        if (
-            max_buy["price"] is None
-            or max_sell["price"] is None
-            or max_buy["volume"] <= 0
-            or max_sell["volume"] <= 0
-        ):
+        if buy_price is None or sell_price is None:
             print(
-                f"{readable_ts} - Valid buy/sell price not found (buy={max_buy}, sell={max_sell})"
+                f"{readable_ts} - Valid buy/sell price not found (buy={buy_price}, sell={sell_price})"
             )
             return
 
-        if max_buy["volume"] != max_sell["volume"]:
-            print(
-                f"{readable_ts} - Volume mismatch: Buy {max_buy['volume']} vs Sell {max_sell['volume']}"
-            )
-            return
-
-        print(f"{readable_ts} B: {max_buy['price']:.2f}  S: {max_sell['price']:.2f}")
+        print(f"{readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}")
         # `dt` guaranteed to be defined (UTC)
-        update_ohlc_bar(max_buy["price"], dt)
+        update_ohlc_bar(buy_price, dt)
 
-    except Exception as exc:
+    except Exception as e:
         # Catch *anything* so this callback never bubbles an exception to the websocket loop.
         # Keep the print/log message small but informative.
-        print(f"Exception in callback_orderdepths: {exc!r}")
+        print(f"Exception in callback_quote_web_push: {e!r}")
 
 
-async def subscribe_to_channel(avanza: Avanza):
-    global financing_level
-    warrant_info = avanza.get_warrant_info(WARRANT_ID)
-    underlying_id = warrant_info.get("underlying", {}).get("orderbookId")
-    financing_level = warrant_info.get("keyIndicators", {}).get("financingLevel")
-    if underlying_id is None:
-        print("Failed to get underlying ID")
-    if financing_level is None:
-        print("Failed to get financing level")
-        return
-    financing_level = float(financing_level)
-    print(f"Financing Level: {financing_level}")
-
-    await avanza.subscribe_to_id(
-        ChannelType.ORDERDEPTHS, WARRANT_ID, callback_orderdepths
-    )
-    while True:
-        await asyncio.sleep(1)  # keep it alive, but allow exceptions to bubble up
-
-
-async def resilient_loop():
+async def real_market_loop():
     while True:
         avanza = None
         try:
+            global financing_level
             avanza = Avanza(
                 {
                     "username": SECRET["username"],
@@ -252,13 +189,24 @@ async def resilient_loop():
                     "totpSecret": SECRET["totpSecret"],
                 }
             )
-            await subscribe_to_channel(avanza)
-        except (ConnectionClosedError, TimeoutError) as e:
-            print(f"Websocket closed ({e}). Reconnecting in 5 seconds...")
-            await asyncio.sleep(5)
+            warrant_info = avanza.get_warrant_info(WARRANT_ID)
+            underlying_id = warrant_info.get("underlying", {}).get("orderbookId")
+            financing_level = warrant_info.get("keyIndicators", {}).get(
+                "financingLevel"
+            )
+            if underlying_id is None:
+                print("Failed to get underlying ID")
+            if financing_level is None:
+                print("Failed to get financing level")
+                return
+            financing_level = float(financing_level)
+            print(f"Financing Level: {financing_level}")
+            client = SSEClient(avanza, QUOTE_BASE_URL + WARRANT_ID)
+            client.add_listener(callback_quote_web_push)
+            await client.start()
         except Exception as e:
             print(
-                f"Error occurred in resilient_loop: {e}. Reconnecting in 5 seconds..."
+                f"Error occurred in real_market_loop: {e}. Reconnecting in 5 seconds..."
             )
             await asyncio.sleep(5)
         finally:
@@ -283,7 +231,7 @@ def start_background_loop(loop):
     if not USE_REAL_DATA:
         loop.run_until_complete(generate_stock_price())
     else:
-        loop.run_until_complete(resilient_loop())
+        loop.run_until_complete(real_market_loop())
 
 
 # --- Dash App ---
