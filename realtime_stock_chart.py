@@ -25,6 +25,7 @@ ohlc_lock = threading.Lock()
 
 # --- Interval mapping ---
 INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+MIN_BARS = 180  # minimal number of bars on x-axis
 
 # --- Load secrets and warrant list ---
 SECRET = json.load(open("secret.json"))
@@ -278,7 +279,6 @@ def update_clock(n):
     Output("ohlc-chart", "figure"), Input("interval-component", "n_intervals")
 )
 def update_chart(n):
-    MIN_BARS = 90  # minimal number of bars on x-axis
     with ohlc_lock:
         completed = list(completed_ohlc[STOCK_ID])
         current = (
@@ -294,7 +294,7 @@ def update_chart(n):
     interval_sec = INTERVAL_SECONDS
 
     if df.empty:
-        # create empty placeholder dataframe with 90 bars
+        # create empty placeholder dataframe with MIN_BARS bars
         now = datetime.now(timezone.utc)
         start_time = now - timedelta(seconds=interval_sec * MIN_BARS)
         df = pd.DataFrame(
