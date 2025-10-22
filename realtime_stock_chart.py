@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import copy
 import json
 import logging
+import time
 
 import numpy as np
 import pandas as pd
@@ -309,7 +310,10 @@ def update_chart(n):
             ]
         )
     else:
-        df["start_time"] = pd.to_datetime(df["start_time"], utc=True)
+        # Get system timezone
+        local_tz = timezone(timedelta(seconds=-time.timezone if time.daylight == 0 else -time.altzone))
+        # Convert in update_chart function
+        df["start_time"] = df["start_time"].dt.tz_convert(local_tz)
         df = df.sort_values("start_time")
 
         # pad at the beginning if fewer than MIN_BARS
