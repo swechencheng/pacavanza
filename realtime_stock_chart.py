@@ -14,9 +14,8 @@ import plotly.graph_objects as go
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
-from avanza import Avanza, ChannelType
+from avanza import Avanza
 from avanza_sse_client import AvanzaSSEClient as SSEClient
-from websockets.exceptions import ConnectionClosedError
 
 # --- OHLC Storage + lock ---
 current_bars = defaultdict(dict)
