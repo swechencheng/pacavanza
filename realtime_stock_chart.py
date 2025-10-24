@@ -291,61 +291,26 @@ def update_chart(n):
     if current is not None:
         df = pd.concat([df, pd.DataFrame([current])], ignore_index=True)
 
-    interval_sec = INTERVAL_SECONDS
-
     if df.empty:
-        # create empty placeholder dataframe with MIN_BARS bars
-        now = datetime.now(timezone.utc)
-        start_time = now - timedelta(seconds=interval_sec * MIN_BARS)
-        df = pd.DataFrame(
-            [
-                {
-                    "start_time": start_time + timedelta(seconds=i * interval_sec),
-                    "open": None,
-                    "high": None,
-                    "low": None,
-                    "close": None,
-                }
-                for i in range(MIN_BARS)
-            ]
-        )
-    else:
-        # Get system timezone
-        local_tz = timezone(timedelta(seconds=-time.timezone if time.daylight == 0 else -time.altzone))
-        # Convert in update_chart function
-        df["start_time"] = df["start_time"].dt.tz_convert(local_tz)
-        df = df.sort_values("start_time")
+        return go.Figure()
 
-        # pad at the beginning if fewer than MIN_BARS
-        if len(df) < MIN_BARS:
-            missing = MIN_BARS - len(df)
-            first_time = df["start_time"].iloc[0] - pd.to_timedelta(
-                interval_sec * missing, unit="s"
-            )
+    # Sort and keep latest MIN_BARS
+    df = df.sort_values("start_time").iloc[-MIN_BARS:].reset_index(drop=True)
 
-            # ensure the dtype matches the real data
-            pad_df = pd.DataFrame(
-                {
-                    "start_time": [
-                        first_time + pd.to_timedelta(interval_sec * i, unit="s")
-                        for i in range(missing)
-                    ],
-                    "open": [np.nan] * missing,
-                    "high": [np.nan] * missing,
-                    "low": [np.nan] * missing,
-                    "close": [np.nan] * missing,
-                }
-            )
+    # Convert to local time (optional)
+    local_tz = timezone(
+        timedelta(seconds=-time.timezone if time.daylight == 0 else -time.altzone)
+    )
+    df["start_time"] = df["start_time"].dt.tz_convert(local_tz)
 
-            df = pd.concat([pad_df, df], ignore_index=True)
+    # Sequential index for x-axis
+    df["bar_index"] = range(len(df))
 
-        # sliding window: keep only the latest MIN_BARS
-        df = df.iloc[-MIN_BARS:]
-
+    # Build figure
     fig = go.Figure(
         data=[
             go.Candlestick(
-                x=df["start_time"],
+                x=df["bar_index"],
                 open=df["open"],
                 high=df["high"],
                 low=df["low"],
@@ -353,13 +318,40 @@ def update_chart(n):
                 increasing_line_color="green",
                 decreasing_line_color="red",
                 showlegend=False,
+                text=df["start_time"].dt.strftime("%Y-%m-%d %H:%M"),
             )
         ]
     )
+
+    # Proper hover text via update_traces
+    fig.update_traces(
+        hoverinfo="text",
+        hovertext=[
+            f"Time: {t}<br>O: {o:.2f}<br>H: {h:.2f}<br>L: {l:.2f}<br>C: {c:.2f}"
+            for t, o, h, l, c in zip(
+                df["start_time"].dt.strftime("%Y-%m-%d %H:%M"),
+                df["open"],
+                df["high"],
+                df["low"],
+                df["close"],
+            )
+        ],
+    )
+
+    # X-axis tick labels = timestamps (no gaps)
+    tick_step = max(1, len(df) // 10)
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=df["bar_index"][::tick_step],
+        ticktext=df["start_time"].dt.strftime("%H:%M")[::tick_step],
+        title_text="Bars (continuous, skips closed hours)",
+    )
+
     fig.update_layout(
         title=f"{STOCK_ID} ({INTERVAL_STR})",
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
+        margin=dict(l=10, r=10, t=30, b=30),
     )
     return fig
 
