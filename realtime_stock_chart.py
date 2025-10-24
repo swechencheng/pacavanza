@@ -18,6 +18,9 @@ from flask import Flask
 from avanza import Avanza
 from avanza_sse_client import AvanzaSSEClient as SSEClient
 
+LOGGER = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 # --- OHLC Storage + lock ---
 current_bars = defaultdict(dict)
 completed_ohlc = defaultdict(list)
@@ -44,7 +47,7 @@ i = 0
 while i < len(args):
     if args[i] == "-i" and i + 1 < len(args):
         if args[i + 1] not in INTERVAL_MAP:
-            print("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
+            LOGGER.error("Invalid interval. Choose from: 10s, 1m, 5m, 15m, 1h")
             sys.exit(1)
         INTERVAL_STR = args[i + 1]  # store the string
         INTERVAL_SECONDS = INTERVAL_MAP[args[i + 1]]
@@ -53,14 +56,14 @@ while i < len(args):
         try:
             PORT = int(args[i + 1])
         except ValueError:
-            print("Port must be an integer")
+            LOGGER.error("Port must be an integer")
             sys.exit(1)
         i += 2
     else:
         STOCK_ID = args[i]
         i += 1
 
-print(f"Using STOCK_ID={STOCK_ID}, interval={INTERVAL_SECONDS}s, port={PORT}")
+LOGGER.info(f"Using STOCK_ID={STOCK_ID}, interval={INTERVAL_SECONDS}s, port={PORT}")
 
 # Global variables to store the latest values
 financing_level = None
@@ -70,7 +73,7 @@ USE_REAL_DATA = False if STOCK_ID not in WARRANT_LIST.keys() else True
 if USE_REAL_DATA:
     WARRANT_ID = WARRANT_LIST.get(STOCK_ID, {}).get("ID")
     if WARRANT_ID is None:
-        print("WARRANT_ID not found in warrant_list.json")
+        LOGGER.error("WARRANT_ID not found in warrant_list.json")
         exit(1)
 
 
@@ -137,7 +140,7 @@ async def callback_quote_web_push(id, event, data):
     try:
         # Check if data is a dict or not
         if event != "QUOTE" or not isinstance(data, dict):
-            print(f"[{id}] [{event}] {data}")
+            LOGGER.debug(f"[{id}] [{event}] {data}")
             return
 
         ts = data.get("updated")
@@ -163,19 +166,19 @@ async def callback_quote_web_push(id, event, data):
 
         # Ensure valid and consistent MM detection
         if buy_price is None or sell_price is None:
-            print(
+            LOGGER.warning(
                 f"{readable_ts} - Valid buy/sell price not found (buy={buy_price}, sell={sell_price})"
             )
             return
 
-        print(f"{readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}")
+        LOGGER.info(f"{readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}")
         # `dt` guaranteed to be defined (UTC)
         update_ohlc_bar(buy_price, dt)
 
     except Exception as e:
         # Catch *anything* so this callback never bubbles an exception to the websocket loop.
-        # Keep the print/log message small but informative.
-        print(f"Exception in callback_quote_web_push: {e!r}")
+        # Keep the log message small but informative.
+        LOGGER.error(f"Exception in callback_quote_web_push: {e!r}")
 
 
 async def real_market_loop():
@@ -196,17 +199,17 @@ async def real_market_loop():
                 "financingLevel"
             )
             if underlying_id is None:
-                print("Failed to get underlying ID")
+                LOGGER.warning("Failed to get underlying ID")
             if financing_level is None:
-                print("Failed to get financing level")
+                LOGGER.warning("Failed to get financing level")
                 return
             financing_level = float(financing_level)
-            print(f"Financing Level: {financing_level}")
+            LOGGER.info(f"Financing Level: {financing_level}")
             client = SSEClient(avanza, QUOTE_BASE_URL + WARRANT_ID)
             client.add_listener(callback_quote_web_push)
             await client.start()
         except Exception as e:
-            print(
+            LOGGER.error(
                 f"Error occurred in real_market_loop: {e}. Reconnecting in 5 seconds..."
             )
             await asyncio.sleep(5)
@@ -225,7 +228,7 @@ def start_background_loop(loop):
     asyncio.set_event_loop(loop)
 
     def handle_loop_exception(loop, context):
-        print("Asyncio loop exception:", context)
+        LOGGER.error("Asyncio loop exception:", context)
 
     loop.set_exception_handler(handle_loop_exception)
 
