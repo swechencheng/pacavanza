@@ -268,7 +268,7 @@ app.layout = html.Div(
         ),
         # --- OHLC chart ---
         dcc.Graph(id="ohlc-chart"),
-        dcc.Interval(id="interval-component", interval=3000, n_intervals=0),
+        dcc.Interval(id="interval-component", interval=100, n_intervals=0),
     ]
 )
 
