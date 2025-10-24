@@ -1,6 +1,7 @@
 secret.json
 
 __pycache__/
+logs/
 
 .temp
 ohlc_*.json
