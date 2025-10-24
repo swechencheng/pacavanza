@@ -76,6 +76,48 @@ if USE_REAL_DATA:
         LOGGER.error("WARRANT_ID not found in warrant_list.json")
         exit(1)
 
+# --- Data persistence ---
+DATA_FILE = f"ohlc_{STOCK_ID}.json"
+MAX_HISTORY_HOURS = 96
+
+
+def load_ohlc_from_disk():
+    try:
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+        # Convert timestamps back to datetime
+        bars = []
+        for bar in data:
+            bar["start_time"] = datetime.fromisoformat(bar["start_time"])
+            bar["end_time"] = datetime.fromisoformat(bar["end_time"])
+            bars.append(bar)
+        # Keep only recent 96h
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_HISTORY_HOURS)
+        bars = [b for b in bars if b["end_time"] >= cutoff]
+        completed_ohlc[STOCK_ID] = bars
+        LOGGER.info(f"Loaded {len(bars)} bars from {DATA_FILE}")
+    except FileNotFoundError:
+        LOGGER.info(f"No previous OHLC data found for {STOCK_ID}. Starting fresh.")
+    except Exception as e:
+        LOGGER.error(f"Failed to load OHLC data: {e}")
+
+
+def save_ohlc_to_disk():
+    try:
+        with ohlc_lock:
+            bars = copy.deepcopy(completed_ohlc[STOCK_ID])
+        data = []
+        for b in bars:
+            bar = b.copy()
+            bar["start_time"] = bar["start_time"].isoformat()
+            bar["end_time"] = bar["end_time"].isoformat()
+            data.append(bar)
+        with open(DATA_FILE, "w") as f:
+            json.dump(data, f)
+        LOGGER.debug(f"Saved {len(data)} bars to {DATA_FILE}")
+    except Exception as e:
+        LOGGER.error(f"Failed to save OHLC data: {e}")
+
 
 # --- Initialize new bar ---
 def initialize_new_bar(timestamp, price, interval_sec):
@@ -106,7 +148,7 @@ def update_ohlc_bar(price, timestamp):
                 completed_ohlc[STOCK_ID].append(current_bar.copy())
 
                 # --- cleanup step: keep only last 96h ---
-                cutoff = datetime.now(timezone.utc) - timedelta(hours=96)
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_HISTORY_HOURS)
                 completed_ohlc[STOCK_ID] = [
                     bar for bar in completed_ohlc[STOCK_ID] if bar["end_time"] >= cutoff
                 ]
@@ -223,6 +265,13 @@ async def real_market_loop():
             await asyncio.sleep(0.1)
 
 
+# --- Periodic saver ---
+async def periodic_saver():
+    while True:
+        await asyncio.sleep(INTERVAL_SECONDS)
+        save_ohlc_to_disk()
+
+
 # --- Background loop ---
 def start_background_loop(loop):
     asyncio.set_event_loop(loop)
@@ -232,10 +281,13 @@ def start_background_loop(loop):
 
     loop.set_exception_handler(handle_loop_exception)
 
+    # Start both price generator / market loop and saver
     if not USE_REAL_DATA:
-        loop.run_until_complete(generate_stock_price())
+        tasks = [generate_stock_price()]  # Don't save simulated data
     else:
-        loop.run_until_complete(real_market_loop())
+        tasks = [real_market_loop(), periodic_saver()]
+
+    loop.run_until_complete(asyncio.gather(*tasks))
 
 
 # --- Dash App ---
@@ -360,6 +412,7 @@ def update_chart(n):
 
 
 if __name__ == "__main__":
+    load_ohlc_from_disk()
     new_loop = asyncio.new_event_loop()
     t = threading.Thread(target=start_background_loop, args=(new_loop,), daemon=True)
     t.start()

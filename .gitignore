@@ -3,3 +3,4 @@ secret.json
 __pycache__/
 
 .temp
+ohlc_*.json
