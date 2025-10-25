@@ -17,6 +17,7 @@ from dash.dependencies import Input, Output
 from flask import Flask
 from avanza import Avanza
 from avanza_sse_client import AvanzaSSEClient as SSEClient
+import talib
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -158,6 +159,21 @@ def update_ohlc_bar(price, timestamp):
             current_bar["high"] = max(current_bar["high"], price)
             current_bar["low"] = min(current_bar["low"], price)
             current_bar["close"] = price
+
+
+# --- Calculate EMA20 using TA-Lib ---
+def calculate_ema20_talib(df):
+    """Calculate EMA20 using TA-Lib"""
+    if len(df) < 20:
+        return []
+
+    # Extract closing prices as numpy array for TA-Lib
+    closes = np.array(df["close"].tolist(), dtype=float)
+
+    # Calculate EMA20 using TA-Lib
+    ema20 = talib.EMA(closes, timeperiod=20)
+
+    return ema20.tolist() if ema20 is not None else []
 
 
 # --- Async price generator ---
@@ -352,6 +368,11 @@ def update_chart(n):
     # Sort and keep latest MIN_BARS
     df = df.sort_values("start_time").iloc[-MIN_BARS:].reset_index(drop=True)
 
+    # Calculate EMA20 using TA-Lib - only if we have enough bars
+    ema20_values = []
+    if len(df) >= 20:
+        ema20_values = calculate_ema20_talib(df)
+
     # Convert to local time (optional)
     local_tz = timezone(
         timedelta(seconds=-time.timezone if time.daylight == 0 else -time.altzone)
@@ -378,6 +399,19 @@ def update_chart(n):
         ]
     )
 
+    # Add EMA20 line only if we have enough data
+    if len(ema20_values) > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=df["bar_index"],
+                y=ema20_values,
+                mode="lines",
+                line=dict(color="blue", width=1.5),
+                name="EMA20",
+                hoverinfo="y",
+            )
+        )
+
     # Proper hover text via update_traces
     fig.update_traces(
         hoverinfo="text",
@@ -391,6 +425,7 @@ def update_chart(n):
                 df["close"],
             )
         ],
+        selector=dict(type="candlestick"),  # Only apply to candlestick
     )
 
     # X-axis tick labels = timestamps (no gaps)
@@ -407,6 +442,13 @@ def update_chart(n):
         xaxis_rangeslider_visible=False,
         template="plotly_dark",
         margin=dict(l=10, r=10, t=30, b=30),
+        showlegend=True,
+        legend=dict(
+            x=0,
+            y=1,
+            traceorder="normal",
+            font=dict(size=10),
+        ),
     )
     return fig
 

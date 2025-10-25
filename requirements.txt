@@ -5,3 +5,4 @@ flask
 plotly
 dash
 curl_cffi
+TA-Lib
