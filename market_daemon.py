@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
 import datetime
+import traceback
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import subprocess
 
-# --- Configuration ---
+# Add project directory to Python path
 PROJECT_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(PROJECT_DIR))
+
+# --- Configuration ---
 VENV_PYTHON = PROJECT_DIR / "venv" / "bin" / "python3"
 LOG_DIR = PROJECT_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
-LOG_RETENTION_DAYS = 4  # Fixed to match your requirement
+LOG_RETENTION_DAYS = 4
 
 # --- Market time windows ---
 CEST = ZoneInfo("Europe/Stockholm")
@@ -45,103 +50,155 @@ SESSIONS = [
 running_processes = {}
 
 
+def log_message(message):
+    """Log message with timestamp"""
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    full_message = f"[{timestamp}] {message}"
+    print(full_message, flush=True)
+
+    # Also write to a dedicated daemon log
+    daemon_log = LOG_DIR / "market_daemon.log"
+    with open(daemon_log, "a") as f:
+        f.write(full_message + "\n")
+
+
 def in_session(session):
-    tz = session["timezone"]
-    now = datetime.datetime.now(tz)
-    if now.weekday() >= 5:
+    try:
+        tz = session["timezone"]
+        now = datetime.datetime.now(tz)
+        if now.weekday() >= 5:  # Saturday (5) or Sunday (6)
+            return False
+        return session["start"] <= now.time() <= session["end"]
+    except Exception as e:
+        log_message(f"Error checking session: {e}")
         return False
-    return session["start"] <= now.time() <= session["end"]
 
 
 def rotate_logs():
-    cutoff = time.time() - LOG_RETENTION_DAYS * 86400
-    for f in LOG_DIR.glob("*.log"):
-        if f.stat().st_mtime < cutoff:
-            f.unlink(missing_ok=True)
+    try:
+        cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+        for f in LOG_DIR.glob("*.log"):
+            if f.stat().st_mtime < cutoff:
+                f.unlink(missing_ok=True)
+    except Exception as e:
+        log_message(f"Error rotating logs: {e}")
 
 
 def run_script(script_path, args, log_file):
     """Run script as a subprocess with venv python"""
-    cmd = [str(VENV_PYTHON), str(script_path)] + args
+    try:
+        cmd = [str(VENV_PYTHON), str(script_path)] + args
 
-    with open(log_file, "a") as f:
-        f.write(f"[{datetime.datetime.now()}] Starting: {' '.join(cmd)}\n")
-        f.flush()
+        with open(log_file, "a") as f:
+            f.write(f"[{datetime.datetime.now()}] Starting: {' '.join(cmd)}\n")
+            f.flush()
 
-        # Run as subprocess to ensure proper environment isolation
-        process = subprocess.Popen(
-            cmd,
-            cwd=PROJECT_DIR,
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            env={**os.environ, "PYTHONPATH": str(PROJECT_DIR)},
-        )
-
-        return process
+            process = subprocess.Popen(
+                cmd,
+                cwd=PROJECT_DIR,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                env={**os.environ, "PYTHONPATH": str(PROJECT_DIR)},
+            )
+            return process
+    except Exception as e:
+        log_message(f"Error running script {script_path}: {e}")
+        return None
 
 
 def start_market(session):
+    market = session["market"]
+    log_message(f"Attempting to start market: {market}")
+
     for cmd in session["commands"]:
         script = PROJECT_DIR / cmd[0]
-        log_name = LOG_DIR / f"{session['market']}_{cmd[-1]}_{int(time.time())}.log"
+        if not script.exists():
+            log_message(f"ERROR: Script not found: {script}")
+            continue
 
+        log_name = LOG_DIR / f"{market}_{cmd[-1]}_{int(time.time())}.log"
         process = run_script(script, cmd[1:], log_name)
-        running_processes[(session["market"], cmd[-1])] = process
 
-    print(f"[{datetime.datetime.now()}] Started processes for {session['market']}")
+        if process:
+            running_processes[(market, cmd[-1])] = process
+            log_message(f"Started process for {market}:{cmd[-1]} (PID: {process.pid})")
+        else:
+            log_message(f"Failed to start process for {market}:{cmd[-1]}")
 
 
 def stop_market(market):
+    log_message(f"Stopping all processes for {market}")
     for key in list(running_processes.keys()):
         mkt, name = key
         if mkt == market:
             process = running_processes[key]
-            print(
-                f"[{datetime.datetime.now()}] Stopping {mkt}:{name} (PID: {process.pid})"
-            )
+            log_message(f"Stopping {mkt}:{name} (PID: {process.pid})")
             process.terminate()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
             running_processes.pop(key, None)
-    print(f"[{datetime.datetime.now()}] All processes stopped for {market}")
+    log_message(f"All processes stopped for {market}")
 
 
 def monitor_loop():
     active_markets = set()
+
+    # Ensure we're in the right directory
     os.chdir(PROJECT_DIR)
-    print(f"[{datetime.datetime.now()}] Market daemon started.")
+    log_message(f"Market daemon started in {PROJECT_DIR}")
+    log_message(f"Python path: {sys.executable}")
+    log_message(f"Working directory: {os.getcwd()}")
+
     try:
         while True:
-            rotate_logs()
-            for session in SESSIONS:
-                market = session["market"]
-                active = in_session(session)
-                if active and market not in active_markets:
-                    start_market(session)
-                    active_markets.add(market)
-                elif not active and market in active_markets:
-                    stop_market(market)
-                    active_markets.remove(market)
+            try:
+                rotate_logs()
 
-            # Check if any processes died unexpectedly
-            dead_processes = []
-            for key, process in running_processes.items():
-                if process.poll() is not None:  # Process finished
-                    dead_processes.append(key)
-                    print(
-                        f"[{datetime.datetime.now()}] Process {key} died unexpectedly with return code: {process.returncode}"
-                    )
+                # Check each session
+                for session in SESSIONS:
+                    market = session["market"]
+                    active = in_session(session)
 
-            for key in dead_processes:
-                running_processes.pop(key, None)
+                    if active and market not in active_markets:
+                        log_message(f"Market {market} session started")
+                        start_market(session)
+                        active_markets.add(market)
+                    elif not active and market in active_markets:
+                        log_message(f"Market {market} session ended")
+                        stop_market(market)
+                        active_markets.remove(market)
 
-            time.sleep(60)
+                # Check for dead processes
+                dead_processes = []
+                for key, process in running_processes.items():
+                    if process.poll() is not None:
+                        dead_processes.append(key)
+                        log_message(
+                            f"Process {key} died with return code: {process.returncode}"
+                        )
+
+                for key in dead_processes:
+                    running_processes.pop(key, None)
+
+                time.sleep(60)
+
+            except Exception as e:
+                log_message(f"Error in main loop: {e}")
+                log_message(traceback.format_exc())
+                time.sleep(60)  # Continue after error
+
     except KeyboardInterrupt:
+        log_message("Received interrupt signal")
+    except Exception as e:
+        log_message(f"Fatal error: {e}")
+        log_message(traceback.format_exc())
+    finally:
+        # Cleanup
         for market in list(active_markets):
             stop_market(market)
-    print(f"[{datetime.datetime.now()}] Daemon exiting.")
+        log_message("Daemon exiting.")
 
 
 if __name__ == "__main__":

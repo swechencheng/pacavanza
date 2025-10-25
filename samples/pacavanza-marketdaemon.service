@@ -4,12 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/<USERNAME>/path/to/pacavanza
-ExecStart=/home/<USERNAME>/path/to/pacavanza/venv/bin/python3 /home/<USERNAME>/path/to/pacavanza/market_daemon.py
+WorkingDirectory=$HOME/path/to/pacavanza
+ExecStart=$HOME/path/to/pacavanza/venv/bin/python3 $HOME/path/to/pacavanza/market_daemon.py
 Restart=always
-Environment=PATH=/home/<USERNAME>/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-StandardOutput=file:/home/<USERNAME>/path/to/pacavanza/logs/daemon_stdout.log
-StandardError=file:/home/<USERNAME>/path/to/pacavanza/logs/daemon_stderr.log
+Environment=PATH=$HOME/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+StandardOutput=file:$HOME/path/to/pacavanza/logs/daemon_stdout.log
+StandardError=file:$HOME/path/to/pacavanza/logs/daemon_stderr.log
 
 [Install]
 WantedBy=default.target
