@@ -1,7 +1,9 @@
 secret.json
 
 __pycache__/
+venv/
 logs/
+pacavanza.egg-info/
 
 .temp
 ohlc_*.json

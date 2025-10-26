@@ -16,7 +16,7 @@ from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
 from avanza import Avanza
-from avanza_sse_client import AvanzaSSEClient as SSEClient
+from pacavanza.modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 import talib
 
 LOGGER = logging.getLogger(__name__)
@@ -32,8 +32,8 @@ INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 MIN_BARS = 180  # minimal number of bars on x-axis
 
 # --- Load secrets and warrant list ---
-SECRET = json.load(open("secret.json"))
-WARRANT_LIST = json.load(open("warrant_list.json"))
+SECRET = json.load(open("./secret.json"))
+WARRANT_LIST = json.load(open("./pacavanza/warrant_list.json"))
 
 # --- Default values ---
 INTERVAL_STR = "5m"  # default
