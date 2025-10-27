@@ -20,12 +20,6 @@
     <key>WorkingDirectory</key>
     <string>/Users/<USERNAME>/path/to/pacavanza</string>
 
-    <key>StandardOutPath</key>
-    <string>/Users/<USERNAME>/path/to/pacavanza/logs/daemon_stdout.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>/Users/<USERNAME>/path/to/pacavanza/logs/daemon_stderr.log</string>
-
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

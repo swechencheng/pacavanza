@@ -10,8 +10,6 @@ ExecStartPre=/bin/chown $USER:$GROUP /path/to/pacavanza/logs
 ExecStart=/path/to/pacavanza/venv/bin/python3 /path/to/pacavanza/market_daemon.py
 Restart=always
 Environment=PATH=/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-StandardOutput=append:/path/to/pacavanza/logs/daemon_stdout.log
-StandardError=append:/path/to/pacavanza/logs/daemon_stderr.log
 
 [Install]
 WantedBy=default.target
