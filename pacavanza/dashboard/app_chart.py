@@ -82,6 +82,7 @@ class ChartApp:
                         close=df["close"],
                         increasing_line_color="green",
                         decreasing_line_color="red",
+                        name="MM köp",
                     )
                 ]
             )
