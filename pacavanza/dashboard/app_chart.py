@@ -7,6 +7,7 @@ from flask import Flask
 import talib
 
 MIN_BARS = 180  # Number of bars to display on chart
+EMA_PERIOD = 20  # EMA period (used to keep extra history for calculation)
 
 
 class ChartApp:
@@ -56,6 +57,7 @@ class ChartApp:
             Output("ohlc-chart", "figure"), Input("interval-component", "n_intervals")
         )
         def update_chart(_):
+            # get data
             completed, current = stock_data.get_dataframes()
             df = pd.DataFrame(completed)
             if current:
@@ -63,62 +65,86 @@ class ChartApp:
             if df.empty:
                 return go.Figure()
 
-            # Sort and keep latest MIN_BARS
-            df = df.sort_values("start_time").iloc[-MIN_BARS:].reset_index(drop=True)
+            # ensure start_time is datetime/tz-aware if it's not already
+            # (assumes stock_data provides tz-aware series; otherwise adapt as needed)
+            df = df.sort_values("start_time").reset_index(drop=True)
 
-            if len(df) >= 20:
-                df["ema20"] = talib.EMA(df["close"], timeperiod=20)
+            # Keep extra rows so EMA can be computed correctly for the last MIN_BARS bars.
+            # We keep at most MIN_BARS + EMA_PERIOD rows (EMA_PERIOD extra history).
+            required_rows = MIN_BARS + EMA_PERIOD
+            if len(df) > required_rows:
+                df = df.iloc[-required_rows:].reset_index(drop=True)
 
-            local_tz = datetime.now().astimezone().tzinfo
-            df["start_time"] = df["start_time"].dt.tz_convert(local_tz)
-            df["bar_index"] = range(len(df))
+            # Compute EMA on the kept window if we have enough rows
+            if len(df) >= EMA_PERIOD:
+                df["ema20"] = talib.EMA(df["close"], timeperiod=EMA_PERIOD)
+            # else: no ema column
+
+            # Now select the rows to DISPLAY: last MIN_BARS (or fewer if not available)
+            display_df = df.iloc[-MIN_BARS:].reset_index(drop=True)
+
+            # convert start_time to local tz for display
+            try:
+                local_tz = datetime.now().astimezone().tzinfo
+                display_df["start_time"] = display_df["start_time"].dt.tz_convert(
+                    local_tz
+                )
+            except Exception:
+                # if start_time is naive or conversion fails, leave as-is
+                pass
+
+            display_df["bar_index"] = range(len(display_df))
+
+            # Build figure using display_df, but EMA values were computed on the extended df
             fig = go.Figure(
                 [
                     go.Candlestick(
-                        x=df["bar_index"],
-                        open=df["open"],
-                        high=df["high"],
-                        low=df["low"],
-                        close=df["close"],
+                        x=display_df["bar_index"],
+                        open=display_df["open"],
+                        high=display_df["high"],
+                        low=display_df["low"],
+                        close=display_df["close"],
                         increasing_line_color="green",
                         decreasing_line_color="red",
                         name="MM köp",
                     )
                 ]
             )
-            if "ema20" in df:
+
+            # Only add EMA trace if present and has non-NA values for the displayed rows
+            if "ema20" in display_df and display_df["ema20"].notna().any():
                 fig.add_trace(
                     go.Scatter(
-                        x=df["bar_index"],
-                        y=df["ema20"],
+                        x=display_df["bar_index"],
+                        y=display_df["ema20"],
                         mode="lines",
                         line=dict(color="blue"),
-                        name="EMA20",
+                        name=f"EMA{EMA_PERIOD}",
                     )
                 )
 
-            # Proper hover text via update_traces
+            # Proper hover text via update_traces (apply to candlestick only)
             fig.update_traces(
                 hoverinfo="text",
                 hovertext=[
                     f"Time: {t}<br>O: {o:.2f}<br>H: {h:.2f}<br>L: {l:.2f}<br>C: {c:.2f}"
                     for t, o, h, l, c in zip(
-                        df["start_time"].dt.strftime("%Y-%m-%d %H:%M"),
-                        df["open"],
-                        df["high"],
-                        df["low"],
-                        df["close"],
+                        display_df["start_time"].dt.strftime("%Y-%m-%d %H:%M"),
+                        display_df["open"],
+                        display_df["high"],
+                        display_df["low"],
+                        display_df["close"],
                     )
                 ],
-                selector=dict(type="candlestick"),  # Only apply to candlestick
+                selector=dict(type="candlestick"),
             )
 
             # X-axis tick labels = timestamps (no gaps)
-            tick_step = max(1, len(df) // 10)
+            tick_step = max(1, len(display_df) // 10)
             fig.update_xaxes(
                 tickmode="array",
-                tickvals=df["bar_index"][::tick_step],
-                ticktext=df["start_time"].dt.strftime("%H:%M")[::tick_step],
+                tickvals=display_df["bar_index"][::tick_step],
+                ticktext=display_df["start_time"].dt.strftime("%H:%M")[::tick_step],
                 title_text="Bars (continuous, skips closed hours)",
             )
 
