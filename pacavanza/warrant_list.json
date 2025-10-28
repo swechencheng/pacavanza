@@ -4,13 +4,10 @@
         "URL" : "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1153662/mini-l-omx-ava-468",
         "ID": "1153662",
         "ratio" : 1,
-        "forex": "SEK"
-    },
-    "mini-s-omx-ava-1572": {
-        "name": "MINI S OMX AVA 1572",
-        "URL" : "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141673/mini-s-omx-ava-1572",
-        "ID": "2141673",
-        "ratio": 1,
+        "units": 90,
+        "timezone": "Europe/Stockholm",
+        "market_open": "09:00",
+        "market_close": "17:30",
         "forex": "SEK"
     },
     "mini-s-omx-ava-1575": {
@@ -18,6 +15,10 @@
         "URL" : "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141626/mini-s-omx-ava-1575",
         "ID": "2141626",
         "ratio" : 1,
+        "units": 90,
+        "timezone": "Europe/Stockholm",
+        "market_open": "09:00",
+        "market_close": "17:30",
         "forex": "SEK"
     },
     "mini-l-sp500-ava-270": {
@@ -25,6 +26,10 @@
         "URL" : "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2026354/mini-l-sp500-ava-270",
         "ID": "2026354",
         "ratio" : 100,
+        "units": 300,
+        "timezone": "America/New_York",
+        "market_open": "09:30",
+        "market_close": "16:00",
         "forex": "USD/SEK"
     },
     "mini-s-sp500-ava-330": {
@@ -32,6 +37,10 @@
         "URL" : "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141631/mini-s-sp500-ava-330",
         "ID": "2141631",
         "ratio" : 100,
+        "units": 300,
+        "timezone": "America/New_York",
+        "market_open": "09:30",
+        "market_close": "16:00",
         "forex": "USD/SEK"
     }
 }
