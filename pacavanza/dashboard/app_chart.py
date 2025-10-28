@@ -37,7 +37,7 @@ class ChartApp:
                     ]
                 ),
                 dcc.Graph(id="ohlc-chart"),
-                dcc.Interval(id="interval-component", interval=100, n_intervals=0),
+                dcc.Interval(id="interval-component", interval=1000, n_intervals=0),
             ]
         )
 
