@@ -3,6 +3,7 @@ import asyncio
 import json
 import copy
 import logging
+import signal
 import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -54,6 +55,12 @@ class MultiMarketCollector:
             if not wid:
                 raise ValueError(f"Warrant ID not found for {sid}")
             self.warrant_ids[sid] = wid
+
+        # track tasks & clients for graceful shutdown
+        self._tasks = []  # list of asyncio.Task objects we create
+        self._sse_clients = {}  # stock_id -> SSEClient instance (if created)
+        self._avanza = None  # will hold the Avanza instance when created
+        self._shutting_down = False
 
     def _market_window_utc_for_local_date(self, stock_id, local_date):
         """
@@ -245,14 +252,18 @@ class MultiMarketCollector:
                 LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
 
     async def _run_sse_client_loop(self, avanza, stock_id, warrant_id):
-        """
-        Create and (re)start an SSE client for a single stock. This function loops forever,
-        handling reconnects for that stock, but *reuses* the provided `avanza` instance.
-        """
         while True:
+            # if shutdown requested, exit loop instead of creating new clients
+            if self._shutting_down:
+                LOGGER.info(
+                    f"[{stock_id}] Shutdown requested — exiting _run_sse_client_loop."
+                )
+                break
+
+            client = None
             try:
                 client = SSEClient(avanza, self.quote_base_url + warrant_id)
-                # Add a stock-specific listener (the SSE client will call this async function)
+                self._sse_clients[stock_id] = client
                 client.add_listener(partial(self._callback_quote_web_push, stock_id))
                 LOGGER.info(
                     f"[{stock_id}] Starting SSE client for warrant {warrant_id}"
@@ -261,10 +272,58 @@ class MultiMarketCollector:
                 LOGGER.info(
                     f"[{stock_id}] SSE client stopped cleanly (will reconnect)."
                 )
+
+                # after client.start() returns, check if shutdown was requested
+                if self._shutting_down:
+                    LOGGER.info(
+                        f"[{stock_id}] Shutdown requested after client stopped — exiting loop."
+                    )
+                    # attempt to remove client reference and break
+                    self._sse_clients.pop(stock_id, None)
+                    break
+
+            except asyncio.CancelledError:
+                LOGGER.info(
+                    f"[{stock_id}] _run_sse_client_loop cancelled: attempting client stop."
+                )
+                try:
+                    if client is not None:
+                        stop_fn = getattr(client, "stop", None) or getattr(
+                            client, "close", None
+                        )
+                        if stop_fn:
+                            res = stop_fn()
+                            if asyncio.iscoroutine(res):
+                                await res
+                except Exception as e:
+                    LOGGER.debug(
+                        f"[{stock_id}] Exception while stopping client on cancel: {e}"
+                    )
+                finally:
+                    self._sse_clients.pop(stock_id, None)
+                    raise
             except Exception as e:
                 LOGGER.error(
                     f"[{stock_id}] SSE client error: {e}. Reconnecting in 5s..."
                 )
+                try:
+                    if client is not None:
+                        stop_fn = getattr(client, "stop", None) or getattr(
+                            client, "close", None
+                        )
+                        if stop_fn:
+                            res = stop_fn()
+                            if asyncio.iscoroutine(res):
+                                await res
+                except Exception:
+                    pass
+                self._sse_clients.pop(stock_id, None)
+                # if shutdown flag set, don't sleep & reconnect — break
+                if self._shutting_down:
+                    LOGGER.info(
+                        f"[{stock_id}] Shutdown requested during error; exiting client loop."
+                    )
+                    break
                 await asyncio.sleep(5)
 
     async def real_market_loop(self):
@@ -273,44 +332,231 @@ class MultiMarketCollector:
         If Avanza creation fails we retry (so the whole set reconnects together).
         """
         while True:
+            if self._shutting_down:
+                LOGGER.info("real_market_loop: shutting down flag set — exiting loop.")
+                break
             avanza = None
             try:
                 # create single Avanza instance (one login)
                 avanza = Avanza(self.secret)
+                self._avanza = avanza
                 LOGGER.info("Avanza login OK.")
 
                 # start per-stock SSE loops (each loop handles its own reconnects)
-                tasks = []
+                self._tasks = []
                 for sid, wid in self.warrant_ids.items():
-                    tasks.append(
-                        asyncio.create_task(self._run_sse_client_loop(avanza, sid, wid))
-                    )
+                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, wid))
+                    self._tasks.append(t)
 
                 # Wait for all tasks (they are infinite loops that only stop on unexpected error)
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*self._tasks)
             except Exception as e:
                 LOGGER.error(
                     f"Error in real_market_loop: {e}. Recreating Avanza in 5s..."
                 )
                 await asyncio.sleep(5)
             finally:
-                # cleanup Avanza if possible
                 try:
                     if avanza and hasattr(avanza, "close"):
                         await avanza.close()
                 except Exception:
                     pass
+                finally:
+                    self._avanza = None
+
+    def force_save_stock(self, stock_id, timestamp: datetime = None):
+        """
+        Immediately save OHLC data for `stock_id`.
+        If timestamp is provided (aware UTC), use it as the current-bar end_time;
+        otherwise use the current UTC time.
+        """
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
+        sd = self.stock_data[stock_id]
+        try:
+            with sd.lock:
+                # copy completed bars
+                bars = copy.deepcopy(sd.completed_ohlc[stock_id])
+                # snapshot current bar if present
+                current = sd.current_bars.get(stock_id)
+                if current:
+                    curr_copy = copy.deepcopy(current)
+                    # set end_time to provided timestamp (ensure tz-aware)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    curr_copy["end_time"] = ts
+                    if curr_copy["start_time"].tzinfo is None:
+                        curr_copy["start_time"] = curr_copy["start_time"].replace(
+                            tzinfo=timezone.utc
+                        )
+                    bars.append(curr_copy)
+
+            # write to disk outside lock
+            data = []
+            for b in bars:
+                bar = b.copy()
+                bar["start_time"] = bar["start_time"].isoformat()
+                bar["end_time"] = bar["end_time"].isoformat()
+                data.append(bar)
+            data_file = f"ohlc_{stock_id}.json"
+            with open(data_file, "w") as f:
+                json.dump(data, f)
+            LOGGER.info(
+                f"[{stock_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
+            )
+        except Exception as e:
+            LOGGER.error(f"[{stock_id}] Failed force-save: {e}")
+
+    def force_save_all(self, timestamp: datetime = None):
+        """
+        Force-save OHLC for all stocks immediately.
+        If timestamp is provided it's used as the end_time for in-progress bars;
+        otherwise current UTC time is used.
+        """
+        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
+        LOGGER.info(f"Force-saving all stocks at {ts.isoformat()}")
+        for sid in list(self.stock_data.keys()):
+            try:
+                self.force_save_stock(sid, ts)
+            except Exception as e:
+                LOGGER.error(f"[{sid}] Exception during force_save_all: {e}")
+
+    async def _shutdown(self, loop, signum):
+        """
+        Coroutine called from signal handlers. Force-saves, stops clients, closes Avanza,
+        cancels tasks and waits for them to finish before stopping the loop.
+        """
+        LOGGER.info(
+            f"Received signal {signum}. Initiating graceful shutdown: forcing save and cancelling tasks..."
+        )
+        # set the flag so loops stop creating new clients
+        self._shutting_down = True
+        # 1) Force-save synchronously (quick)
+        try:
+            self.force_save_all()
+        except Exception as e:
+            LOGGER.error(f"Error during force_save_all in shutdown: {e}")
+
+        # 2) Stop SSE clients (await if they provide async stop)
+        for sid, client in list(self._sse_clients.items()):
+            try:
+                LOGGER.info(f"[{sid}] Stopping SSE client...")
+                stop_fn = getattr(client, "stop", None) or getattr(
+                    client, "close", None
+                )
+                if stop_fn:
+                    res = stop_fn()
+                    if asyncio.iscoroutine(res):
+                        await res
+            except Exception as e:
+                LOGGER.debug(f"[{sid}] Exception while stopping SSE client: {e}")
+            finally:
+                self._sse_clients.pop(sid, None)
+
+        # 3) Close Avanza session if exists (await if coroutine)
+        if self._avanza is not None:
+            try:
+                close_fn = getattr(self._avanza, "close", None)
+                if close_fn:
+                    res = close_fn()
+                    if asyncio.iscoroutine(res):
+                        await res
+                self._avanza = None
+            except Exception as e:
+                LOGGER.debug(f"Exception while closing Avanza: {e}")
+
+        # 4) Cancel outstanding tasks we created and await them
+        # include self._tasks (per-stock loops), plus other tasks except current
+        to_cancel = list(self._tasks) if self._tasks else []
+        # gather other tasks (exclude current task)
+        for t in asyncio.all_tasks(loop):
+            if t is asyncio.current_task(loop):
+                continue
+            if t not in to_cancel:
+                to_cancel.append(t)
+
+        if to_cancel:
+            for t in to_cancel:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+
+            # Wait for tasks to finish, but don't hang forever
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*to_cancel, return_exceptions=True), timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                LOGGER.warning(
+                    "Timeout while waiting for tasks to finish during shutdown."
+                )
+
+        # 5) stop the loop (will cause run_until_complete to return)
+        try:
+            loop.stop()
+        except Exception:
+            pass
 
     def run(self):
         """
         Entry point: load disk data and start the asyncio loop.
+        Registers signal handlers to force-save on SIGINT/SIGTERM.
         """
         self.load_all_ohlc_from_disk()
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(
-            asyncio.gather(self.real_market_loop(), self.periodic_saver())
-        )
+
+        # create the main tasks
+        main_tasks = [
+            loop.create_task(self.real_market_loop()),
+            loop.create_task(self.periodic_saver()),
+        ]
+        # keep reference so shutdown can cancel them
+        self._tasks = main_tasks.copy()
+
+        # install signal handlers
+        def _schedule_shutdown(s):
+            try:
+                # schedule the coroutine on the loop
+                asyncio.create_task(self._shutdown(loop, s))
+            except Exception:
+                # if create_task fails (no running loop) try run_coroutine_threadsafe
+                try:
+                    asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
+                except Exception:
+                    pass
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, lambda s=sig: _schedule_shutdown(s))
+            except NotImplementedError:
+                # fallback
+                def _handler(signum, frame, s=sig):
+                    asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
+
+                signal.signal(sig, _handler)
+
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            LOGGER.info("KeyboardInterrupt received in run()")
+        finally:
+            # final cleanup: ensure tasks stopped
+            try:
+                # try a final force-save
+                LOGGER.info("Final force-save for all stocks (final cleanup)")
+                self.force_save_all()
+            except Exception as e:
+                LOGGER.error(f"Final force-save failed: {e}")
+            # give a short moment for pending cleanups
+            try:
+                loop.run_until_complete(asyncio.sleep(0.1))
+            except Exception:
+                pass
+            try:
+                loop.close()
+            except Exception:
+                pass
 
 
 def parse_args():
