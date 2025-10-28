@@ -7,7 +7,9 @@ INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 
 class StockData:
-    def __init__(self, interval_seconds: int, stock_id: str = "TEST", max_history_hours: int = 96):
+    def __init__(
+        self, interval_seconds: int, stock_id: str = "TEST", max_history_hours: int = 96
+    ):
         self.interval_seconds = interval_seconds
         self.stock_id = stock_id
         self.max_history_hours = max_history_hours
@@ -16,6 +18,12 @@ class StockData:
         self.lock = threading.Lock()
 
     def initialize_new_bar(self, timestamp: datetime, price: float):
+        # Ensure timestamp is timezone-aware in UTC
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        else:
+            timestamp = timestamp.astimezone(timezone.utc)
+
         seconds_since_midnight = (
             timestamp.hour * 3600 + timestamp.minute * 60 + timestamp.second
         )
@@ -26,6 +34,7 @@ class StockData:
             hour=0, minute=0, second=0, microsecond=0
         ) + timedelta(seconds=floored)
 
+        # Keep bar_start and end_time timezone-aware (UTC)
         self.current_bars[self.stock_id] = {
             "start_time": bar_start,
             "open": price,

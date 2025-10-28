@@ -42,8 +42,19 @@ class RealMarketData:
                 data = json.load(f)
             bars = []
             for bar in data:
-                bar["start_time"] = datetime.fromisoformat(bar["start_time"])
-                bar["end_time"] = datetime.fromisoformat(bar["end_time"])
+                # parse and force UTC timezone if missing
+                start = datetime.fromisoformat(bar["start_time"])
+                end = datetime.fromisoformat(bar["end_time"])
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                else:
+                    start = start.astimezone(timezone.utc)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+                else:
+                    end = end.astimezone(timezone.utc)
+                bar["start_time"] = start
+                bar["end_time"] = end
                 bars.append(bar)
             cutoff = datetime.now(timezone.utc) - timedelta(
                 hours=self.max_history_hours

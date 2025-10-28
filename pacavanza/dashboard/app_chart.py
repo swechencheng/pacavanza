@@ -4,7 +4,11 @@ from datetime import datetime
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
+import logging
 import talib
+
+logging.getLogger(__name__).setLevel(logging.INFO)
+LOGGER = logging.getLogger(__name__)
 
 MIN_BARS = 180  # Number of bars to display on chart
 EMA_PERIOD = 20  # EMA period (used to keep extra history for calculation)
@@ -64,16 +68,22 @@ class ChartApp:
                 df = pd.concat([df, pd.DataFrame([current])], ignore_index=True)
             if df.empty:
                 return go.Figure()
+            LOGGER.debug(f"total rows of df after concat: {len(df)}")
+
+            # ensure start_time is datetime/tz-aware
+            df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
 
             # ensure start_time is datetime/tz-aware if it's not already
             # (assumes stock_data provides tz-aware series; otherwise adapt as needed)
             df = df.sort_values("start_time").reset_index(drop=True)
+            LOGGER.debug(f"df after sort: rows={len(df)}, start={df['start_time'].iloc[0]}, end={df['start_time'].iloc[-1]}")
 
             # Keep extra rows so EMA can be computed correctly for the last MIN_BARS bars.
             # We keep at most MIN_BARS + EMA_PERIOD rows (EMA_PERIOD extra history).
             required_rows = MIN_BARS + EMA_PERIOD
             if len(df) > required_rows:
                 df = df.iloc[-required_rows:].reset_index(drop=True)
+            LOGGER.debug(f"total rows of df after trim: {len(df)}")
 
             # Compute EMA on the kept window if we have enough rows
             if len(df) >= EMA_PERIOD:
@@ -82,6 +92,7 @@ class ChartApp:
 
             # Now select the rows to DISPLAY: last MIN_BARS (or fewer if not available)
             display_df = df.iloc[-MIN_BARS:].reset_index(drop=True)
+            LOGGER.debug(f"total rows of display_df after trim: {len(display_df)}")
 
             # convert start_time to local tz for display
             try:
