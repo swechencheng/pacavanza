@@ -5,6 +5,7 @@ import copy
 import logging
 import signal
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from functools import partial
@@ -31,6 +32,7 @@ class MultiMarketCollector:
         interval_seconds,
         secret_path="./pacavanza/../secret.json",
         warrant_list_path="./pacavanza/warrant_list.json",
+        stock_datas: dict = None,
     ):
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
@@ -38,9 +40,20 @@ class MultiMarketCollector:
         self.stock_ids = stock_ids
 
         # per-stock storage objects
-        self.stock_data = {
-            stock_id: StockData(interval_seconds, stock_id) for stock_id in stock_ids
-        }
+        # If caller provided existing StockData instances, use them so the
+        # collector updates the same objects the chart reads from.
+        # Otherwise create new StockData objects as before.
+        if stock_datas is not None:
+            # only pick the stocks we were asked to collect
+            self.stock_data = {
+                stock_id: stock_datas[stock_id] for stock_id in stock_ids
+            }
+        else:
+            self.stock_data = {
+                stock_id: StockData(interval_seconds, stock_id)
+                for stock_id in stock_ids
+            }
+
         # per-stock metadata
         self.last_buy_price = {sid: None for sid in stock_ids}
         self.last_sell_price = {sid: None for sid in stock_ids}
@@ -61,6 +74,7 @@ class MultiMarketCollector:
         self._sse_clients = {}  # stock_id -> SSEClient instance (if created)
         self._avanza = None  # will hold the Avanza instance when created
         self._shutting_down = False
+        self._loop = None
 
     def _market_window_utc_for_local_date(self, stock_id, local_date):
         """
@@ -500,10 +514,11 @@ class MultiMarketCollector:
     def run(self):
         """
         Entry point: load disk data and start the asyncio loop.
-        Registers signal handlers to force-save on SIGINT/SIGTERM.
+        Registers signal handlers to force-save on SIGINT/SIGTERM only if running in main thread.
         """
         self.load_all_ohlc_from_disk()
         loop = asyncio.new_event_loop()
+        self._loop = loop  # save reference for external stop()
         asyncio.set_event_loop(loop)
 
         # create the main tasks
@@ -514,27 +529,30 @@ class MultiMarketCollector:
         # keep reference so shutdown can cancel them
         self._tasks = main_tasks.copy()
 
-        # install signal handlers
-        def _schedule_shutdown(s):
-            try:
-                # schedule the coroutine on the loop
-                asyncio.create_task(self._shutdown(loop, s))
-            except Exception:
-                # if create_task fails (no running loop) try run_coroutine_threadsafe
+        # install signal handlers only if we're running in main thread.
+        if threading.current_thread() is threading.main_thread():
+
+            def _schedule_shutdown(s):
                 try:
-                    asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
+                    asyncio.create_task(self._shutdown(loop, s))
                 except Exception:
-                    pass
+                    try:
+                        asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
+                    except Exception:
+                        pass
 
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, lambda s=sig: _schedule_shutdown(s))
-            except NotImplementedError:
-                # fallback
-                def _handler(signum, frame, s=sig):
-                    asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
-
-                signal.signal(sig, _handler)
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, lambda s=sig: _schedule_shutdown(s))
+                except Exception:
+                    # if add_signal_handler fails for some reason, skip it.
+                    LOGGER.debug(
+                        "run(): loop.add_signal_handler failed; skipping signal handler registration."
+                    )
+        else:
+            LOGGER.debug(
+                "run(): not running in main thread — skipping signal handler registration (caller should call stop())."
+            )
 
         try:
             loop.run_forever()
@@ -543,12 +561,10 @@ class MultiMarketCollector:
         finally:
             # final cleanup: ensure tasks stopped
             try:
-                # try a final force-save
                 LOGGER.info("Final force-save for all stocks (final cleanup)")
                 self.force_save_all()
             except Exception as e:
                 LOGGER.error(f"Final force-save failed: {e}")
-            # give a short moment for pending cleanups
             try:
                 loop.run_until_complete(asyncio.sleep(0.1))
             except Exception:
@@ -557,6 +573,33 @@ class MultiMarketCollector:
                 loop.close()
             except Exception:
                 pass
+
+    def stop(self, timeout: float = 15.0):
+        """
+        Synchronous method to request graceful shutdown from another thread (e.g. main thread).
+        Sets shutdown flag and schedules the async _shutdown coroutine onto the collector's loop.
+        Waits up to `timeout` seconds for the shutdown coroutine to complete.
+        """
+        LOGGER.info(
+            "Stop requested (external). Setting shutting_down flag and scheduling shutdown."
+        )
+        self._shutting_down = True
+
+        if not getattr(self, "_loop", None):
+            LOGGER.debug("stop(): no event loop reference; nothing to schedule.")
+            return
+
+        try:
+            # schedule the coroutine on the collector's loop and wait for result (best-effort)
+            fut = asyncio.run_coroutine_threadsafe(
+                self._shutdown(self._loop, "external"), self._loop
+            )
+            try:
+                fut.result(timeout=timeout)
+            except Exception as e:
+                LOGGER.debug(f"stop(): shutdown coroutine finished/failed/timeout: {e}")
+        except Exception as e:
+            LOGGER.error(f"stop(): failed to schedule shutdown on collector loop: {e}")
 
 
 def parse_args():
