@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.pacavanza.marketdaemon</string>
+    <string>com.pacavanza.dashboard</string>
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/<USERNAME>/path/to/pacavanza/venv/bin/python</string>
-        <string>-m</string>
-        <string>pacavanza.data_sources.avanza_market_multi</string>
+        <string>/Users/<USERNAME>/path/to/pacavanza/venv/bin/run-pacavanza</string>
+        <string>-p</string>
+        <string>8001</string>
         <string>mini-l-omx-ava-468</string>
         <string>mini-s-omx-ava-1575</string>
         <string>mini-l-sp500-ava-270</string>

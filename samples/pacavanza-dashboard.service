@@ -1,0 +1,15 @@
+[Unit]
+Description=PACAvanza Dashboard Daemon
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/pacavanza
+ExecStartPre=/bin/mkdir -p /path/to/pacavanza/logs
+ExecStartPre=/bin/chown $USER:$GROUP /path/to/pacavanza/logs
+ExecStart=/path/to/pacavanza/venv/bin/run-pacavanza -p 8001 mini-l-omx-ava-468 mini-s-omx-ava-1575 mini-l-sp500-ava-270 mini-s-sp500-ava-330
+Restart=always
+Environment=PATH=/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+[Install]
+WantedBy=default.target
