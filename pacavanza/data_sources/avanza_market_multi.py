@@ -13,6 +13,7 @@ from functools import partial
 from avanza import Avanza
 from ..modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 from ..modules.stock_data import StockData, INTERVAL_MAP
+from ..utils.utils import save_json_atomic
 
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -228,8 +229,7 @@ class MultiMarketCollector:
                         bar["end_time"] = bar["end_time"].isoformat()
                         data.append(bar)
                     data_file = f"ohlc_{sid}.json"
-                    with open(data_file, "w") as f:
-                        json.dump(data, f)
+                    save_json_atomic(data_file, data)
                     LOGGER.debug(f"[{sid}] Saved {len(data)} bars to {data_file}")
                 except Exception as e:
                     LOGGER.error(f"[{sid}] Failed to save OHLC: {e}")
@@ -412,8 +412,7 @@ class MultiMarketCollector:
                 bar["end_time"] = bar["end_time"].isoformat()
                 data.append(bar)
             data_file = f"ohlc_{stock_id}.json"
-            with open(data_file, "w") as f:
-                json.dump(data, f)
+            save_json_atomic(data_file, data)
             LOGGER.info(
                 f"[{stock_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
             )
