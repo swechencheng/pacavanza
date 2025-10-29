@@ -1,9 +1,11 @@
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 from dash import Dash, dcc, html
 from dash.dependencies import Input, Output
 from flask import Flask
+import json
 import logging
 import talib
 
@@ -12,6 +14,28 @@ LOGGER = logging.getLogger(__name__)
 
 MIN_BARS = 180  # Number of bars to display on chart
 EMA_PERIOD = 20  # EMA period (used to keep extra history for calculation)
+C_CONTADOR = 2  # Interval for bar counter labels
+
+
+def load_warrant_info(path="./pacavanza/warrant_list.json"):
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def is_trading_hour(
+    ts: datetime, tz_name: str, market_open: str, market_close: str
+) -> bool:
+    """
+    Returns True if `ts` is within market hours in local timezone.
+    """
+    tz = ZoneInfo(tz_name)
+    local_ts = ts.astimezone(tz)
+
+    open_h, open_m = map(int, market_open.split(":"))
+    close_h, close_m = map(int, market_close.split(":"))
+    open_t, close_t = time(open_h, open_m), time(close_h, close_m)
+
+    return open_t <= local_ts.timetz().replace(tzinfo=None) < close_t
 
 
 class ChartApp:
@@ -20,7 +44,14 @@ class ChartApp:
     It renders one chart per StockData.stock_id and registers one callback per chart.
     """
 
-    def __init__(self, stock_datas, interval_str="5m", port=8050):
+    def __init__(
+        self,
+        stock_datas,
+        interval_str="5m",
+        port=8050,
+        warrant_info_path="./pacavanza/warrant_list.json",
+    ):
+        self.warrant_info = load_warrant_info(warrant_info_path)
         # accept a single StockData or list
         if isinstance(stock_datas, (list, tuple)):
             self.stock_datas = stock_datas
@@ -145,6 +176,40 @@ class ChartApp:
 
                     display_df["bar_index"] = range(len(display_df))
 
+                    # --- in_session flag ---
+                    warrant_info = self.warrant_info.get(stock_id, {})
+                    tz_name = warrant_info.get("timezone", "Europe/Stockholm")
+                    market_open = warrant_info.get("market_open", "09:00")
+                    market_close = warrant_info.get("market_close", "17:30")
+
+                    display_df["in_session"] = display_df["start_time"].apply(
+                        lambda ts: is_trading_hour(
+                            ts, tz_name, market_open, market_close
+                        )
+                    )
+
+                    # --- bar counter ---
+                    count = 0
+                    bar_counter = []
+                    for i, row in display_df.iterrows():
+                        if not row["in_session"]:
+                            bar_counter.append(None)
+                            continue
+
+                        # reset if new day or previous bar out of session
+                        if (
+                            i == 0
+                            or display_df.loc[i, "start_time"].date()
+                            != display_df.loc[i - 1, "start_time"].date()
+                            or not display_df.loc[i - 1, "in_session"]
+                        ):
+                            count = 0
+                        count += 1
+                        bar_counter.append(count)
+
+                    display_df["bar_count"] = bar_counter
+                    # --- END bar counter ---
+
                     fig = go.Figure()
 
                     if "ema20" in display_df and display_df["ema20"].notna().any():
@@ -209,6 +274,24 @@ class ChartApp:
                         font=dict(size=12, color="white"),
                         bgcolor="rgba(0, 0, 0, 0.6)",
                         borderpad=4,
+                    )
+
+                    label_indices = display_df[
+                        display_df["bar_count"].notna()
+                        & (display_df["bar_count"] % C_CONTADOR == 0)
+                    ]
+
+                    fig.add_trace(
+                        go.Scatter(
+                            x=label_indices["bar_index"],
+                            y=label_indices["low"] * 0.999,  # slightly below each bar
+                            text=label_indices["bar_count"].astype(int).astype(str),
+                            mode="text",
+                            textposition="bottom center",
+                            textfont=dict(size=6, color="orange"),
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
                     )
 
                     tick_step = max(1, len(display_df) // 10)
