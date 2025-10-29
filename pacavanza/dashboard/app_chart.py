@@ -145,20 +145,7 @@ class ChartApp:
 
                     display_df["bar_index"] = range(len(display_df))
 
-                    fig = go.Figure(
-                        [
-                            go.Candlestick(
-                                x=display_df["bar_index"],
-                                open=display_df["open"],
-                                high=display_df["high"],
-                                low=display_df["low"],
-                                close=display_df["close"],
-                                increasing_line_color="green",
-                                decreasing_line_color="red",
-                                name="MM köp",
-                            )
-                        ]
-                    )
+                    fig = go.Figure()
 
                     if "ema20" in display_df and display_df["ema20"].notna().any():
                         fig.add_trace(
@@ -166,25 +153,62 @@ class ChartApp:
                                 x=display_df["bar_index"],
                                 y=display_df["ema20"],
                                 mode="lines",
-                                line=dict(color="blue"),
+                                line=dict(color="yellow", width=1),
                                 name=f"EMA{EMA_PERIOD}",
+                                hoverinfo="skip",
                             )
                         )
 
-                    # hovertext
-                    fig.update_traces(
-                        hoverinfo="text",
-                        hovertext=[
-                            f"Time: {t}<br>O: {o:.2f}<br>H: {h:.2f}<br>L: {l:.2f}<br>C: {c:.2f}"
-                            for t, o, h, l, c in zip(
-                                display_df["start_time"].dt.strftime("%Y-%m-%d %H:%M"),
-                                display_df["open"],
-                                display_df["high"],
-                                display_df["low"],
-                                display_df["close"],
-                            )
-                        ],
-                        selector=dict(type="candlestick"),
+                    fig.add_trace(
+                        go.Candlestick(
+                            x=display_df["bar_index"],
+                            open=display_df["open"],
+                            high=display_df["high"],
+                            low=display_df["low"],
+                            close=display_df["close"],
+                            increasing_line_color="green",
+                            decreasing_line_color="red",
+                            name="MM köp",
+                            hoverinfo="text",
+                            hovertext=[
+                                f"Time: {t}<br>O: {o:.2f}<br>H: {h:.2f}<br>L: {l:.2f}<br>C: {c:.2f}"
+                                for t, o, h, l, c in zip(
+                                    display_df["start_time"].dt.strftime(
+                                        "%Y-%m-%d %H:%M"
+                                    ),
+                                    display_df["open"],
+                                    display_df["high"],
+                                    display_df["low"],
+                                    display_df["close"],
+                                )
+                            ],
+                        )
+                    )
+
+                    latest_open = display_df["open"].iloc[-1]
+                    latest_high = display_df["high"].iloc[-1]
+                    latest_low = display_df["low"].iloc[-1]
+                    latest_close = display_df["close"].iloc[-1]
+                    latest_ema = (
+                        display_df["ema20"].iloc[-1] if "ema20" in display_df else None
+                    )
+                    annotation_text = f"O: {latest_open:.2f} H: {latest_high:.2f} L: {latest_low:.2f} C: {latest_close:.2f}"
+                    if latest_ema:
+                        annotation_text += f" EMA20: {latest_ema:.2f}"
+
+                    fig.add_annotation(
+                        text=annotation_text,
+                        xref="paper",  # center of the chart (0=left, 1=right)
+                        yref="paper",
+                        x=0.5,
+                        y=1,
+                        xanchor="center",
+                        yanchor="top",
+                        showarrow=False,
+                        align="center",
+                        font=dict(size=12, color="white"),
+                        bgcolor="rgba(0, 0, 0, 0.6)",
+                        borderpad=4,
                     )
 
                     tick_step = max(1, len(display_df) // 10)
