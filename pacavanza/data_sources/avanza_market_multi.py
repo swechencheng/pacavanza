@@ -1,4 +1,4 @@
-# avanza_market_multi.py
+# pacavanza/data_sources/avanza_market_multi_redis.py
 import asyncio
 import json
 import copy
@@ -9,6 +9,10 @@ import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from functools import partial
+from typing import Optional
+
+# third-party
+import redis.asyncio as aioredis
 
 from avanza import Avanza
 from ..modules.avanza_sse_client import AvanzaSSEClient as SSEClient
@@ -23,6 +27,9 @@ class MultiMarketCollector:
     """
     Run multiple SSE clients (one per stock/warrant) while using a single Avanza instance.
     Each stock keeps its own StockData, own file, and its own SSEClient.
+
+    This variant publishes minimal updates to Redis pub/sub so other processes (web server)
+    can subscribe and broadcast to clients without blocking the collector.
     """
 
     quote_base_url = "https://www.avanza.se/_push/quote-web-push/"
@@ -34,6 +41,12 @@ class MultiMarketCollector:
         secret_path="./pacavanza/../secret.json",
         warrant_list_path="./pacavanza/warrant_list.json",
         stock_datas: dict = None,
+        redis_url: str = "redis://localhost:6379/0",
+        redis_channel: str = "pacavanza:updates",
+        # how often to persist completed bars to disk (seconds). Default: max(5, interval_seconds)
+        completed_save_interval: Optional[float] = None,
+        # how often to persist current (in-progress) bars snapshot to disk (seconds).
+        current_snapshot_interval: float = 3.0,
     ):
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
@@ -76,6 +89,24 @@ class MultiMarketCollector:
         self._avanza = None  # will hold the Avanza instance when created
         self._shutting_down = False
         self._loop = None
+
+        # Redis pub/sub config
+        self.redis_url = redis_url
+        self.redis_channel = redis_channel
+        self._redis = None  # will be aioredis.Redis when connected
+
+        # saver config
+        self.current_snapshot_interval = current_snapshot_interval
+        self.completed_save_interval = (
+            completed_save_interval
+            if completed_save_interval is not None
+            else max(5.0, float(self.interval_seconds))
+        )
+
+        # bookkeeping to limit snapshot IO
+        # dirty_current stores stock ids whose current bar has changed since last snapshot
+        self._dirty_current = set()
+        self._last_current_snapshot = datetime.now(timezone.utc)
 
     def _market_window_utc_for_local_date(self, stock_id, local_date):
         """
@@ -202,7 +233,115 @@ class MultiMarketCollector:
             self.last_sell_price[stock_id] = sell_price
 
             # Update the correct StockData instance (only during market open)
+            # This call updates internal current bar / completed ohlc lists.
             self.stock_data[stock_id].update_ohlc_bar(buy_price, dt)
+
+            # mark current bar as dirty for periodic snapshot
+            self._dirty_current.add(stock_id)
+
+            # Build a tiny message describing the current bar (the StockData class should return bar dicts)
+            try:
+                # fetch current bar & last completed bar for the stock in a thread-safe manner
+                with self.stock_data[stock_id].lock:
+                    curr = self.stock_data[stock_id].current_bars.get(stock_id)
+                    latest_completed = (
+                        self.stock_data[stock_id].completed_ohlc[stock_id][-1]
+                        if self.stock_data[stock_id].completed_ohlc.get(stock_id)
+                        else None
+                    )
+
+                # prefer to send only the current bar (update) and indicate if it is a new completed bar
+                msg = {
+                    "type": "update",
+                    "stock": stock_id,
+                    "bar": None,
+                    "completed": False,
+                    "meta": {
+                        "timezone": self.warrant_list[stock_id].get("timezone", "UTC"),
+                        "market_open": self.warrant_list[stock_id].get(
+                            "market_open", "00:00"
+                        ),
+                        "market_close": self.warrant_list[stock_id].get(
+                            "market_close", "23:59"
+                        ),
+                    },
+                }
+                if curr:
+                    msg["bar"] = {
+                        "start_time": curr["start_time"].isoformat(),
+                        "end_time": curr["end_time"].isoformat(),
+                        "open": curr["open"],
+                        "high": curr["high"],
+                        "low": curr["low"],
+                        "close": curr["close"],
+                        "volume": curr.get("volume", 0),
+                    }
+
+                # detect if a new completed bar was created: if latest_completed exists and its end_time <= curr.start_time
+                # Note: this depends on your StockData implementation; adapt if necessary.
+                if latest_completed and curr:
+                    try:
+                        curr_start = datetime.fromisoformat(msg["bar"]["start_time"])
+                        # make sure curr_start is timezone-aware in UTC for correct comparison
+                        if curr_start.tzinfo is None:
+                            curr_start = curr_start.replace(tzinfo=timezone.utc)
+                        # Compare latest_completed['end_time'] (already timezone-aware) to curr_start
+                        if latest_completed["end_time"] <= curr_start:
+                            # include the last completed bar fully
+                            msg_completed = {
+                                "type": "completed",
+                                "stock": stock_id,
+                                "bar": {
+                                    "start_time": latest_completed[
+                                        "start_time"
+                                    ].isoformat(),
+                                    "end_time": latest_completed[
+                                        "end_time"
+                                    ].isoformat(),
+                                    "open": latest_completed["open"],
+                                    "high": latest_completed["high"],
+                                    "low": latest_completed["low"],
+                                    "close": latest_completed["close"],
+                                    "volume": latest_completed.get("volume", 0),
+                                },
+                            }
+                            # publish completed bar as separate message too
+                            if self._redis is not None:
+                                # fire-and-forget publish to Redis for speed (create_task)
+                                try:
+                                    asyncio.create_task(
+                                        self._redis.publish(
+                                            self.redis_channel,
+                                            json.dumps(msg_completed),
+                                        )
+                                    )
+                                except Exception:
+                                    LOGGER.debug(
+                                        f"[{stock_id}] Failed to schedule async publish of completed bar"
+                                    )
+                            else:
+                                LOGGER.debug(
+                                    f"[{stock_id}] Redis not connected - skipping publish of completed"
+                                )
+                    except Exception:
+                        # protect against unexpected parsing/comparison errors for completed detection
+                        LOGGER.exception(
+                            f"[{stock_id}] Error while detecting/publishing completed bar"
+                        )
+
+                # Publish current update to Redis (non-blocking)
+                if self._redis is not None:
+                    try:
+                        # schedule publish as background task so we don't await network IO here
+                        asyncio.create_task(
+                            self._redis.publish(self.redis_channel, json.dumps(msg))
+                        )
+                    except Exception as e:
+                        LOGGER.debug(f"[{stock_id}] failed to create publish task: {e}")
+            except Exception:
+                LOGGER.exception(
+                    f"[{stock_id}] Failed to build or publish update message"
+                )
 
         except Exception as e:
             LOGGER.error(f"[{stock_id}] Exception in callback: {e!r}")
@@ -210,29 +349,72 @@ class MultiMarketCollector:
     async def periodic_saver(self):
         """
         Save all stock OHLCs to disk periodically, but only for stocks that are currently in market hours.
+        Also save current (in-progress) bars every `current_snapshot_interval` seconds for durability.
         """
+        last_completed_save = datetime.now(timezone.utc)
+        last_current_save = datetime.now(timezone.utc)
         while True:
-            await asyncio.sleep(self.interval_seconds)
+            await asyncio.sleep(0.5)
             now_utc = datetime.now(timezone.utc)
-            for sid, sd in self.stock_data.items():
-                # only save if market is open right now for this stock
-                if not self.is_market_open(sid, now_utc):
-                    LOGGER.debug(f"[{sid}] Market closed now; skipping save.")
-                    continue
-                try:
-                    with sd.lock:
-                        bars = copy.deepcopy(sd.completed_ohlc[sid])
-                    data = []
-                    for b in bars:
-                        bar = b.copy()
-                        bar["start_time"] = bar["start_time"].isoformat()
-                        bar["end_time"] = bar["end_time"].isoformat()
-                        data.append(bar)
-                    data_file = f"ohlc_{sid}.json"
-                    save_json_atomic(data_file, data)
-                    LOGGER.debug(f"[{sid}] Saved {len(data)} bars to {data_file}")
-                except Exception as e:
-                    LOGGER.error(f"[{sid}] Failed to save OHLC: {e}")
+
+            # save current bars periodically if any are dirty
+            if (
+                now_utc - last_current_save
+            ).total_seconds() >= self.current_snapshot_interval:
+                # snapshot dirty current bars
+                dirty = list(self._dirty_current)
+                for sid in dirty:
+                    try:
+                        sd = self.stock_data[sid]
+                        with sd.lock:
+                            curr = sd.current_bars.get(sid)
+                        if not curr:
+                            # nothing to persist
+                            self._dirty_current.discard(sid)
+                            continue
+                        # write snapshot for current bar atomically
+                        snap_file = f"ohlc_current_{sid}.json"
+                        snap = {
+                            "start_time": curr["start_time"].isoformat(),
+                            "end_time": curr["end_time"].isoformat(),
+                            "open": curr["open"],
+                            "high": curr["high"],
+                            "low": curr["low"],
+                            "close": curr["close"],
+                            "volume": curr.get("volume", 0),
+                        }
+                        save_json_atomic(snap_file, snap)
+                        # mark as not dirty (we just persisted)
+                        try:
+                            self._dirty_current.discard(sid)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        LOGGER.error(f"[{sid}] Failed to snapshot current bar: {e}")
+                last_current_save = now_utc
+
+            # save completed bars less frequently (configurable)
+            if (
+                now_utc - last_completed_save
+            ).total_seconds() >= self.completed_save_interval:
+                for sid, sd in self.stock_data.items():
+                    # only save if market is open right now for this stock (or optionally always)
+                    try:
+                        # We choose to save regardless of market open to not lose completed bars.
+                        with sd.lock:
+                            bars = copy.deepcopy(sd.completed_ohlc[sid])
+                        data = []
+                        for b in bars:
+                            bar = b.copy()
+                            bar["start_time"] = bar["start_time"].isoformat()
+                            bar["end_time"] = bar["end_time"].isoformat()
+                            data.append(bar)
+                        data_file = f"ohlc_{sid}.json"
+                        save_json_atomic(data_file, data)
+                        LOGGER.debug(f"[{sid}] Saved {len(data)} bars to {data_file}")
+                    except Exception as e:
+                        LOGGER.error(f"[{sid}] Failed to save OHLC: {e}")
+                last_completed_save = now_utc
 
     def load_all_ohlc_from_disk(self):
         for sid, sd in self.stock_data.items():
@@ -264,6 +446,41 @@ class MultiMarketCollector:
                 LOGGER.info(f"[{sid}] No previous data file {data_file}.")
             except Exception as e:
                 LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
+
+        # attempt to load current bar snapshots (if any) to restore in-progress bars after crash
+        for sid, sd in self.stock_data.items():
+            snap_file = f"ohlc_current_{sid}.json"
+            try:
+                with open(snap_file, "r") as f:
+                    snap = json.load(f)
+                start = datetime.fromisoformat(snap["start_time"])
+                end = datetime.fromisoformat(snap["end_time"])
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                else:
+                    start = start.astimezone(timezone.utc)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+                else:
+                    end = end.astimezone(timezone.utc)
+                curr = {
+                    "start_time": start,
+                    "end_time": end,
+                    "open": snap["open"],
+                    "high": snap["high"],
+                    "low": snap["low"],
+                    "close": snap["close"],
+                    "volume": snap.get("volume", 0),
+                }
+                # restore into current_bars to avoid losing current in-progress bar
+                with sd.lock:
+                    sd.current_bars[sid] = curr
+                LOGGER.info(f"[{sid}] Restored in-progress bar from {snap_file}")
+            except FileNotFoundError:
+                # ignore
+                pass
+            except Exception as e:
+                LOGGER.error(f"[{sid}] Failed to restore current snapshot: {e}")
 
     async def _run_sse_client_loop(self, avanza, stock_id, warrant_id):
         while True:
@@ -345,6 +562,16 @@ class MultiMarketCollector:
         Create one Avanza instance and start an SSE client loop for every stock.
         If Avanza creation fails we retry (so the whole set reconnects together).
         """
+        # create / connect redis client for publishing
+        try:
+            self._redis = aioredis.from_url(self.redis_url)
+            # test connection with PING
+            await self._redis.ping()
+            LOGGER.info("Redis connected for publishing.")
+        except Exception as e:
+            LOGGER.error(f"Failed to connect to Redis at {self.redis_url}: {e}")
+            self._redis = None
+
         while True:
             if self._shutting_down:
                 LOGGER.info("real_market_loop: shutting down flag set — exiting loop.")
@@ -416,6 +643,19 @@ class MultiMarketCollector:
             LOGGER.info(
                 f"[{stock_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
             )
+            # also persist current snapshot for fast recovery
+            if current:
+                snap_file = f"ohlc_current_{stock_id}.json"
+                snap = {
+                    "start_time": current["start_time"].isoformat(),
+                    "end_time": current["end_time"].isoformat(),
+                    "open": current["open"],
+                    "high": current["high"],
+                    "low": current["low"],
+                    "close": current["close"],
+                    "volume": current.get("volume", 0),
+                }
+                save_json_atomic(snap_file, snap)
         except Exception as e:
             LOGGER.error(f"[{stock_id}] Failed force-save: {e}")
 
@@ -509,6 +749,13 @@ class MultiMarketCollector:
             loop.stop()
         except Exception:
             pass
+
+        # close redis
+        if self._redis is not None:
+            try:
+                await self._redis.close()
+            except Exception:
+                pass
 
     def run(self):
         """
@@ -637,5 +884,8 @@ def parse_args():
 if __name__ == "__main__":
     stock_ids, interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
-    collector = MultiMarketCollector(stock_ids, interval_seconds)
+    # Default redis URL and channel; adjust with env vars or CLI wrapper if you want
+    collector = MultiMarketCollector(
+        stock_ids, interval_seconds, redis_url="redis://localhost:6379/0"
+    )
     collector.run()

@@ -13,6 +13,7 @@ setuptools.setup(
         "dash",
         "curl_cffi",
         "TA-Lib",
+        "redis[async]",
     ],
     entry_points={
         "console_scripts": ["run-pacavanza = pacavanza.run_dashboard:main"]
