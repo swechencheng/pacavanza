@@ -1,10 +1,10 @@
-# pacavanza/backend/fastapi_redis_ws.py
 import asyncio
 import json
 import logging
 from typing import Dict, Any, List, AsyncIterator
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 import redis.asyncio as aioredis
 from datetime import datetime
@@ -288,6 +288,9 @@ def create_app(
 
     # create app with lifespan
     app = FastAPI(lifespan=lifespan)
+
+    # MOUNT STATIC FILES - ADD THIS LINE
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools
     @app.get("/.well-known/appspecific/com.chrome.devtools.json")
