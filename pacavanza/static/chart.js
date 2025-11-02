@@ -119,7 +119,18 @@
 
     function isoToLWTime(iso) {
       const d = new Date(iso);
-      return Math.floor(d.getTime() / 1000);
+      // Convert to local time by creating a UTC timestamp that represents the local time
+      return (
+        Date.UTC(
+          d.getFullYear(),
+          d.getMonth(),
+          d.getDate(),
+          d.getHours(),
+          d.getMinutes(),
+          d.getSeconds(),
+          d.getMilliseconds()
+        ) / 1000
+      );
     }
 
     async function fetchHistory(stock) {
@@ -136,7 +147,7 @@
       try {
         const bars = await fetchHistory(stock);
         const barData = bars.map((b) => ({
-          time: isoToLWTime(b.end_time),
+          time: isoToLWTime(b.start_time),
           open: b.open,
           high: b.high,
           low: b.low,
@@ -193,7 +204,7 @@
             if (!b) return;
 
             // time is ISO string -> unix seconds
-            const t = isoToLWTime(b.end_time);
+            const t = isoToLWTime(b.start_time);
             // update candlestick series (update expects a single point or setData for bulk)
             candleSeries.update({
               time: t,
