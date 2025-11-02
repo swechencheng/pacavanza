@@ -14,6 +14,8 @@ setuptools.setup(
         "curl_cffi",
         "TA-Lib",
         "redis[async]",
+        "fastapi",
+        "uvicorn",
     ],
     entry_points={
         "console_scripts": ["run-pacavanza = pacavanza.run_dashboard:main"]

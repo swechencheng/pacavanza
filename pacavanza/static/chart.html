@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>PACavanza Realtime Chart</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: #0b1220;
+        color: #ddd;
+      }
+      #chart {
+        height: 80vh;
+        width: 100%;
+      }
+      #controls {
+        padding: 6px;
+      }
+      .status {
+        margin-left: 12px;
+        color: #ffcc66;
+      }
+      .small {
+        font-size: 12px;
+        color: #888;
+        margin-left: 6px;
+      }
+    </style>
+
+    <!-- exact CDN you requested -->
+    <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div id="controls">
+      <label>Stock: <input id="stock" value="mini-l-sp500-ava-270" /></label>
+      <button id="load">Load history</button>
+      <span id="status" class="status">Disconnected</span>
+      <span id="info" class="small"></span>
+    </div>
+
+    <div id="chart"></div>
+
+    <script>
+      (() => {
+        const log = (...a) => console.log("[chart]", ...a);
+        const warn = (...a) => console.warn("[chart]", ...a);
+        const error = (...a) => console.error("[chart]", ...a);
+        const infoEl = document.getElementById("info");
+        function setInfo(t) {
+          if (infoEl) infoEl.textContent = t;
+        }
+
+        // confirm library loaded
+        if (typeof LightweightCharts === "undefined") {
+          error(
+            "LightweightCharts global not found. Check that the exact CDN script loaded."
+          );
+          document.getElementById("status").textContent =
+            "Chart lib not loaded";
+          setInfo(
+            "Expected LightweightCharts global not found; check Network tab."
+          );
+          return;
+        }
+        setInfo("Loaded lightweight-charts@5.0.9");
+
+        try {
+          // create chart per v5 docs
+          const chart = LightweightCharts.createChart(
+            document.getElementById("chart"),
+            {
+              width: document.getElementById("chart").clientWidth,
+              height: document.getElementById("chart").clientHeight,
+              layout: {
+                textColor: "#d1d4dc",
+                background: { type: "Solid", color: "#0b1220" },
+              },
+              rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 } },
+              timeScale: { timeVisible: true, secondsVisible: false },
+            }
+          );
+
+          // handle resize
+          window.addEventListener("resize", () => {
+            chart.applyOptions({
+              width: document.getElementById("chart").clientWidth,
+              height: document.getElementById("chart").clientHeight,
+            });
+          });
+
+          // ********** v5 series creation (correct API) **********
+          // add series by passing the series class (CandlestickSeries, LineSeries, ...)
+          const candleSeries = chart.addSeries(
+            LightweightCharts.CandlestickSeries
+          );
+          const ema20Series = chart.addSeries(LightweightCharts.LineSeries);
+          const ema50Series = chart.addSeries(LightweightCharts.LineSeries);
+          const ema100Series = chart.addSeries(LightweightCharts.LineSeries);
+          const ema220Series = chart.addSeries(LightweightCharts.LineSeries);
+
+          // create a series-markers plugin instance once (re-use, don't recreate for every tick)
+          let seriesMarkersApi = null;
+          if (typeof LightweightCharts.createSeriesMarkers === "function") {
+            seriesMarkersApi = LightweightCharts.createSeriesMarkers(
+              candleSeries,
+              []
+            );
+          } else if (window.createSeriesMarkers) {
+            // safety fallback if global exposes it differently
+            seriesMarkersApi = window.createSeriesMarkers(candleSeries, []);
+          }
+
+          function isoToLWTime(iso) {
+            const d = new Date(iso);
+            return Math.floor(d.getTime() / 1000);
+          }
+
+          async function fetchHistory(stock) {
+            const res = await fetch(
+              `/history/${encodeURIComponent(stock)}?limit=500`
+            );
+            if (!res.ok) throw new Error("history fetch failed: " + res.status);
+            return await res.json();
+          }
+
+          // load history: convert server ISO times -> lightweight-charts time (unix seconds)
+          document
+            .getElementById("load")
+            .addEventListener("click", async () => {
+              const stock = document.getElementById("stock").value;
+              try {
+                document.getElementById("status").textContent =
+                  "Loading history...";
+                const bars = await fetchHistory(stock);
+                // earth: server returns end_time as ISO; here use end_time as the canonical time
+                const barData = bars.map((b) => ({
+                  time: isoToLWTime(b.end_time),
+                  open: b.open,
+                  high: b.high,
+                  low: b.low,
+                  close: b.close,
+                }));
+                // setData replaces whole dataset (fast for initial load)
+                candleSeries.setData(barData);
+                // for EMA line series we will compute on the backend (fast) and receive updates via WS,
+                // so we don't set historical lines here unless server returns precomputed EMA points.
+                document.getElementById("status").textContent =
+                  "History loaded.";
+                setInfo(`History loaded: ${barData.length} bars`);
+              } catch (errLoad) {
+                error("History load failed:", errLoad);
+                document.getElementById("status").textContent =
+                  "Failed to load history — see console";
+              }
+            });
+
+          // WebSocket for streaming updates
+          function setupWS() {
+            try {
+              const wsUrl = `ws://${window.location.host}/ws`;
+              log("Connecting websocket to", wsUrl);
+              const ws = new WebSocket(wsUrl);
+
+              ws.onopen = () => {
+                log("WS connected");
+                document.getElementById("status").textContent = "WS connected";
+              };
+              ws.onclose = (ev) => {
+                warn("WS closed", ev);
+                document.getElementById("status").textContent =
+                  "WS closed — retrying...";
+                setTimeout(setupWS, 1000);
+              };
+              ws.onerror = (e) => {
+                error("WS error", e);
+              };
+              ws.onmessage = (evt) => {
+                try {
+                  const msg = JSON.parse(evt.data);
+                  if (
+                    !msg ||
+                    (msg.type !== "update" && msg.type !== "completed")
+                  )
+                    return;
+                  const b = msg.bar;
+                  if (!b) return;
+
+                  // time is ISO string -> unix seconds
+                  const t = isoToLWTime(b.end_time);
+                  // update candlestick series (update expects a single point or setData for bulk)
+                  // Candlestick data format: { time, open, high, low, close }
+                  candleSeries.update({
+                    time: t,
+                    open: b.open,
+                    high: b.high,
+                    low: b.low,
+                    close: b.close,
+                  });
+
+                  // EMAs: server sends incremental EMA values in msg.emas keyed by length
+                  if (msg.emas) {
+                    if (msg.emas["20"])
+                      ema20Series.update({
+                        time: isoToLWTime(msg.emas["20"].time),
+                        value: msg.emas["20"].value,
+                      });
+                    if (msg.emas["50"])
+                      ema50Series.update({
+                        time: isoToLWTime(msg.emas["50"].time),
+                        value: msg.emas["50"].value,
+                      });
+                    if (msg.emas["100"])
+                      ema100Series.update({
+                        time: isoToLWTime(msg.emas["100"].time),
+                        value: msg.emas["100"].value,
+                      });
+                    if (msg.emas["220"])
+                      ema220Series.update({
+                        time: isoToLWTime(msg.emas["220"].time),
+                        value: msg.emas["220"].value,
+                      });
+                  }
+
+                  // label — use seriesMarkersApi.setMarkers([...]) (faster than recreating)
+                  if (
+                    msg.label &&
+                    seriesMarkersApi &&
+                    typeof seriesMarkersApi.setMarkers === "function"
+                  ) {
+                    const marker = {
+                      time: t,
+                      position: "belowBar", // 'aboveBar'|'belowBar'|'inBar' etc.
+                      color: "orange",
+                      shape: "square", // check available shapes in docs if you want others
+                      text: String(msg.label.text || ""),
+                    };
+                    seriesMarkersApi.setMarkers([marker]);
+                  }
+                } catch (e) {
+                  error("Failed processing WS message:", e, evt.data);
+                }
+              };
+            } catch (e) {
+              error("Failed to setup WS:", e);
+            }
+          }
+          setupWS();
+        } catch (e) {
+          error("Chart init failed:", e);
+          document.getElementById("status").textContent =
+            "Chart init failed — see console";
+          setInfo(
+            "Chart init error. Confirm the exact library build is the UMD standalone one."
+          );
+        }
+      })();
+    </script>
+  </body>
+</html>

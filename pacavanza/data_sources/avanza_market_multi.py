@@ -42,7 +42,7 @@ class MultiMarketCollector:
         warrant_list_path="./pacavanza/warrant_list.json",
         stock_datas: dict = None,
         redis_url: str = "redis://localhost:6379/0",
-        redis_channel: str = "pacavanza:updates",
+        redis_channel: str = "pacavanza:ticker_updates",
         # how often to persist completed bars to disk (seconds). Default: max(30, interval_seconds)
         completed_save_interval: Optional[float] = None,
         # how often to persist current (in-progress) bars snapshot to disk (seconds).

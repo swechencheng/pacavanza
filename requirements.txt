@@ -7,3 +7,5 @@ dash
 curl_cffi
 TA-Lib
 redis[async]
+fastapi
+uvicorn
