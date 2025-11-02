@@ -108,9 +108,6 @@
               candleSeries,
               []
             );
-          } else if (window.createSeriesMarkers) {
-            // safety fallback if global exposes it differently
-            seriesMarkersApi = window.createSeriesMarkers(candleSeries, []);
           }
 
           function isoToLWTime(iso) {
@@ -126,38 +123,44 @@
             return await res.json();
           }
 
-          // load history: convert server ISO times -> lightweight-charts time (unix seconds)
+          // helper to load history and setData on the candlestick series
+          async function loadHistoryFor(stock) {
+            document.getElementById("status").textContent =
+              "Loading history...";
+            try {
+              const bars = await fetchHistory(stock);
+              const barData = bars.map((b) => ({
+                time: isoToLWTime(b.end_time),
+                open: b.open,
+                high: b.high,
+                low: b.low,
+                close: b.close,
+              }));
+              candleSeries.setData(barData);
+              document.getElementById("status").textContent = "History loaded.";
+              setInfo(`History loaded: ${barData.length} bars`);
+              log("History loaded for", stock, barData.length);
+              return barData.length;
+            } catch (err) {
+              error("History load failed:", err);
+              document.getElementById("status").textContent =
+                "Failed to load history — see console";
+              setInfo("History fetch failed; check /history/<stock> endpoint");
+              throw err;
+            }
+          }
+
+          // Load button still works manually
           document
             .getElementById("load")
             .addEventListener("click", async () => {
               const stock = document.getElementById("stock").value;
-              try {
-                document.getElementById("status").textContent =
-                  "Loading history...";
-                const bars = await fetchHistory(stock);
-                // earth: server returns end_time as ISO; here use end_time as the canonical time
-                const barData = bars.map((b) => ({
-                  time: isoToLWTime(b.end_time),
-                  open: b.open,
-                  high: b.high,
-                  low: b.low,
-                  close: b.close,
-                }));
-                // setData replaces whole dataset (fast for initial load)
-                candleSeries.setData(barData);
-                // for EMA line series we will compute on the backend (fast) and receive updates via WS,
-                // so we don't set historical lines here unless server returns precomputed EMA points.
-                document.getElementById("status").textContent =
-                  "History loaded.";
-                setInfo(`History loaded: ${barData.length} bars`);
-              } catch (errLoad) {
-                error("History load failed:", errLoad);
-                document.getElementById("status").textContent =
-                  "Failed to load history — see console";
-              }
+              await loadHistoryFor(stock).catch(() => {
+                /* already handled above */
+              });
             });
 
-          // WebSocket for streaming updates
+          // WebSocket for streaming updates (updates candlestick points + EMAs + markers)
           function setupWS() {
             try {
               const wsUrl = `ws://${window.location.host}/ws`;
@@ -191,7 +194,6 @@
                   // time is ISO string -> unix seconds
                   const t = isoToLWTime(b.end_time);
                   // update candlestick series (update expects a single point or setData for bulk)
-                  // Candlestick data format: { time, open, high, low, close }
                   candleSeries.update({
                     time: t,
                     open: b.open,
@@ -232,9 +234,9 @@
                   ) {
                     const marker = {
                       time: t,
-                      position: "belowBar", // 'aboveBar'|'belowBar'|'inBar' etc.
+                      position: "belowBar",
                       color: "orange",
-                      shape: "square", // check available shapes in docs if you want others
+                      shape: "square",
                       text: String(msg.label.text || ""),
                     };
                     seriesMarkersApi.setMarkers([marker]);
@@ -247,7 +249,23 @@
               error("Failed to setup WS:", e);
             }
           }
-          setupWS();
+
+          // ------------- AUTO-LOAD on first page open -------------
+          // Immediately load history for the currently selected stock (no button click).
+          // This happens once during initialization.
+          (async () => {
+            const initialStock = document.getElementById("stock").value;
+            try {
+              await loadHistoryFor(initialStock);
+            } catch (e) {
+              // already logged in loadHistoryFor; continue to setup WS regardless so
+              // live ticks can still arrive and update the chart.
+            } finally {
+              // After attempting history load, start the websocket to receive streaming updates.
+              setupWS();
+            }
+          })();
+          // ---------------- end auto-load ----------------
         } catch (e) {
           error("Chart init failed:", e);
           document.getElementById("status").textContent =
