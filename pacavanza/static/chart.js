@@ -51,6 +51,63 @@
     const ema100Series = chart.addSeries(LightweightCharts.LineSeries);
     const ema220Series = chart.addSeries(LightweightCharts.LineSeries);
 
+    // ********** OHLC TOOLTIP FOR CONTROLS LINE **********
+    // Get the tooltip element
+    const toolTip = document.getElementById("chart-tooltip");
+
+    // Subscribe to crosshair movements
+    chart.subscribeCrosshairMove((param) => {
+      // Default tooltip content when not hovering over a data point
+      toolTip.innerHTML = [
+        `<span style="color: #ddd;">O: -</span>`,
+        `<span style="color: #4caf50;">H: -</span>`,
+        `<span style="color: #f44336;">L: -</span>`,
+        `<span style="color: #ddd;">C: -</span>`,
+      ].join(" ");
+
+      // Check if the crosshair is over a data point
+      if (
+        param.point === undefined ||
+        !param.time ||
+        param.point.x < 0 ||
+        param.point.y < 0
+      ) {
+        return;
+      } else {
+        // Get the candlestick data at the hovered time
+        const candleData = param.seriesData.get(candleSeries);
+
+        // Check if data exists
+        if (candleData === undefined) {
+          return;
+        }
+
+        // Extract OHLC values
+        const open = candleData.open;
+        const high = candleData.high;
+        const low = candleData.low;
+        const close = candleData.close;
+
+        // Check if we have valid data to display
+        if (
+          open === undefined ||
+          high === undefined ||
+          low === undefined ||
+          close === undefined
+        ) {
+          return;
+        }
+
+        // Create the tooltip content - SIMPLE TEXT FOR CONTROLS LINE
+        toolTip.innerHTML = [
+          `<span style="color: #ddd;">O: ${open.toFixed(2)}</span>`,
+          `<span style="color: #4caf50;">H: ${high.toFixed(2)}</span>`,
+          `<span style="color: #f44336;">L: ${low.toFixed(2)}</span>`,
+          `<span style="color: #ddd;">C: ${close.toFixed(2)}</span>`,
+        ].join(" ");
+      }
+    });
+
     // create a series-markers plugin instance once (re-use, don't recreate for every tick)
     let seriesMarkersApi = null;
     if (typeof LightweightCharts.createSeriesMarkers === "function") {
@@ -207,6 +264,13 @@
       } finally {
         // After attempting history load, start the websocket to receive streaming updates.
         setupWS();
+        // Also, reset tooltip to default state
+        toolTip.innerHTML = [
+          `<span style="color: #ddd;">O: -</span>`,
+          `<span style="color: #4caf50;">H: -</span>`,
+          `<span style="color: #f44336;">L: -</span>`,
+          `<span style="color: #ddd;">C: -</span>`,
+        ].join(" ");
       }
     })();
     // ---------------- end auto-load ----------------

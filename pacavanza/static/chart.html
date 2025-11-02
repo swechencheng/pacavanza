@@ -28,6 +28,15 @@
         color: #888;
         margin-left: 6px;
       }
+      /* ADD TOOLTIP STYLING FOR CONTROLS LINE */
+      #chart-tooltip {
+        margin-left: 12px;
+        padding: 4px 8px;
+        background: #1a243d;
+        border-radius: 4px;
+        font-size: 12px;
+        font-family: monospace;
+      }
     </style>
 
     <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
@@ -38,6 +47,7 @@
       <button id="load">Load history</button>
       <span id="status" class="status">Disconnected</span>
       <span id="info" class="small"></span>
+      <span id="chart-tooltip"></span>
     </div>
 
     <div id="chart"></div>
