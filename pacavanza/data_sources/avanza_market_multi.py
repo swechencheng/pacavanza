@@ -43,7 +43,7 @@ class MultiMarketCollector:
         stock_datas: dict = None,
         redis_url: str = "redis://localhost:6379/0",
         redis_channel: str = "pacavanza:updates",
-        # how often to persist completed bars to disk (seconds). Default: max(5, interval_seconds)
+        # how often to persist completed bars to disk (seconds). Default: max(30, interval_seconds)
         completed_save_interval: Optional[float] = None,
         # how often to persist current (in-progress) bars snapshot to disk (seconds).
         current_snapshot_interval: float = 3.0,
@@ -100,7 +100,7 @@ class MultiMarketCollector:
         self.completed_save_interval = (
             completed_save_interval
             if completed_save_interval is not None
-            else max(5.0, float(self.interval_seconds))
+            else max(30.0, float(self.interval_seconds))
         )
 
         # bookkeeping to limit snapshot IO
