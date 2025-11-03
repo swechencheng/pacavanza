@@ -120,15 +120,6 @@
       }
     });
 
-    // create a series-markers plugin instance once (re-use, don't recreate for every tick)
-    let seriesMarkersApi = null;
-    if (typeof LightweightCharts.createSeriesMarkers === "function") {
-      seriesMarkersApi = LightweightCharts.createSeriesMarkers(
-        candleSeries,
-        []
-      );
-    }
-
     // Track current data to avoid duplicates and handle updates properly
     let currentData = new Map(); // time -> candle data
     let lastBarTime = null;
@@ -232,14 +223,6 @@
       lastEMATime = null;
       candleSeries.setData([]);
       ema20Series.setData([]); // Only clear EMA20 series
-
-      // Clear markers
-      if (
-        seriesMarkersApi &&
-        typeof seriesMarkersApi.setMarkers === "function"
-      ) {
-        seriesMarkersApi.setMarkers([]);
-      }
     }
 
     // helper to load history and setData on the candlestick series
@@ -335,7 +318,7 @@
       });
     });
 
-    // WebSocket for streaming updates (updates candlestick points + EMAs + markers)
+    // WebSocket for streaming updates (updates candlestick points + EMAs)
     function setupWS() {
       try {
         const wsUrl = `ws://${window.location.host}/ws`;
@@ -555,33 +538,6 @@
                     }
                   }
                 }
-              }
-            }
-
-            // Update label markers
-            if (
-              msg.label &&
-              seriesMarkersApi &&
-              typeof seriesMarkersApi.setMarkers === "function"
-            ) {
-              const markerTime = isoToLWTime(msg.label.time);
-              const marker = {
-                time: markerTime,
-                position: "belowBar",
-                color: "orange",
-                shape: "square",
-                text: String(msg.label.text || ""),
-              };
-              try {
-                // Keep existing markers and add new one
-                const currentMarkers = seriesMarkersApi.getMarkers() || [];
-                const newMarkers = [
-                  ...currentMarkers.filter((m) => m.time !== markerTime),
-                  marker,
-                ];
-                seriesMarkersApi.setMarkers(newMarkers);
-              } catch (e) {
-                log(`Failed to set marker: ${e.message}`);
               }
             }
           } catch (e) {
