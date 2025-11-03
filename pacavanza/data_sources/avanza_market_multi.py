@@ -1,4 +1,3 @@
-# pacavanza/data_sources/avanza_market_multi_redis.py
 import asyncio
 import json
 import copy
@@ -19,8 +18,9 @@ from ..modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 from ..modules.stock_data import StockData, INTERVAL_MAP
 from ..utils.utils import save_json_atomic
 
-LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("avanza_market_multi").setLevel(logging.INFO)
+LOGGER = logging.getLogger("avanza_market_multi")
 
 
 class MultiMarketCollector:
@@ -243,51 +243,71 @@ class MultiMarketCollector:
             try:
                 # fetch current bar & last completed bar for the stock in a thread-safe manner
                 with self.stock_data[stock_id].lock:
-                    curr = self.stock_data[stock_id].current_bars.get(stock_id)
+                    curr = copy.deepcopy(
+                        self.stock_data[stock_id].current_bars.get(stock_id)
+                    )
                     latest_completed = (
-                        self.stock_data[stock_id].completed_ohlc[stock_id][-1]
-                        if self.stock_data[stock_id].completed_ohlc.get(stock_id)
+                        copy.deepcopy(
+                            self.stock_data[stock_id].completed_ohlc[stock_id][-1]
+                        )
+                        if (
+                            self.stock_data[stock_id].completed_ohlc.get(stock_id)
+                            and len(self.stock_data[stock_id].completed_ohlc[stock_id])
+                            > 0
+                        )
                         else None
                     )
 
                 # prefer to send only the current bar (update) and indicate if it is a new completed bar
-                msg = {
-                    "type": "update",
-                    "stock": stock_id,
-                    "bar": None,
-                    "completed": False,
-                    "meta": {
-                        "timezone": self.warrant_list[stock_id].get("timezone", "UTC"),
-                        "market_open": self.warrant_list[stock_id].get(
-                            "market_open", "00:00"
-                        ),
-                        "market_close": self.warrant_list[stock_id].get(
-                            "market_close", "23:59"
-                        ),
-                    },
-                }
                 if curr:
-                    msg["bar"] = {
-                        "start_time": curr["start_time"].isoformat(),
-                        "end_time": curr["end_time"].isoformat(),
-                        "open": curr["open"],
-                        "high": curr["high"],
-                        "low": curr["low"],
-                        "close": curr["close"],
-                        "volume": curr.get("volume", 0),
+                    msg = {
+                        "type": "update",
+                        "stock": stock_id,
+                        "bar": {
+                            "start_time": curr["start_time"].isoformat(),
+                            "end_time": curr["end_time"].isoformat(),
+                            "open": curr["open"],
+                            "high": curr["high"],
+                            "low": curr["low"],
+                            "close": curr["close"],
+                            "volume": curr.get("volume", 0),
+                        },
+                        "completed": False,
+                        "meta": {
+                            "timezone": self.warrant_list[stock_id].get(
+                                "timezone", "UTC"
+                            ),
+                            "market_open": self.warrant_list[stock_id].get(
+                                "market_open", "00:00"
+                            ),
+                            "market_close": self.warrant_list[stock_id].get(
+                                "market_close", "23:59"
+                            ),
+                        },
                     }
 
-                # detect if a new completed bar was created: if latest_completed exists and its end_time <= curr.start_time
-                # Note: this depends on your StockData implementation; adapt if necessary.
+                    # Publish to Redis with error handling
+                    if self._redis is not None:
+                        try:
+                            # Use await instead of create_task to ensure message is sent
+                            await self._redis.publish(
+                                self.redis_channel, json.dumps(msg)
+                            )
+                            LOGGER.debug(f"[{stock_id}] Published update to Redis")
+                        except Exception as e:
+                            LOGGER.error(
+                                f"[{stock_id}] Failed to publish to Redis: {e}"
+                            )
+                    else:
+                        LOGGER.warning(
+                            f"[{stock_id}] Redis not connected - skipping publish"
+                        )
+
+                # Publish completed bar if detected
                 if latest_completed and curr:
                     try:
-                        curr_start = datetime.fromisoformat(msg["bar"]["start_time"])
-                        # make sure curr_start is timezone-aware in UTC for correct comparison
-                        if curr_start.tzinfo is None:
-                            curr_start = curr_start.replace(tzinfo=timezone.utc)
-                        # Compare latest_completed['end_time'] (already timezone-aware) to curr_start
-                        if latest_completed["end_time"] <= curr_start:
-                            # include the last completed bar fully
+                        # Compare latest_completed['end_time'] to current bar's start_time
+                        if latest_completed["end_time"] <= curr["start_time"]:
                             msg_completed = {
                                 "type": "completed",
                                 "stock": stock_id,
@@ -305,46 +325,30 @@ class MultiMarketCollector:
                                     "volume": latest_completed.get("volume", 0),
                                 },
                             }
-                            # publish completed bar as separate message too
                             if self._redis is not None:
-                                # fire-and-forget publish to Redis for speed (create_task)
                                 try:
-                                    asyncio.create_task(
-                                        self._redis.publish(
-                                            self.redis_channel,
-                                            json.dumps(msg_completed),
-                                        )
+                                    await self._redis.publish(
+                                        self.redis_channel, json.dumps(msg_completed)
                                     )
-                                except Exception:
                                     LOGGER.debug(
-                                        f"[{stock_id}] Failed to schedule async publish of completed bar"
+                                        f"[{stock_id}] Published completed bar to Redis"
                                     )
-                            else:
-                                LOGGER.debug(
-                                    f"[{stock_id}] Redis not connected - skipping publish of completed"
-                                )
-                    except Exception:
-                        # protect against unexpected parsing/comparison errors for completed detection
+                                except Exception as e:
+                                    LOGGER.error(
+                                        f"[{stock_id}] Failed to publish completed bar to Redis: {e}"
+                                    )
+                    except Exception as e:
                         LOGGER.exception(
-                            f"[{stock_id}] Error while detecting/publishing completed bar"
+                            f"[{stock_id}] Error detecting/publishing completed bar: {e}"
                         )
 
-                # Publish current update to Redis (non-blocking)
-                if self._redis is not None:
-                    try:
-                        # schedule publish as background task so we don't await network IO here
-                        asyncio.create_task(
-                            self._redis.publish(self.redis_channel, json.dumps(msg))
-                        )
-                    except Exception as e:
-                        LOGGER.debug(f"[{stock_id}] failed to create publish task: {e}")
-            except Exception:
+            except Exception as e:
                 LOGGER.exception(
-                    f"[{stock_id}] Failed to build or publish update message"
+                    f"[{stock_id}] Failed to build or publish update message: {e}"
                 )
 
         except Exception as e:
-            LOGGER.error(f"[{stock_id}] Exception in callback: {e!r}")
+            LOGGER.exception(f"[{stock_id}] Exception in callback: {e}")
 
     async def periodic_saver(self):
         """
@@ -753,7 +757,7 @@ class MultiMarketCollector:
         # close redis
         if self._redis is not None:
             try:
-                await self._redis.close()
+                await self._redis.aclose()
             except Exception:
                 pass
 

@@ -4,8 +4,8 @@ import logging
 from avanza import Avanza
 from curl_cffi.requests import AsyncSession
 
-LOGGER = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.getLogger("avanza_sse_client").setLevel(logging.INFO)
+LOGGER = logging.getLogger("avanza_sse_client")
 
 
 class AvanzaSSEClient:

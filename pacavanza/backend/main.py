@@ -22,8 +22,9 @@ from ..indicators.indicators import (
     generate_bar_group_label_incremental,
 )
 
-LOGGER = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("main").setLevel(logging.INFO)
+LOGGER = logging.getLogger("main")
 
 
 class WebSocketManager:
@@ -87,41 +88,64 @@ def create_app(
     # Background task: subscribe to redis channel and forward events
     async def _redis_subscriber_task():
         LOGGER.info("Starting Redis subscriber task")
-        pubsub = redis_client.pubsub()
-        await pubsub.subscribe(redis_channel)
         try:
-            while True:
-                # get_message is non-blocking with optional timeout param; we will poll
-                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
-                if msg:
-                    data = msg.get("data")
+            pubsub = redis_client.pubsub()
+            await pubsub.subscribe(redis_channel)
+            LOGGER.info(f"Subscribed to Redis channel: {redis_channel}")
+
+            # Test message to verify Redis is working
+            test_msg = {"type": "test", "message": "Redis connection established"}
+            await redis_client.publish(redis_channel, json.dumps(test_msg))
+
+            async for msg in pubsub.listen():
+                if msg and msg["type"] == "message":
+                    data = msg["data"]
+                    LOGGER.debug(f"Redis subscriber received raw message: {data}")
+
                     if isinstance(data, (bytes, bytearray)):
                         try:
-                            payload = json.loads(data.decode())
-                        except Exception:
-                            LOGGER.exception("Invalid JSON from redis")
+                            payload = json.loads(data.decode("utf-8"))
+                            LOGGER.debug(f"Decoded Redis message: {payload}")
+                        except Exception as e:
+                            LOGGER.error(
+                                f"Invalid JSON from redis (bytes): {e}, data: {data}"
+                            )
                             continue
                     elif isinstance(data, str):
                         try:
                             payload = json.loads(data)
-                        except Exception:
-                            LOGGER.exception("Invalid JSON from redis (str)")
+                            LOGGER.debug(f"Decoded Redis message: {payload}")
+                        except Exception as e:
+                            LOGGER.error(
+                                f"Invalid JSON from redis (str): {e}, data: {data}"
+                            )
                             continue
                     else:
+                        LOGGER.warning(f"Unexpected message type: {type(data)}")
                         continue
 
-                    # handle payload types
+                    # Handle test message
+                    if payload.get("type") == "test":
+                        LOGGER.info(
+                            f"Redis test message received: {payload.get('message')}"
+                        )
+                        continue
+
                     try:
                         await _handle_redis_payload(payload)
-                    except Exception:
-                        LOGGER.exception("Error handling redis payload")
-                await asyncio.sleep(0.01)
+                    except Exception as e:
+                        LOGGER.exception(f"Error handling redis payload: {e}")
+
         except asyncio.CancelledError:
             LOGGER.info("Redis subscriber task cancelled")
-            # fall through to finally to close resources
             raise
+        except Exception as e:
+            LOGGER.exception(f"Redis subscriber error: {e}")
+            # Try to reconnect after delay
+            await asyncio.sleep(5)
+            # Restart the subscriber task
+            asyncio.create_task(_redis_subscriber_task())
         finally:
-            # use aclose() (async close) to avoid DeprecationWarning
             try:
                 await pubsub.unsubscribe(redis_channel)
             except Exception:
@@ -136,6 +160,7 @@ def create_app(
         Process messages from Redis, keep in-memory state for EMA/labels and
         broadcast enriched messages to websocket clients.
         """
+        LOGGER.debug("Handling redis payload: %s", payload)
         mtype = payload.get("type")
         sid = payload.get("stock")
         if not sid:

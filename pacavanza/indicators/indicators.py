@@ -1,4 +1,3 @@
-# pacavanza/indicators.py
 from typing import List, Dict, Any, Optional
 import pandas as pd
 from datetime import timedelta
