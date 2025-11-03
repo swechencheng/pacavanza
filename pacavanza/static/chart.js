@@ -57,20 +57,9 @@
       wickUpColor: "#4caf50",
     });
 
+    // ********** ONLY EMA20 REMAINS - OTHER EMAS REMOVED **********
     const ema20Series = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#FF6B6B",
-      lineWidth: 1,
-    });
-    const ema50Series = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#4ECDC4",
-      lineWidth: 1,
-    });
-    const ema100Series = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#45B7D1",
-      lineWidth: 1,
-    });
-    const ema220Series = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#FFA07A",
+      color: "#6bebffff",
       lineWidth: 1,
     });
 
@@ -144,6 +133,7 @@
     let currentData = new Map(); // time -> candle data
     let lastBarTime = null;
     let currentStock = null; // Track the currently displayed stock
+    let ema20Data = new Map(); // time -> ema20 value for incremental updates
 
     function isoToLWTime(iso) {
       const d = new Date(iso);
@@ -161,6 +151,50 @@
       );
     }
 
+    // ********** EMA20 CALCULATION FUNCTIONS **********
+    function calculateHistoricalEMA20(bars) {
+      if (bars.length < 20) return [];
+
+      const emaValues = [];
+      const multiplier = 2 / (20 + 1);
+
+      // Calculate SMA for first 20 periods
+      let sum = 0;
+      for (let i = 0; i < 20; i++) {
+        sum += bars[i].close;
+      }
+      let ema = sum / 20;
+      emaValues.push({ time: bars[19].time, value: ema });
+
+      // Calculate EMA for remaining periods
+      for (let i = 20; i < bars.length; i++) {
+        ema = (bars[i].close - ema) * multiplier + ema;
+        emaValues.push({ time: bars[i].time, value: ema });
+      }
+
+      return emaValues;
+    }
+
+    function updateEMA20Incremental(newClose, newTime) {
+      if (ema20Data.size === 0) {
+        // If no EMA data yet, initialize with current close
+        ema20Data.set(newTime, newClose);
+        ema20Series.update({ time: newTime, value: newClose });
+        return;
+      }
+
+      // Get the last EMA20 value
+      const lastEmaTimes = Array.from(ema20Data.keys()).sort((a, b) => b - a);
+      const lastTime = lastEmaTimes[0];
+      const lastEMA = ema20Data.get(lastTime);
+
+      const multiplier = 2 / (20 + 1);
+      const newEMA = (newClose - lastEMA) * multiplier + lastEMA;
+
+      ema20Data.set(newTime, newEMA);
+      ema20Series.update({ time: newTime, value: newEMA });
+    }
+
     async function fetchHistory(stock) {
       const res = await fetch(
         `/history/${encodeURIComponent(stock)}?limit=500`
@@ -173,11 +207,9 @@
     function clearChartData() {
       currentData.clear();
       lastBarTime = null;
+      ema20Data.clear(); // Clear EMA20 data when switching stocks
       candleSeries.setData([]);
-      ema20Series.setData([]);
-      ema50Series.setData([]);
-      ema100Series.setData([]);
-      ema220Series.setData([]);
+      ema20Series.setData([]); // Only clear EMA20 series
 
       // Clear markers
       if (
@@ -224,6 +256,7 @@
 
         // Clear current data and repopulate
         currentData.clear();
+        ema20Data.clear(); // Clear EMA20 data for new stock
         barData.forEach((bar) => {
           currentData.set(bar.time, bar);
         });
@@ -236,9 +269,19 @@
         if (sortedData.length > 0) {
           candleSeries.setData(sortedData);
           lastBarTime = sortedData[sortedData.length - 1].time;
-          log(
-            `Initial lastBarTime set to: ${lastBarTime}`
-          );
+          log(`Initial lastBarTime set to: ${lastBarTime}`);
+
+          // ********** CALCULATE HISTORICAL EMA20 **********
+          if (sortedData.length >= 20) {
+            const historicalEMA20 = calculateHistoricalEMA20(sortedData);
+            historicalEMA20.forEach((ema) => {
+              ema20Data.set(ema.time, ema.value);
+            });
+            ema20Series.setData(historicalEMA20);
+            log(
+              `Calculated EMA20 for ${historicalEMA20.length} historical bars`
+            );
+          }
         }
 
         document.getElementById("status").textContent = "History loaded.";
@@ -333,20 +376,20 @@
                 currentData.set(t, candleData);
                 try {
                   candleSeries.update(candleData);
+
+                  // ********** INCREMENTAL EMA20 UPDATE FOR REAL-TIME DATA **********
+                  updateEMA20Incremental(close, t);
+
                   if (t > lastBarTime) {
                     lastBarTime = t;
-                    log(
-                      `Updated lastBarTime to: ${lastBarTime}`
-                    );
+                    log(`Updated lastBarTime to: ${lastBarTime}`);
                   }
                 } catch (e) {
                   if (
                     e.message &&
                     e.message.includes("Cannot update oldest data")
                   ) {
-                    log(
-                      `Skipping update for historical bar at ${t}`
-                    );
+                    log(`Skipping update for historical bar at ${t}`);
                   } else {
                     throw e;
                   }
@@ -363,6 +406,10 @@
                 currentData.set(t, candleData);
                 try {
                   candleSeries.update(candleData);
+
+                  // ********** INCREMENTAL EMA20 UPDATE FOR COMPLETED BARS **********
+                  updateEMA20Incremental(close, t);
+
                   if (t > lastBarTime) {
                     lastBarTime = t;
                     log(
@@ -388,6 +435,17 @@
                       (a, b) => a.time - b.time
                     );
                     candleSeries.setData(sortedData);
+
+                    // ********** RECALCULATE EMA20 WHEN REPLACING HISTORICAL DATA **********
+                    if (sortedData.length >= 20) {
+                      const historicalEMA20 =
+                        calculateHistoricalEMA20(sortedData);
+                      ema20Data.clear();
+                      historicalEMA20.forEach((ema) => {
+                        ema20Data.set(ema.time, ema.value);
+                      });
+                      ema20Series.setData(historicalEMA20);
+                    }
                   } else {
                     throw e;
                   }
@@ -402,8 +460,9 @@
             // Update EMAs with proper validation
             // EMAs: server sends incremental EMA values in msg.emas keyed by length
             if (msg.emas) {
-              Object.keys(msg.emas).forEach((emaLength) => {
-                const emaData = msg.emas[emaLength];
+              // ********** ONLY UPDATE EMA20 FROM BACKEND (AS BACKUP) **********
+              if (msg.emas["20"]) {
+                const emaData = msg.emas["20"];
                 if (emaData && emaData.value !== undefined && emaData.time) {
                   const emaTime = isoToLWTime(emaData.time);
                   const emaValue = parseFloat(emaData.value);
@@ -412,28 +471,16 @@
                     const emaPoint = { time: emaTime, value: emaValue };
 
                     try {
-                      // Update the appropriate EMA series
-                      switch (emaLength) {
-                        case "20":
-                          ema20Series.update(emaPoint);
-                          break;
-                        case "50":
-                          ema50Series.update(emaPoint);
-                          break;
-                        case "100":
-                          ema100Series.update(emaPoint);
-                          break;
-                        case "220":
-                          ema220Series.update(emaPoint);
-                          break;
-                      }
+                      // Use backend EMA20 value if available (as backup)
+                      ema20Data.set(emaTime, emaValue);
+                      ema20Series.update(emaPoint);
                     } catch (e) {
                       if (
                         e.message &&
                         e.message.includes("Cannot update oldest data")
                       ) {
                         log(
-                          `Skipping EMA update for historical time ${emaTime}`
+                          `Skipping EMA20 update for historical time ${emaTime}`
                         );
                       } else {
                         throw e;
@@ -441,7 +488,7 @@
                     }
                   }
                 }
-              });
+              }
             }
 
             // Update label markers
