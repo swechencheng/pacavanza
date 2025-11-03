@@ -215,7 +215,7 @@ def create_app(
                 )
                 if new is not None:
                     ema_state[sid][L] = new
-                    emas[str(L)] = {"time": bar["end_time"], "value": new}
+                    emas[str(L)] = {"time": bar["start_time"], "value": new}
 
             # compute label incrementally (bar grouping) using helper that tracks state
             label = generate_bar_group_label_incremental(
@@ -266,7 +266,7 @@ def create_app(
                 )
                 if new is not None:
                     ema_state[sid][L] = new
-                    emas[str(L)] = {"time": bar["end_time"], "value": new}
+                    emas[str(L)] = {"time": bar["start_time"], "value": new}
 
             label = generate_bar_group_label_incremental(
                 sid,

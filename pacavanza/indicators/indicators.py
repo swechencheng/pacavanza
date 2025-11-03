@@ -38,32 +38,31 @@ def incremental_ema_update(
     historical_buffer: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[float]:
     """
-    Efficient incremental EMA update:
-    - prev_value: previous EMA value (None if not initialized)
-    - close: new close price (float)
-    - length: EMA length (e.g. 20)
-    - historical_buffer: if prev_value is None and we need to initialize, pass recent bars (list of dict) to compute initial SMA
-    Returns new EMA value (float) or None if not enough data to initialize.
+    Returns the EMA after incorporating `close`. If prev_value is None,
+    will compute EMA over historical_buffer + [close] using pandas ewm to
+    reproduce compute_emas_from_bars(..., adjust=False).
+    Returns None if no valid closes available to compute.
     """
     alpha = 2.0 / (length + 1)
+
     if prev_value is None:
-        # need to initialize — if we have enough history in buffer, compute SMA of first 'length' closes
-        if historical_buffer is None:
-            # no buffer available; treat first value as EMA to avoid blocking (less accurate)
-            return close
-        # if buffer has at least 1 item we can compute a starting EMA as SMA of up to 'length' last closes
+        # Need to initialize from history. If no history - return None (not safe to guess).
+        if not historical_buffer:
+            return None
+
+        # Build closes list from historical_buffer, preserving order (old -> new)
         closes = [float(b["close"]) for b in historical_buffer if "close" in b]
         if not closes:
-            return close
-        # use SMA of up to length last closes
-        window = closes[-length:] if len(closes) >= 1 else closes
-        sma = sum(window) / len(window)
-        # apply one-step EMA update with new close based on SMA as previous EMA
-        ema = (close - sma) * alpha + sma
-        return ema
-    else:
-        ema = (close - prev_value) * alpha + prev_value
-        return ema
+            return None
+
+        # Append the new close and compute ewm exactly as compute_emas_from_bars uses pandas
+        s = pd.Series(closes + [float(close)])
+        ema = s.ewm(span=length, adjust=False).mean().iloc[-1]
+        return float(ema)
+
+    # Standard incremental formula when prev_value is available
+    ema = (float(close) - float(prev_value)) * alpha + float(prev_value)
+    return float(ema)
 
 
 def generate_bar_group_label_incremental(

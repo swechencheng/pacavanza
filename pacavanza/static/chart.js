@@ -135,20 +135,14 @@
     let currentStock = null; // Track the currently displayed stock
     let ema20Data = new Map(); // time -> ema20 value for incremental updates
 
+    // keep a quick cache of the latest EMA and its time to avoid sorting each tick
+    let lastEMAValue = null;
+    let lastEMATime = null;
+
     function isoToLWTime(iso) {
-      const d = new Date(iso);
-      // Convert to local time by creating a UTC timestamp that represents the local time
-      return (
-        Date.UTC(
-          d.getFullYear(),
-          d.getMonth(),
-          d.getDate(),
-          d.getHours(),
-          d.getMinutes(),
-          d.getSeconds(),
-          d.getMilliseconds()
-        ) / 1000
-      );
+      const ms = Date.parse(iso);
+      // Convert to unix seconds (floor to avoid fractional seconds differences)
+      return Math.floor(ms / 1000);
     }
 
     // ********** EMA20 CALCULATION FUNCTIONS **********
@@ -176,22 +170,48 @@
     }
 
     function updateEMA20Incremental(newClose, newTime) {
+      // If we don't have any historical EMA base, we should not try to invent one.
+      // The EMA requires a prior EMA (usually from historical calculation).
       if (ema20Data.size === 0) {
-        // If no EMA data yet, initialize with current close
-        ema20Data.set(newTime, newClose);
-        ema20Series.update({ time: newTime, value: newClose });
+        // No historical EMA to base from — skip incremental EMA until we have history.
         return;
       }
 
-      // Get the last EMA20 value
-      const lastEmaTimes = Array.from(ema20Data.keys()).sort((a, b) => b - a);
-      const lastTime = lastEmaTimes[0];
-      const lastEMA = ema20Data.get(lastTime);
-
       const multiplier = 2 / (20 + 1);
-      const newEMA = (newClose - lastEMA) * multiplier + lastEMA;
+
+      // Find the most recent EMA time strictly less than newTime (previous bar)
+      // Note: we intentionally require strictly less-than so we use the EMA of the previous bar.
+      const keys = Array.from(ema20Data.keys()).sort((a, b) => a - b);
+      let prevEMA = null;
+      for (let i = keys.length - 1; i >= 0; i--) {
+        if (keys[i] < newTime) {
+          prevEMA = ema20Data.get(keys[i]);
+          break;
+        }
+      }
+
+      // If we failed to find a strictly-less key, try safe fallback:
+      // use lastEMAValue only if it exists and its time is strictly less than newTime.
+      if (prevEMA === null) {
+        if (
+          lastEMAValue !== null &&
+          lastEMATime !== null &&
+          lastEMATime < newTime
+        ) {
+          prevEMA = lastEMAValue;
+        } else {
+          // Cannot compute an incremental EMA safely (no proper prior EMA) — skip.
+          return;
+        }
+      }
+
+      const newEMA = (newClose - prevEMA) * multiplier + prevEMA;
 
       ema20Data.set(newTime, newEMA);
+      // Update cached last EMA/time
+      lastEMAValue = newEMA;
+      lastEMATime = newTime;
+
       ema20Series.update({ time: newTime, value: newEMA });
     }
 
@@ -208,6 +228,8 @@
       currentData.clear();
       lastBarTime = null;
       ema20Data.clear(); // Clear EMA20 data when switching stocks
+      lastEMAValue = null;
+      lastEMATime = null;
       candleSeries.setData([]);
       ema20Series.setData([]); // Only clear EMA20 series
 
@@ -278,6 +300,14 @@
               ema20Data.set(ema.time, ema.value);
             });
             ema20Series.setData(historicalEMA20);
+
+            // cache last EMA/time for incremental updates (avoid sorting each tick)
+            const lastEmaPoint = historicalEMA20[historicalEMA20.length - 1];
+            if (lastEmaPoint) {
+              lastEMAValue = lastEmaPoint.value;
+              lastEMATime = lastEmaPoint.time;
+            }
+
             log(
               `Calculated EMA20 for ${historicalEMA20.length} historical bars`
             );
@@ -445,6 +475,14 @@
                         ema20Data.set(ema.time, ema.value);
                       });
                       ema20Series.setData(historicalEMA20);
+
+                      // update cached last EMA/time after recalculation
+                      const lastEmaPoint =
+                        historicalEMA20[historicalEMA20.length - 1];
+                      if (lastEmaPoint) {
+                        lastEMAValue = lastEmaPoint.value;
+                        lastEMATime = lastEmaPoint.time;
+                      }
                     }
                   } else {
                     throw e;
@@ -471,9 +509,38 @@
                     const emaPoint = { time: emaTime, value: emaValue };
 
                     try {
-                      // Use backend EMA20 value if available (as backup)
-                      ema20Data.set(emaTime, emaValue);
-                      ema20Series.update(emaPoint);
+                      // If we have no local EMA history, accept backend EMA (bootstrap).
+                      if (ema20Data.size === 0) {
+                        ema20Data.set(emaTime, emaValue);
+                        lastEMAValue = emaValue;
+                        lastEMATime = emaTime;
+                        ema20Series.update(emaPoint);
+                      } else {
+                        // Otherwise, be conservative: only accept backend EMA if it's strictly newer
+                        // and not wildly different from our local cached EMA to avoid sudden jumps.
+                        if (lastEMATime === null || emaTime > lastEMATime) {
+                          const localCompare = lastEMAValue || emaValue;
+                          const diff = Math.abs(emaValue - localCompare);
+                          // 5% tolerance threshold — adjust if necessary
+                          if (diff / (Math.abs(localCompare) || 1) < 0.05) {
+                            ema20Data.set(emaTime, emaValue);
+                            lastEMAValue = emaValue;
+                            lastEMATime = emaTime;
+                            ema20Series.update(emaPoint);
+                          } else {
+                            log(
+                              `Ignoring backend EMA (time ${emaTime}) due to large deviation (${(
+                                diff / (Math.abs(localCompare) || 1)
+                              ).toFixed(3)}) from local EMA`
+                            );
+                          }
+                        } else {
+                          // ignore equal/older backend EMA to avoid overwriting historical/local EMA
+                          log(
+                            `Ignoring backend EMA for time ${emaTime} (not newer than lastEMATime ${lastEMATime})`
+                          );
+                        }
+                      }
                     } catch (e) {
                       if (
                         e.message &&
