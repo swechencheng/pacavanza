@@ -3,11 +3,17 @@
 <plist version="1.0">
     <dict>
         <key>Label</key>
-        <string>com.pacavanza.dashboard</string>
+        <string>com.pacavanza.marketdaemon</string>
 
         <key>ProgramArguments</key>
         <array>
-            <string>/path/to/pacavanza/venv/bin/run-pacavanza</string>
+            <string>/path/to/pacavanza/venv/bin/python</string>
+            <string>-m</string>
+            <string>pacavanza.avanza_market_daemon</string>
+            <string>mini-l-omx-ava-468</string>
+            <string>mini-s-omx-ava-1575</string>
+            <string>mini-l-sp500-ava-270</string>
+            <string>mini-s-sp500-ava-330</string>
         </array>
 
         <key>RunAtLoad</key>
@@ -28,8 +34,8 @@
         </dict>
 
         <key>StandardOutPath</key>
-        <string>/tmp/pacavanza.stdout.log</string>
+        <string>/tmp/pacavanza.market.stdout.log</string>
         <key>StandardErrorPath</key>
-        <string>/tmp/pacavanza.stderr.log</string>
+        <string>/tmp/pacavanza.market.stderr.log</string>
     </dict>
 </plist>

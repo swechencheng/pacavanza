@@ -8,16 +8,13 @@ setuptools.setup(
         "pandas",
         "numpy",
         "avanza-api",
-        "flask",
-        "plotly",
-        "dash",
         "curl_cffi",
         "TA-Lib",
-        "redis[async]",
+        "redis",
         "fastapi",
         "uvicorn",
     ],
     entry_points={
-        "console_scripts": ["run-pacavanza = pacavanza.run_dashboard:main"]
+        "console_scripts": ["run-pacavanza = pacavanza.backend:main"]
     },
 )

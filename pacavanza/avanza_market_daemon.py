@@ -14,13 +14,13 @@ from typing import Optional
 import redis.asyncio as aioredis
 
 from avanza import Avanza
-from ..modules.avanza_sse_client import AvanzaSSEClient as SSEClient
-from ..modules.stock_data import StockData, INTERVAL_MAP
-from ..utils.utils import save_json_atomic
+from .modules.avanza_sse_client import AvanzaSSEClient as SSEClient
+from .modules.stock_data import StockData, INTERVAL_MAP
+from .utils.utils import save_json_atomic
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("avanza_market_multi").setLevel(logging.INFO)
-LOGGER = logging.getLogger("avanza_market_multi")
+logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
+LOGGER = logging.getLogger("avanza_market_daemon")
 
 
 class MultiMarketCollector:
@@ -855,12 +855,12 @@ class MultiMarketCollector:
 def parse_args():
     """
     Usage:
-      python -m pacavanza.data_sources.avanza_market_multi STOCK1 STOCK2 ... [-i interval]
+      python -m pacavanza.data_sources.avanza_market_daemon STOCK1 STOCK2 ... [-i interval]
     """
     args = sys.argv[1:]
     if not args:
         print(
-            "Usage: python -m pacavanza.data_sources.avanza_market_multi STOCK1 [STOCK2 ...] [-i interval]"
+            "Usage: python -m pacavanza.data_sources.avanza_market_daemon STOCK1 [STOCK2 ...] [-i interval]"
         )
         sys.exit(1)
     interval_str = "5m"

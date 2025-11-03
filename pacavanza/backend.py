@@ -12,14 +12,13 @@ from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-# compute pacavanza package root (backend/.. -> pacavanza/)
-ROOT = Path(__file__).resolve().parent.parent  # pacavanza/
+# compute pacavanza package root (pacavanza/)
+ROOT = Path(__file__).resolve().parent  # pacavanza/
 STATIC_DIR = ROOT / "static"
 STATIC_HTML = STATIC_DIR / "chart.html"
 
-from ..indicators.indicators import (
+from .indicators.indicators import (
     incremental_ema_update,
-    generate_bar_group_label_incremental,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -75,13 +74,11 @@ def create_app(
 
     manager = WebSocketManager()
 
-    # in-memory per-stock state (keeps recent history for EMA and label calculation).
+    # in-memory per-stock state (keeps recent history for EMA calculation).
     # For many symbols or long history you might want to persist this or cap size.
     recent_bars: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     # ema_state[stock][length] = last EMA value
     ema_state: Dict[str, Dict[int, float]] = defaultdict(dict)
-    # label state for bar_group_count (a simple integer per stock)
-    label_state: Dict[str, Dict[str, Any]] = defaultdict(dict)
     # Optional: map stock -> metadata (timezone, market_open/close) passed from collector in messages
     metadata: Dict[str, Dict[str, Any]] = {}
 
@@ -217,23 +214,11 @@ def create_app(
                     ema_state[sid][L] = new
                     emas[str(L)] = {"time": bar["start_time"], "value": new}
 
-            # compute label incrementally (bar grouping) using helper that tracks state
-            label = generate_bar_group_label_incremental(
-                sid,
-                recent_bars[sid],
-                label_state,
-                metadata.get(sid),
-                tf_str="5",  # you can make this dynamic based on configured interval
-                c_contador=2,
-                use_rth_hours=True,
-            )
-
             out = {
                 "type": "update",
                 "stock": sid,
                 "bar": bar,
                 "emas": emas,
-                "label": label,
             }
             await manager.broadcast(out)
 
@@ -268,22 +253,11 @@ def create_app(
                     ema_state[sid][L] = new
                     emas[str(L)] = {"time": bar["start_time"], "value": new}
 
-            label = generate_bar_group_label_incremental(
-                sid,
-                recent_bars[sid],
-                label_state,
-                metadata.get(sid),
-                tf_str="5",
-                c_contador=2,
-                use_rth_hours=True,
-            )
-
             out = {
                 "type": "completed",
                 "stock": sid,
                 "bar": bar,
                 "emas": emas,
-                "label": label,
             }
             await manager.broadcast(out)
 
@@ -388,9 +362,13 @@ def create_app(
     return app
 
 
-if __name__ == "__main__":
-    # run as: python -m pacavanza.backend.fastapi_redis_ws
+def main():
+    # run as: python -m pacavanza.backend.main
     app = create_app(
         redis_url="redis://localhost:6379/0", redis_channel="pacavanza:ticker_updates"
     )
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

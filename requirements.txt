@@ -1,11 +1,8 @@
 pandas
 numpy
 avanza-api
-flask
-plotly
-dash
 curl_cffi
 TA-Lib
-redis[async]
+redis
 fastapi
 uvicorn
