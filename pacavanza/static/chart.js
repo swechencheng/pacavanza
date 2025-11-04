@@ -3,20 +3,15 @@
   const warn = (...a) => console.warn("[chart]", ...a);
   const error = (...a) => console.error("[chart]", ...a);
   const infoEl = document.getElementById("info");
-  function setInfo(t) {
-    if (infoEl) infoEl.textContent = t;
-  }
 
   // confirm library loaded
   if (typeof LightweightCharts === "undefined") {
     error(
       "LightweightCharts global not found. Check that the exact CDN script loaded."
     );
-    document.getElementById("status").textContent = "Chart lib not loaded";
-    setInfo("Expected LightweightCharts global not found; check Network tab.");
+    document.getElementById("status").textContent = "Chart lib N/A";
     return;
   }
-  setInfo("Loaded lightweight-charts@5.0.9");
 
   try {
     // create chart per v5 docs
@@ -497,14 +492,12 @@
         }
 
         document.getElementById("status").textContent = "History loaded.";
-        setInfo(`History loaded: ${barData.length} bars for ${stock}`);
         log("History loaded for", stock, barData.length);
         return barData.length;
       } catch (err) {
         error("History load failed:", err);
         document.getElementById("status").textContent =
-          "Failed to load history — see console";
-        setInfo("History fetch failed; check /history/<stock> endpoint");
+          "Failed to load history";
         throw err;
       }
     }
@@ -796,9 +789,6 @@
   } catch (e) {
     error("Chart init failed:", e);
     document.getElementById("status").textContent =
-      "Chart init failed — see console";
-    setInfo(
-      "Chart init error. Confirm the exact library build is the UMD standalone one."
-    );
+      "Chart init failed";
   }
 })();
