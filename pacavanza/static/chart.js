@@ -29,6 +29,10 @@
           textColor: "#d1d4dc",
           background: { type: "Solid", color: "#0b1220" },
         },
+        grid: {
+          vertLines: { color: "#727272ff" },
+          horzLines: { color: "#727272ff" },
+        },
         rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 } },
         timeScale: {
           timeVisible: true,
