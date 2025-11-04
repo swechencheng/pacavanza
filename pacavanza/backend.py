@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Dict, Any, List, AsyncIterator
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, Response
+from fastapi.responses import JSONResponse, HTMLResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import redis.asyncio as aioredis
@@ -290,6 +290,15 @@ def create_app(
 
     # MOUNT STATIC FILES - ADD THIS LINE
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    # Expose warrant_list.json
+    @app.get("/warrant_list.json")
+    async def get_bar_json():
+        return FileResponse(
+            ROOT / "warrant_list.json",
+            media_type="application/json",
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools
     @app.get("/.well-known/appspecific/com.chrome.devtools.json")
