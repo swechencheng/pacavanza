@@ -79,6 +79,7 @@
         `<span style="color: #4caf50;">H: -</span>`,
         `<span style="color: #f44336;">L: -</span>`,
         `<span style="color: #ddd;">C: -</span>`,
+        `<span style="color: #ff9900;">Bar -</span>`,
       ].join(" ");
 
       // Check if the crosshair is over a data point
@@ -114,13 +115,26 @@
           return;
         }
 
+        // Determine bar group number (if we have one) and append to tooltip
+        // Use candleData.time as key (should be unix seconds)
+        const barGroup = barGroupMap.get(candleData.time);
+
         // Create the tooltip content - SIMPLE TEXT FOR CONTROLS LINE
-        toolTip.innerHTML = [
+        const parts = [
           `<span style="color: #ddd;">O: ${open.toFixed(2)}</span>`,
           `<span style="color: #4caf50;">H: ${high.toFixed(2)}</span>`,
           `<span style="color: #f44336;">L: ${low.toFixed(2)}</span>`,
           `<span style="color: #ddd;">C: ${close.toFixed(2)}</span>`,
-        ].join(" ");
+        ];
+
+        // Always show Bar, use '-' if we don't have the number
+        if (barGroup !== undefined) {
+          parts.push(`<span style="color: #ff9900;">Bar ${barGroup}</span>`);
+        } else {
+          parts.push(`<span style="color: #ff9900;">Bar -</span>`);
+        }
+
+        toolTip.innerHTML = parts.join(" ");
       }
     });
 
@@ -227,7 +241,166 @@
       lastEMATime = null;
       candleSeries.setData([]);
       ema20Series.setData([]); // Only clear EMA20 series
+      // reset grouping map/state
+      barGroupMap.clear();
+      groupingState.count = 0;
+      groupingState.bar_group_count = 0;
+      groupingState.currentDay = null;
     }
+
+    // ----------------- BEGIN: session & grouping helpers -----------------
+    // small helper: parse "HH:MM" string => minutes since midnight
+    function hhmmToMinutes(hhmm) {
+      if (!hhmm) return null;
+      const [h, m] = hhmm.split(":").map((s) => parseInt(s, 10));
+      return h * 60 + (isNaN(m) ? 0 : m);
+    }
+
+    // Use Intl to convert unix seconds to local session date/time parts
+    function getLocalParts(unixSeconds, timeZone) {
+      const d = new Date(unixSeconds * 1000);
+      const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).formatToParts(d);
+      const map = {};
+      parts.forEach((p) => (map[p.type] = p.value));
+      return {
+        year: parseInt(map.year, 10),
+        month: parseInt(map.month, 10),
+        day: parseInt(map.day, 10),
+        hour: parseInt(map.hour, 10),
+        minute: parseInt(map.minute, 10),
+        second: parseInt(map.second, 10),
+        ymd: `${map.year}-${map.month}-${map.day}`,
+      };
+    }
+
+    // grouping state per stock (no markers)
+    const groupingState = {
+      sessionTZ: null,
+      sessionOpenMinutes: null,
+      sessionCloseMinutes: null,
+      count: 0, // minute count during current session
+      bar_group_count: 0, // group number
+      currentDay: null, // y-m-d
+      tf: "5", // DEFAULT to 5m
+    };
+
+    // map for quick tooltip lookup: time -> bar_group_count
+    const barGroupMap = new Map();
+
+    // load warrant_list.json (user requested this is exposed at /warrant_list.json)
+    let warrantMap = null;
+    async function loadWarrantJSON() {
+      try {
+        const res = await fetch("/warrant_list.json");
+        if (!res.ok)
+          throw new Error("warrant_list.json fetch failed: " + res.status);
+        const data = await res.json();
+        log("Loaded warrant JSON from /warrant_list.json");
+        return data;
+      } catch (e) {
+        warn(
+          "Could not load /warrant_list.json; session grouping will be disabled for this stock."
+        );
+        return null;
+      }
+    }
+
+    // configure session from warrant entry
+    function setStockSessionConfigFromWarrant(stockId) {
+      if (!warrantMap) return;
+      const conf = warrantMap[stockId];
+      if (!conf) {
+        warn("No warrant entry for", stockId);
+        groupingState.sessionTZ = null;
+        groupingState.sessionOpenMinutes = null;
+        groupingState.sessionCloseMinutes = null;
+        return;
+      }
+      groupingState.sessionTZ = conf.timezone || null;
+      groupingState.sessionOpenMinutes = hhmmToMinutes(conf.market_open);
+      groupingState.sessionCloseMinutes = hhmmToMinutes(conf.market_close);
+      log(
+        "Session config:",
+        stockId,
+        groupingState.sessionTZ,
+        groupingState.sessionOpenMinutes,
+        groupingState.sessionCloseMinutes
+      );
+      // Reset counts but keep barGroupMap (we only clear barGroupMap on dataset switch)
+      groupingState.count = 0;
+      groupingState.bar_group_count = 0;
+      groupingState.currentDay = null;
+    }
+
+    // check if this bar (unixSeconds) is inside trading hours (sessionTZ required)
+    function isTradingHoursForBar(unixSeconds) {
+      if (
+        !groupingState.sessionTZ ||
+        groupingState.sessionOpenMinutes == null ||
+        groupingState.sessionCloseMinutes == null
+      )
+        return false;
+      const parts = getLocalParts(unixSeconds, groupingState.sessionTZ);
+      const minutes = parts.hour * 60 + parts.minute;
+      return (
+        minutes >= groupingState.sessionOpenMinutes &&
+        minutes < groupingState.sessionCloseMinutes
+      );
+    }
+
+    // main grouping function; NOTE: this will create entries in barGroupMap (no markers)
+    function processBarForGrouping(barObj) {
+      if (!groupingState.sessionTZ) return;
+      if (!barObj || !barObj.time) return;
+
+      const parts = getLocalParts(barObj.time, groupingState.sessionTZ);
+      const dayKey = parts.ymd;
+
+      // new day detection -> reset counts for that market day
+      if (groupingState.currentDay !== dayKey) {
+        groupingState.currentDay = dayKey;
+        groupingState.count = 0;
+        groupingState.bar_group_count = 0;
+      }
+
+      // if this bar is market open exactly, reset as Pine does
+      const isOpenBar =
+        parts.hour * 60 + parts.minute === groupingState.sessionOpenMinutes &&
+        parts.second === 0; // optional: require exact second 0 if data has seconds
+
+      if (isOpenBar) {
+        groupingState.count = 1;
+        groupingState.bar_group_count = 1;
+        // For open bar we may want to register a group number — follow your Pine behaviour
+        barGroupMap.set(barObj.time, groupingState.bar_group_count);
+      } else if (isTradingHoursForBar(barObj.time)) {
+        if (groupingState.tf === "1") {
+          groupingState.count += 1;
+          // For 1m timeframe, count every 5 bars => label when count % 5 == 1
+          if (groupingState.count % 5 === 1) {
+            groupingState.bar_group_count += 1;
+          }
+          // assign bar_group_count to every bar (do not skip)
+          barGroupMap.set(barObj.time, groupingState.bar_group_count);
+        } else {
+          // For 5m timeframe, use regular count
+          groupingState.count += 1;
+          groupingState.bar_group_count += 1;
+          // assign bar_group_count to every bar (do not skip every 2 bars)
+          barGroupMap.set(barObj.time, groupingState.bar_group_count);
+        }
+      }
+    }
+    // ----------------- END: session & grouping helpers -----------------
 
     // helper to load history and setData on the candlestick series
     async function loadHistoryFor(stock) {
@@ -238,6 +411,13 @@
           clearChartData();
           currentStock = stock;
         }
+
+        // ensure warrant JSON loaded BEFORE configuring session & grouping
+        if (!warrantMap) {
+          warrantMap = await loadWarrantJSON();
+        }
+        // configure session params for this stock (may clear grouping)
+        setStockSessionConfigFromWarrant(stock);
 
         const bars = await fetchHistory(stock);
         const barData = bars
@@ -299,6 +479,21 @@
               `Calculated EMA20 for ${historicalEMA20.length} historical bars`
             );
           }
+
+          // ------------------ grouping for history (added) ------------------
+          // We use 5m by default (ignore Pine interval checking)
+          groupingState.tf = "5";
+
+          // Process grouping for entire history (one-time). This will populate barGroupMap
+          barGroupMap.clear();
+          groupingState.count = 0;
+          groupingState.bar_group_count = 0;
+          groupingState.currentDay = null;
+          sortedData.forEach((bar) => {
+            // Only grouping for bars that fall inside trading session for the currentStock
+            processBarForGrouping(bar);
+          });
+          // ---------------- end grouping for history ------------------
         }
 
         document.getElementById("status").textContent = "History loaded.";
@@ -397,6 +592,10 @@
                   // ********** INCREMENTAL EMA20 UPDATE FOR REAL-TIME DATA **********
                   updateEMA20Incremental(close, t);
 
+                  // NOTE: Do NOT run grouping/marker creation on 'update' messages.
+                  // That caused multiple markers on a still-open last bar.
+                  // Grouping (and marker creation) will run for history and completed messages only.
+
                   if (t > lastBarTime) {
                     lastBarTime = t;
                     log(`Updated lastBarTime to: ${lastBarTime}`);
@@ -426,6 +625,9 @@
 
                   // ********** INCREMENTAL EMA20 UPDATE FOR COMPLETED BARS **********
                   updateEMA20Incremental(close, t);
+
+                  // Run grouping now for completed bars (this will populate barGroupMap once)
+                  processBarForGrouping(candleData);
 
                   if (t > lastBarTime) {
                     lastBarTime = t;
@@ -471,6 +673,15 @@
                         lastEMATime = lastEmaPoint.time;
                       }
                     }
+
+                    // ********** RECALCULATE GROUPING WHEN REPLACING HISTORICAL DATA **********
+                    // Recompute grouping across whole sortedData and repopulate barGroupMap
+                    barGroupMap.clear();
+                    groupingState.count = 0;
+                    groupingState.bar_group_count = 0;
+                    groupingState.currentDay = null;
+                    sortedData.forEach((bar) => processBarForGrouping(bar));
+                    // ---------------- end recalc grouping ------------------
                   } else {
                     throw e;
                   }
@@ -560,6 +771,8 @@
       const initialStock = document.getElementById("stock").value;
       currentStock = initialStock; // Set the initial stock
       try {
+        // load warrant JSON early so session config exists before history grouping
+        warrantMap = await loadWarrantJSON();
         await loadHistoryFor(initialStock);
       } catch (e) {
         // already logged in loadHistoryFor; continue to setup WS regardless so
@@ -574,6 +787,7 @@
             `<span style="color: #4caf50;">H: -</span>`,
             `<span style="color: #f44336;">L: -</span>`,
             `<span style="color: #ddd;">C: -</span>`,
+            `<span style="color: #ff9900;">Bar -</span>`,
           ].join(" ");
         }
       }
