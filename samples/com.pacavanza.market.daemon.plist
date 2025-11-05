@@ -10,10 +10,6 @@
             <string>/path/to/pacavanza/venv/bin/python</string>
             <string>-m</string>
             <string>pacavanza.avanza_market_daemon</string>
-            <string>mini-l-omx-ava-468</string>
-            <string>mini-s-omx-ava-1575</string>
-            <string>mini-l-sp500-ava-270</string>
-            <string>mini-s-sp500-ava-330</string>
         </array>
 
         <key>RunAtLoad</key>

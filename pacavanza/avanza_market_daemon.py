@@ -22,6 +22,8 @@ logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
 LOGGER = logging.getLogger("avanza_market_daemon")
 
+WARRANT_LIST_PATH = "./pacavanza/warrant_list.json"
+
 
 class MultiMarketCollector:
     """
@@ -39,7 +41,7 @@ class MultiMarketCollector:
         stock_ids,
         interval_seconds,
         secret_path="./pacavanza/../secret.json",
-        warrant_list_path="./pacavanza/warrant_list.json",
+        warrant_list_path=WARRANT_LIST_PATH,
         stock_datas: dict = None,
         redis_url: str = "redis://localhost:6379/0",
         redis_channel: str = "pacavanza:ticker_updates",
@@ -855,17 +857,10 @@ class MultiMarketCollector:
 def parse_args():
     """
     Usage:
-      python -m pacavanza.data_sources.avanza_market_daemon STOCK1 STOCK2 ... [-i interval]
+      python -m pacavanza.data_sources.avanza_market_daemon [-i interval]
     """
     args = sys.argv[1:]
-    if not args:
-        print(
-            "Usage: python -m pacavanza.data_sources.avanza_market_daemon STOCK1 [STOCK2 ...] [-i interval]"
-        )
-        sys.exit(1)
     interval_str = "5m"
-    # collect any tokens that are not -i and not interval value as stocks
-    stocks = []
     i = 0
     while i < len(args):
         if args[i] == "-i" and i + 1 < len(args):
@@ -876,11 +871,22 @@ def parse_args():
             interval_str = val
             i += 2
         else:
-            stocks.append(args[i])
+            # ignore other positional args — stock ids come from warrant_list.json
+            LOGGER.debug(
+                f"Ignoring CLI arg '{args[i]}' (stock ids loaded from warrant_list.json)"
+            )
             i += 1
 
+    try:
+        with open(WARRANT_LIST_PATH, "r") as f:
+            wl = json.load(f)
+        stocks = list(wl.keys())
+    except Exception as e:
+        LOGGER.error(f"Failed to read warrant_list from {WARRANT_LIST_PATH}: {e}")
+        sys.exit(1)
+
     if not stocks:
-        LOGGER.error("No stock ids provided.")
+        LOGGER.error(f"No warrant ids found in {WARRANT_LIST_PATH}")
         sys.exit(1)
     return stocks, interval_str
 
