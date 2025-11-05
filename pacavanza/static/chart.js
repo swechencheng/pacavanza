@@ -395,6 +395,108 @@
         }
       }
     }
+
+    // ----------------- NEW: recompute grouping for a single session day -------------
+    // This helper computes bar_group_count for all bars in `barsForDay` (chronological)
+    // and returns a Map(time -> group). It uses identical grouping rules but with
+    // local counters so it doesn't depend on global groupingState being up-to-date.
+    function computeGroupingForBars(
+      barsForDay,
+      sessionTZ,
+      sessionOpenMin,
+      sessionCloseMin,
+      tf = "5"
+    ) {
+      const map = new Map();
+      let count = 0;
+      let bar_group_count = 0;
+      // We expect barsForDay to be chronological (sorted by time)
+      for (const bar of barsForDay) {
+        const parts = getLocalParts(bar.time, sessionTZ);
+        const isOpenBar =
+          parts.hour * 60 + parts.minute === sessionOpenMin &&
+          parts.second === 0;
+        if (isOpenBar) {
+          count = 1;
+          bar_group_count = 1;
+          map.set(bar.time, bar_group_count);
+          continue;
+        }
+        const minutes = parts.hour * 60 + parts.minute;
+        if (minutes >= sessionOpenMin && minutes < sessionCloseMin) {
+          if (tf === "1") {
+            count += 1;
+            if (count % 5 === 1) {
+              bar_group_count += 1;
+            }
+            map.set(bar.time, bar_group_count);
+          } else {
+            count += 1;
+            bar_group_count += 1;
+            map.set(bar.time, bar_group_count);
+          }
+        } else {
+          // outside trading hours: don't set group (no entry)
+        }
+      }
+      return map;
+    }
+
+    // Recompute grouping for the day of unixSeconds 't' using data from currentData
+    // Only processes bars for the same ymd (session tz) as t, which keeps it fast.
+    function recomputeGroupingForDayOf(t) {
+      if (!groupingState.sessionTZ) return;
+      const parts = getLocalParts(t, groupingState.sessionTZ);
+      const dayKey = parts.ymd;
+      // collect bars from currentData that fall into this day (in session timezone)
+      const allBars = Array.from(currentData.values()).sort(
+        (a, b) => a.time - b.time
+      );
+      const barsForDay = [];
+      for (const b of allBars) {
+        const p = getLocalParts(b.time, groupingState.sessionTZ);
+        if (p.ymd === dayKey) barsForDay.push(b);
+      }
+      if (barsForDay.length === 0) return;
+      // compute new grouping map for that day
+      const newMap = computeGroupingForBars(
+        barsForDay,
+        groupingState.sessionTZ,
+        groupingState.sessionOpenMinutes,
+        groupingState.sessionCloseMinutes,
+        groupingState.tf
+      );
+      // merge into global barGroupMap (overwrite entries for that day)
+      for (const [time, grp] of newMap.entries()) {
+        barGroupMap.set(time, grp);
+      }
+      // also update global groupingState so subsequent incremental processing continues from latest counts:
+      // find last entry from newMap to update groupingState.currentDay/count/bar_group_count
+      const times = Array.from(newMap.keys()).sort((a, b) => a - b);
+      if (times.length > 0) {
+        const lastTime = times[times.length - 1];
+        groupingState.currentDay = dayKey;
+        groupingState.bar_group_count = newMap.get(lastTime);
+        // compute count: number of bars in session processed so far (approximate)
+        // Count bars within session up to lastTime
+        let c = 0;
+        for (const b of barsForDay) {
+          const p = getLocalParts(b.time, groupingState.sessionTZ);
+          const minutes = p.hour * 60 + p.minute;
+          if (
+            minutes >= groupingState.sessionOpenMinutes &&
+            minutes < groupingState.sessionCloseMinutes
+          ) {
+            c += 1;
+            if (b.time === lastTime) break;
+          }
+        }
+        groupingState.count = c;
+      }
+    }
+    // ----------------- END recompute helper --------------------------------------
+
+    // grouping state helpers end
     // ----------------- END: session & grouping helpers -----------------
 
     // helper to load history and setData on the candlestick series
@@ -587,7 +689,7 @@
 
                   // NOTE: Do NOT run grouping/marker creation on 'update' messages.
                   // That caused multiple markers on a still-open last bar.
-                  // Grouping (and marker creation) will run for history and completed messages only.
+                  // Grouping will run for history and completed messages only.
 
                   if (t > lastBarTime) {
                     lastBarTime = t;
@@ -610,79 +712,90 @@
               }
             } else if (msg.type === "completed") {
               // For completed messages, we need to be more careful
-              // Only update if this is a new bar or the current bar
-              if (lastBarTime === null || t >= lastBarTime) {
-                currentData.set(t, candleData);
-                try {
-                  candleSeries.update(candleData);
+              // If the frontend already has identical data for this completed bar, skip processing
+              const existing = currentData.get(t);
+              if (
+                existing &&
+                existing.open === candleData.open &&
+                existing.high === candleData.high &&
+                existing.low === candleData.low &&
+                existing.close === candleData.close
+              ) {
+                log(`Ignoring Duplicate completed bar for ${t}`);
+                // still update lastBarTime if necessary
+                if (lastBarTime === null || t > lastBarTime) lastBarTime = t;
+                return;
+              }
 
-                  // ********** INCREMENTAL EMA20 UPDATE FOR COMPLETED BARS **********
-                  updateEMA20Incremental(close, t);
+              // ----- CHANGED: always integrate completed bars (do NOT skip) -----
+              // We will attempt a lightweight update(), and on API refusal we rebuild the dataset.
+              currentData.set(t, candleData);
+              try {
+                // Try to update the series in-place (fast path)
+                candleSeries.update(candleData);
 
-                  // Run grouping now for completed bars (this will populate barGroupMap once)
-                  processBarForGrouping(candleData);
+                // ********** INCREMENTAL EMA20 UPDATE FOR COMPLETED BARS **********
+                updateEMA20Incremental(close, t);
 
-                  if (t > lastBarTime) {
-                    lastBarTime = t;
-                    log(
-                      `Completed bar - updated lastBarTime to: ${lastBarTime}`
-                    );
-                  } else {
-                    log(`Completed current bar at ${t}`);
-                  }
-                } catch (e) {
-                  if (
-                    e.message &&
-                    e.message.includes("Cannot update oldest data")
-                  ) {
-                    // For completed bars that are in history, we might need to replace the data
-                    log(
-                      `Completed bar is historical, replacing data set for ${t}`
-                    );
-                    // Remove the old bar and add the new one
-                    currentData.delete(t);
-                    currentData.set(t, candleData);
-                    // Recreate the entire dataset
-                    const sortedData = Array.from(currentData.values()).sort(
-                      (a, b) => a.time - b.time
-                    );
-                    candleSeries.setData(sortedData);
+                // Recompute grouping for that day's session using currentData snapshot.
+                // This fills barGroupMap for any completed bars that were missed.
+                recomputeGroupingForDayOf(t);
 
-                    // ********** RECALCULATE EMA20 WHEN REPLACING HISTORICAL DATA **********
-                    if (sortedData.length >= 20) {
-                      const historicalEMA20 =
-                        calculateHistoricalEMA20(sortedData);
-                      ema20Data.clear();
-                      historicalEMA20.forEach((ema) => {
-                        ema20Data.set(ema.time, ema.value);
-                      });
-                      ema20Series.setData(historicalEMA20);
-
-                      // update cached last EMA/time after recalculation
-                      const lastEmaPoint =
-                        historicalEMA20[historicalEMA20.length - 1];
-                      if (lastEmaPoint) {
-                        lastEMAValue = lastEmaPoint.value;
-                        lastEMATime = lastEmaPoint.time;
-                      }
-                    }
-
-                    // ********** RECALCULATE GROUPING WHEN REPLACING HISTORICAL DATA **********
-                    // Recompute grouping across whole sortedData and repopulate barGroupMap
-                    barGroupMap.clear();
-                    groupingState.count = 0;
-                    groupingState.bar_group_count = 0;
-                    groupingState.currentDay = null;
-                    sortedData.forEach((bar) => processBarForGrouping(bar));
-                    // ---------------- end recalc grouping ------------------
-                  } else {
-                    throw e;
-                  }
+                // Update lastBarTime if this is actually the newest bar
+                if (lastBarTime === null || t > lastBarTime) {
+                  lastBarTime = t;
+                  log(`Completed bar - updated lastBarTime to: ${lastBarTime}`);
+                } else {
+                  log(`Integrated completed historical bar at ${t}`);
                 }
-              } else {
-                log(
-                  `Skipping completed historical bar at ${t}, current lastBarTime: ${lastBarTime}`
-                );
+              } catch (e) {
+                // If the chart refuses to update an older datapoint we rebuild the dataset (fallback).
+                if (
+                  e.message &&
+                  e.message.includes("Cannot update oldest data")
+                ) {
+                  log(
+                    `Completed bar is historical (chart refused in-place update), replacing data set for ${t}`
+                  );
+                  // Ensure the currentData contains the completed bar
+                  currentData.delete(t);
+                  currentData.set(t, candleData);
+                  // Recreate the entire dataset (sorted) and setData
+                  const sortedData = Array.from(currentData.values()).sort(
+                    (a, b) => a.time - b.time
+                  );
+                  candleSeries.setData(sortedData);
+
+                  // ********** RECALCULATE EMA20 WHEN REPLACING HISTORICAL DATA **********
+                  if (sortedData.length >= 20) {
+                    const historicalEMA20 =
+                      calculateHistoricalEMA20(sortedData);
+                    ema20Data.clear();
+                    historicalEMA20.forEach((ema) => {
+                      ema20Data.set(ema.time, ema.value);
+                    });
+                    ema20Series.setData(historicalEMA20);
+
+                    // update cached last EMA/time after recalculation
+                    const lastEmaPoint =
+                      historicalEMA20[historicalEMA20.length - 1];
+                    if (lastEmaPoint) {
+                      lastEMAValue = lastEmaPoint.value;
+                      lastEMATime = lastEmaPoint.time;
+                    }
+                  }
+
+                  // ********** RECALCULATE GROUPING WHEN REPLACING HISTORICAL DATA **********
+                  // Recompute grouping across whole sortedData and repopulate barGroupMap
+                  barGroupMap.clear();
+                  groupingState.count = 0;
+                  groupingState.bar_group_count = 0;
+                  groupingState.currentDay = null;
+                  sortedData.forEach((bar) => processBarForGrouping(bar));
+                  // ---------------- end recalc grouping ------------------
+                } else {
+                  throw e;
+                }
               }
             }
 
@@ -788,7 +901,6 @@
     // ---------------- end auto-load ----------------
   } catch (e) {
     error("Chart init failed:", e);
-    document.getElementById("status").textContent =
-      "Chart init failed";
+    document.getElementById("status").textContent = "Chart init failed";
   }
 })();

@@ -172,11 +172,11 @@ def create_app(
             bar = payload.get("bar")
             if not bar:
                 return
-            # use end_time as canonical timestamp
-            ts = datetime.fromisoformat(bar["end_time"])
+            # use start_time as canonical timestamp
+            ts = datetime.fromisoformat(bar["start_time"])
             # append/replace last bar in recent_bars (keep them bounded)
             lst = recent_bars[sid]
-            if not lst or lst[-1]["end_time"] != bar["end_time"]:
+            if not lst or lst[-1]["start_time"] != bar["start_time"]:
                 lst.append(
                     {
                         "start_time": datetime.fromisoformat(bar["start_time"]),
