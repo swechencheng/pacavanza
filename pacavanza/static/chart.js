@@ -143,6 +143,148 @@
     let lastEMAValue = null;
     let lastEMATime = null;
 
+    // default bar interval: 5m (in seconds) — use this to compute countdown if end_time missing
+    const INTERVAL_SECONDS = 5 * 60;
+
+    // countdown timer state for status display
+    let countdownTimerId = null;
+    let countdownEndTime = null; // unix seconds (seconds)
+
+    // Format mm:ss
+    function formatMMSS(sec) {
+      if (sec < 0) sec = 0;
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    // update status element with remaining time
+    function updateCountdownDisplay() {
+      if (!countdownEndTime) return;
+      const now = Math.floor(Date.now() / 1000);
+      let rem = countdownEndTime - now;
+
+      if (rem <= 0) {
+        // final tick
+        document.getElementById("status").textContent = formatMMSS(0);
+        clearCountdown(); // will set fallback message
+        // after finalizing a bar we *try* to ensure the next bar countdown starts if market still open
+        ensureMarketCountdown();
+        return;
+      }
+      document.getElementById("status").textContent = formatMMSS(rem);
+    }
+
+    // start countdown for a given end time (unix seconds)
+    function startCountdownForBar(endUnixSeconds) {
+      // If session timezone unknown, don't start countdown
+      if (!groupingState.sessionTZ) {
+        log("startCountdownForBar: no sessionTZ — skipping countdown");
+        document.getElementById("status").textContent = "NO TZ";
+        return;
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+
+      // only start if market is open now for the session
+      if (!isTradingHoursForBar(now)) {
+        log("startCountdownForBar: market closed now — not starting countdown");
+        clearCountdown();
+        document.getElementById("status").textContent = "Market closed";
+        return;
+      }
+
+      // Defensive: if provided end time is not a number or already in the past,
+      // fall back to start + INTERVAL_SECONDS so countdown runs reliably.
+      let end = Number(endUnixSeconds);
+      if (!Number.isFinite(end) || end <= now) {
+        // assume 5m interval from now (endUnixSeconds might be missing or stale)
+        end = now + INTERVAL_SECONDS;
+      }
+
+      // guard: if same end time already running, no-op
+      if (countdownEndTime && countdownEndTime === end && countdownTimerId) {
+        // already running
+        return;
+      }
+
+      // set end time and (re)start timer
+      clearCountdown(false); // clear any existing timer (don't override status text here)
+      countdownEndTime = end;
+
+      // Debug log to help confirm timer started
+      log(
+        "Starting countdown for bar, endUnix:",
+        countdownEndTime,
+        "now:",
+        now
+      );
+
+      // immediately update then schedule per-second ticks
+      updateCountdownDisplay();
+      countdownTimerId = setInterval(updateCountdownDisplay, 1000);
+    }
+
+    // clear countdown and optionally set a message
+    function clearCountdown(setMarketMessage = true) {
+      if (countdownTimerId) {
+        clearInterval(countdownTimerId);
+        countdownTimerId = null;
+      }
+      countdownEndTime = null;
+      // If requested, set status based on market open/closed (but avoid overwriting countdown).
+      if (setMarketMessage) {
+        const now = Math.floor(Date.now() / 1000);
+        if (groupingState.sessionTZ && isTradingHoursForBar(now)) {
+          // keep neutral message while open — but ensureMarketCountdown will restart countdown
+          document.getElementById("status").textContent = "Market open";
+        } else if (groupingState.sessionTZ) {
+          document.getElementById("status").textContent = "Market closed";
+        } else {
+          // fallback
+          document.getElementById("status").textContent = "NO TZ";
+        }
+      }
+    }
+
+    // Ensures a countdown is running while market is open.
+    // Computes the "current bar end" using lastBarTime if available (and <= now),
+    // otherwise aligns current time to nearest interval boundary.
+    function ensureMarketCountdown() {
+      if (!groupingState.sessionTZ) {
+        // no session info: just show NO TZ
+        document.getElementById("status").textContent = "NO TZ";
+        return;
+      }
+      const now = Math.floor(Date.now() / 1000);
+      if (!isTradingHoursForBar(now)) {
+        // market closed -> stop any countdown and show closed
+        clearCountdown(true);
+        document.getElementById("status").textContent = "Market closed";
+        return;
+      }
+
+      // Prefer lastBarTime when it's recent (<= now)
+      let barStart = null;
+      if (lastBarTime && lastBarTime <= now) {
+        barStart = lastBarTime;
+      } else {
+        // align to interval boundary (floor)
+        barStart = Math.floor(now / INTERVAL_SECONDS) * INTERVAL_SECONDS;
+      }
+
+      const barEnd = barStart + INTERVAL_SECONDS;
+      // Ensure end is in the future; otherwise shift forward by one interval
+      if (barEnd <= now) {
+        const shiftedEnd =
+          Math.floor(now / INTERVAL_SECONDS) * INTERVAL_SECONDS +
+          INTERVAL_SECONDS;
+        startCountdownForBar(shiftedEnd);
+      } else {
+        startCountdownForBar(barEnd);
+      }
+    }
+
     function isoToLWTime(iso) {
       const ms = Date.parse(iso);
       // Convert to unix seconds (floor to avoid fractional seconds differences)
@@ -241,6 +383,8 @@
       groupingState.count = 0;
       groupingState.bar_group_count = 0;
       groupingState.currentDay = null;
+      // stop any countdown
+      clearCountdown(true);
     }
 
     // ----------------- BEGIN: session & grouping helpers -----------------
@@ -593,7 +737,9 @@
           // ---------------- end grouping for history ------------------
         }
 
-        document.getElementById("status").textContent = "History loaded.";
+        // After loading history, ensure countdown if market open (countdown is default display when open)
+        ensureMarketCountdown();
+
         log("History loaded for", stock, barData.length);
         return barData.length;
       } catch (err) {
@@ -621,7 +767,8 @@
 
         ws.onopen = () => {
           log("WS connected");
-          document.getElementById("status").textContent = "WS connected";
+          // If market open, ensure countdown runs; otherwise show connected
+          ensureMarketCountdown();
         };
         ws.onclose = (ev) => {
           warn("WS closed", ev);
@@ -691,6 +838,31 @@
                   // That caused multiple markers on a still-open last bar.
                   // Grouping will run for history and completed messages only.
 
+                  // --- START countdown logic ---
+                  // Determine bar end time: prefer provided end_time if available
+                  let barEndUnix = null;
+                  if (b.end_time) {
+                    try {
+                      barEndUnix = isoToLWTime(b.end_time);
+                    } catch (err) {
+                      barEndUnix = t + INTERVAL_SECONDS;
+                    }
+                  } else {
+                    barEndUnix = t + INTERVAL_SECONDS;
+                  }
+
+                  // Start countdown only if market is open (and we have sessionTZ)
+                  const now = Math.floor(Date.now() / 1000);
+                  if (groupingState.sessionTZ && isTradingHoursForBar(now)) {
+                    // prefer the provided end time but ensure fallback to ensureMarketCountdown logic if needed
+                    startCountdownForBar(barEndUnix);
+                  } else if (groupingState.sessionTZ) {
+                    clearCountdown(true);
+                    document.getElementById("status").textContent =
+                      "Market closed";
+                  }
+                  // --- END countdown logic ---
+
                   if (t > lastBarTime) {
                     lastBarTime = t;
                     log(`Updated lastBarTime to: ${lastBarTime}`);
@@ -724,6 +896,10 @@
                 log(`Ignoring Duplicate completed bar for ${t}`);
                 // still update lastBarTime if necessary
                 if (lastBarTime === null || t > lastBarTime) lastBarTime = t;
+                // completed -> stop countdown (bar finalized)
+                clearCountdown(true);
+                // after a completed bar, ensure the next bar countdown is started if market still open
+                ensureMarketCountdown();
                 return;
               }
 
@@ -740,6 +916,11 @@
                 // Recompute grouping for that day's session using currentData snapshot.
                 // This fills barGroupMap for any completed bars that were missed.
                 recomputeGroupingForDayOf(t);
+
+                // completed -> stop countdown (bar finalized)
+                clearCountdown(true);
+                // after integrating, ensure next bar countdown (if market still open)
+                ensureMarketCountdown();
 
                 // Update lastBarTime if this is actually the newest bar
                 if (lastBarTime === null || t > lastBarTime) {
@@ -793,6 +974,11 @@
                   groupingState.currentDay = null;
                   sortedData.forEach((bar) => processBarForGrouping(bar));
                   // ---------------- end recalc grouping ------------------
+
+                  // completed -> stop countdown (we've rebuilt)
+                  clearCountdown(true);
+                  // ensure next bar countdown if market open
+                  ensureMarketCountdown();
                 } else {
                   throw e;
                 }
@@ -896,6 +1082,8 @@
             `<span style="color: #ff9900;">Bar -</span>`,
           ].join(" ");
         }
+        // ensure countdown display state matches market/open after WS start
+        ensureMarketCountdown();
       }
     })();
     // ---------------- end auto-load ----------------
