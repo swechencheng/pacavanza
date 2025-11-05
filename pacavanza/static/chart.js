@@ -437,13 +437,60 @@
 
     // load warrant_list.json (user requested this is exposed at /warrant_list.json)
     let warrantMap = null;
+
+    // ---------------- NEW: populate select with keys from warrant_list.json ------------
+    async function populateStockSelect() {
+      const sel = document.getElementById("stock");
+      if (!sel) return;
+      try {
+        // If we already have warrantMap, reuse
+        if (!warrantMap) {
+          const res = await fetch("/warrant_list.json");
+          if (!res.ok)
+            throw new Error("warrant_list.json fetch failed: " + res.status);
+          warrantMap = await res.json();
+          log("Loaded warrant JSON from /warrant_list.json (populate)");
+        }
+
+        // clear existing options
+        sel.innerHTML = "";
+
+        // Insert keys from warrantMap as options (text==key, value==key)
+        const keys = Object.keys(warrantMap);
+        if (keys.length === 0) {
+          const opt = document.createElement("option");
+          opt.value = "";
+          opt.textContent = "(no stocks)";
+          sel.appendChild(opt);
+          return;
+        }
+
+        keys.forEach((k, idx) => {
+          const opt = document.createElement("option");
+          opt.value = k;
+          opt.textContent = k; // per your request: content is the JSON keys
+          sel.appendChild(opt);
+        });
+
+        // keep current selection if present, otherwise set to first
+        if (!sel.value && keys.length > 0) {
+          sel.value = keys[0];
+        }
+      } catch (e) {
+        warn("populateStockSelect failed:", e);
+      }
+    }
+    // -------------------------------------------------------------------------------
+
     async function loadWarrantJSON() {
       try {
+        if (warrantMap) return warrantMap;
         const res = await fetch("/warrant_list.json");
         if (!res.ok)
           throw new Error("warrant_list.json fetch failed: " + res.status);
         const data = await res.json();
         log("Loaded warrant JSON from /warrant_list.json");
+        warrantMap = data;
         return data;
       } catch (e) {
         warn(
@@ -750,13 +797,19 @@
       }
     }
 
-    // Load button - load new stock data
-    document.getElementById("load").addEventListener("click", async () => {
-      const stock = document.getElementById("stock").value;
-      await loadHistoryFor(stock).catch(() => {
-        /* already handled above */
+    // NEW: auto-reload when select changes
+    const stockSelect = document.getElementById("stock");
+    if (stockSelect) {
+      stockSelect.addEventListener("change", async (ev) => {
+        const newStock = ev.target.value;
+        if (!newStock) return;
+        try {
+          await loadHistoryFor(newStock);
+        } catch (e) {
+          // loadHistoryFor logs its own errors
+        }
       });
-    });
+    }
 
     // WebSocket for streaming updates (updates candlestick points + EMAs)
     function setupWS() {
@@ -1060,11 +1113,14 @@
     // Immediately load history for the currently selected stock (no button click).
     // This happens once during initialization.
     (async () => {
+      // First populate the select with warrant keys, then pick initialStock from select.value
+      await populateStockSelect();
+
       const initialStock = document.getElementById("stock").value;
       currentStock = initialStock; // Set the initial stock
       try {
         // load warrant JSON early so session config exists before history grouping
-        warrantMap = await loadWarrantJSON();
+        warrantMap = warrantMap || (await loadWarrantJSON());
         await loadHistoryFor(initialStock);
       } catch (e) {
         // already logged in loadHistoryFor; continue to setup WS regardless so
