@@ -917,6 +917,13 @@
                   // --- END countdown logic ---
 
                   if (t > lastBarTime) {
+                    // process grouping for this *new* bar so bar_group_count advances
+                    try {
+                      processBarForGrouping(candleData);
+                    } catch (err) {
+                      log("processBarForGrouping failed for update:", err);
+                    }
+
                     lastBarTime = t;
                     log(`Updated lastBarTime to: ${lastBarTime}`);
                   }
