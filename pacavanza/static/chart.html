@@ -11,6 +11,8 @@
         padding: 0;
         background: #0b1220;
         color: #ddd;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial;
       }
       #chart {
         height: 80vh;
@@ -19,9 +21,19 @@
       #controls {
         padding: 6px;
       }
-      .status {
-        margin-left: 12px;
+      /* moved status to fixed top-right */
+      #status {
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        background: rgba(26, 36, 61, 0.9);
         color: #ffcc66;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-weight: 600;
+        z-index: 5000;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+        pointer-events: none; /* avoid blocking clicks */
       }
       .small {
         font-size: 12px;
@@ -37,19 +49,40 @@
         font-size: 12px;
         font-family: monospace;
       }
+
+      /* keep controls on the left (status is fixed separately) */
+      #controls .left {
+        display: inline-block;
+        vertical-align: middle;
+      }
+
+      /* small responsive tweak so controls don't overlap fixed status on small screens */
+      @media (max-width: 520px) {
+        #controls {
+          padding-right: 96px; /* leave room for fixed status */
+        }
+        #chart-tooltip {
+          display: block;
+          margin-top: 6px;
+        }
+      }
     </style>
 
     <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
   </head>
   <body>
     <div id="controls">
-      <label>Stock: <input id="stock" value="mini-l-omx-ava-468" /></label>
-      <button id="load">Load</button>
-      <span id="status" class="status">Disconnected</span>
+      <div class="left">
+        <label>Stock: <input id="stock" value="mini-l-omx-ava-468" /></label>
+        <button id="load">Load</button>
+      </div>
       <span id="chart-tooltip"></span>
     </div>
 
     <div id="chart"></div>
+
+    <!-- status moved to top-right but kept same id for JS compatibility -->
+    <span id="status">Disconnected</span>
 
     <script src="/static/chart.js"></script>
   </body>
