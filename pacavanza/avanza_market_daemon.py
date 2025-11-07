@@ -196,9 +196,9 @@ class MultiMarketCollector:
         """
         try:
             if event != "QUOTE" or not isinstance(data, dict):
-                LOGGER.debug(f"[{stock_id}] [{event}] {data}")
                 return
 
+            LOGGER.debug(f"[{stock_id}] [{event}] {data}")
             ts = data.get("updated")
             dt = datetime.now(timezone.utc)
             readable_ts = "(no timestamp)"
@@ -229,6 +229,22 @@ class MultiMarketCollector:
                     f"[{stock_id}] Outside market hours ({readable_ts}), ignoring price update."
                 )
                 return
+
+            # Anomaly detection: ignore new prices that are beyond 1.0% of last stored prices, usually caused by other market participants' orders
+            last_buy = self.last_buy_price.get(stock_id)
+            last_sell = self.last_sell_price.get(stock_id)
+            if last_buy is not None:
+                if abs(buy_price - last_buy) / last_buy > 0.01:
+                    LOGGER.warning(
+                        f"[{stock_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
+                    )
+                    return
+            if last_sell is not None:
+                if abs(sell_price - last_sell) / last_sell > 0.01:
+                    LOGGER.warning(
+                        f"[{stock_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
+                    )
+                    return
 
             # store last prices for this stock
             self.last_buy_price[stock_id] = buy_price
