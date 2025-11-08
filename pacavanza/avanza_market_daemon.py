@@ -15,20 +15,20 @@ import redis.asyncio as aioredis
 
 from avanza import Avanza
 from .modules.avanza_sse_client import AvanzaSSEClient as SSEClient
-from .modules.stock_data import StockData, INTERVAL_MAP
+from .modules.instrument_data import InstrumentData, INTERVAL_MAP
 from .utils.utils import save_json_atomic
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
 LOGGER = logging.getLogger("avanza_market_daemon")
 
-WARRANT_LIST_PATH = "./pacavanza/warrant_list.json"
+INSTRUMENT_LIST_PATH = "./pacavanza/instrument_list.json"
 
 
 class MultiMarketCollector:
     """
-    Run multiple SSE clients (one per stock/warrant) while using a single Avanza instance.
-    Each stock keeps its own StockData, own file, and its own SSEClient.
+    Run multiple SSE clients (one per instrument) while using a single Avanza instance.
+    Each instrument keeps its own InstrumentData, own file, and its own SSEClient.
 
     This variant publishes minimal updates to Redis pub/sub so other processes (web server)
     can subscribe and broadcast to clients without blocking the collector.
@@ -38,11 +38,11 @@ class MultiMarketCollector:
 
     def __init__(
         self,
-        stock_ids,
+        instrument_ids,
         interval_seconds,
         secret_path="./pacavanza/../secret.json",
-        warrant_list_path=WARRANT_LIST_PATH,
-        stock_datas: dict = None,
+        instrument_list_path=INSTRUMENT_LIST_PATH,
+        instrument_datas: dict = None,
         redis_url: str = "redis://localhost:6379/0",
         redis_channel: str = "pacavanza:ticker_updates",
         # how often to persist completed bars to disk (seconds). Default: max(30, interval_seconds)
@@ -52,34 +52,34 @@ class MultiMarketCollector:
     ):
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
-        self.warrant_list = json.load(open(warrant_list_path))
-        self.stock_ids = stock_ids
+        self.instrument_list = json.load(open(instrument_list_path))
+        self.instrument_ids = instrument_ids
 
-        # per-stock storage objects
-        # If caller provided existing StockData instances, use them so the
+        # per-instrument storage objects
+        # If caller provided existing InstrumentData instances, use them so the
         # collector updates the same objects the chart reads from.
-        # Otherwise create new StockData objects as before.
-        if stock_datas is not None:
-            # only pick the stocks we were asked to collect
-            self.stock_data = {
-                stock_id: stock_datas[stock_id] for stock_id in stock_ids
+        # Otherwise create new InstrumentData objects as before.
+        if instrument_datas is not None:
+            # only pick the instruments we were asked to collect
+            self.instrument_data = {
+                instrument_id: instrument_datas[instrument_id] for instrument_id in instrument_ids
             }
         else:
-            self.stock_data = {
-                stock_id: StockData(interval_seconds, stock_id)
-                for stock_id in stock_ids
+            self.instrument_data = {
+                instrument_id: InstrumentData(interval_seconds, instrument_id)
+                for instrument_id in instrument_ids
             }
 
-        # per-stock metadata
-        self.last_buy_price = {sid: None for sid in stock_ids}
-        self.last_sell_price = {sid: None for sid in stock_ids}
+        # per-instrument metadata
+        self.last_buy_price = {sid: None for sid in instrument_ids}
+        self.last_sell_price = {sid: None for sid in instrument_ids}
 
         # validate warrant list (and resolve warrant ids)
         self.warrant_ids = {}
-        for sid in stock_ids:
-            if sid not in self.warrant_list:
-                raise ValueError(f"Stock ID {sid} not found in warrant list")
-            info = self.warrant_list[sid]
+        for sid in instrument_ids:
+            if sid not in self.instrument_list:
+                raise ValueError(f"Instrument ID {sid} not found in warrant list")
+            info = self.instrument_list[sid]
             wid = info.get("ID")
             if not wid:
                 raise ValueError(f"Warrant ID not found for {sid}")
@@ -87,7 +87,7 @@ class MultiMarketCollector:
 
         # track tasks & clients for graceful shutdown
         self._tasks = []  # list of asyncio.Task objects we create
-        self._sse_clients = {}  # stock_id -> SSEClient instance (if created)
+        self._sse_clients = {}  # instrument_id -> SSEClient instance (if created)
         self._avanza = None  # will hold the Avanza instance when created
         self._shutting_down = False
         self._loop = None
@@ -106,16 +106,16 @@ class MultiMarketCollector:
         )
 
         # bookkeeping to limit snapshot IO
-        # dirty_current stores stock ids whose current bar has changed since last snapshot
+        # dirty_current stores instrument ids whose current bar has changed since last snapshot
         self._dirty_current = set()
         self._last_current_snapshot = datetime.now(timezone.utc)
 
-    def _market_window_utc_for_local_date(self, stock_id, local_date):
+    def _market_window_utc_for_local_date(self, instrument_id, local_date):
         """
-        Returns (open_utc, close_utc) for the given stock_id and local_date (a date object).
+        Returns (open_utc, close_utc) for the given instrument_id and local_date (a date object).
         Handles case where close <= open (overnight session) by moving close to next day.
         """
-        info = self.warrant_list[stock_id]
+        info = self.instrument_list[instrument_id]
         tzname = info.get("timezone", "UTC")
         zone = ZoneInfo(tzname)
 
@@ -159,9 +159,9 @@ class MultiMarketCollector:
         close_utc = local_close.astimezone(timezone.utc)
         return open_utc, close_utc
 
-    def is_market_open(self, stock_id, dt_utc: datetime):
+    def is_market_open(self, instrument_id, dt_utc: datetime):
         """
-        Check if market for stock_id is open at dt_utc (aware, in UTC).
+        Check if market for instrument_id is open at dt_utc (aware, in UTC).
         Returns True if within local open/close window and not weekend.
         """
         if dt_utc.tzinfo is None:
@@ -169,7 +169,7 @@ class MultiMarketCollector:
         else:
             dt_utc = dt_utc.astimezone(timezone.utc)
 
-        info = self.warrant_list[stock_id]
+        info = self.instrument_list[instrument_id]
         tzname = info.get("timezone", "UTC")
         zone = ZoneInfo(tzname)
         local_dt = dt_utc.astimezone(zone)
@@ -180,17 +180,17 @@ class MultiMarketCollector:
 
         local_date = local_dt.date()
         open_utc, close_utc = self._market_window_utc_for_local_date(
-            stock_id, local_date
+            instrument_id, local_date
         )
 
         # Market considered open if dt is in [open_utc, close_utc]
         return (open_utc <= dt_utc) and (dt_utc <= close_utc)
 
-    async def _callback_quote_web_push(self, stock_id, _id, event, data):
+    async def _callback_quote_web_push(self, instrument_id, _id, event, data):
         """
-        stock-specific async callback for SSE events.
+        instrument-specific async callback for SSE events.
         Defensively handles parsing errors and ensures `dt` is always set.
-        Only updates OHLC while market is open for the stock.
+        Only updates OHLC while market is open for the instrument.
         An example QUOTE event callback:
         [RdvXmj1XLHFj_AEZKkiSmbcFx] [QUOTE] {'orderbookId': '2026354', 'buyPrice': 201.57, 'sellPrice': 201.63, 'closingPrice': 204.51, 'highestPrice': 201.98, 'lowestPrice': 200.25, 'lastPrice': 201.98, 'totalValueTraded': 21043.55, 'totalVolumeTraded': 105, 'change': -2.53, 'changePercent': -0.0124, 'spreadPercent': 0.0003, 'volumeWeightedAveragePrice': 200.41, 'updated': '2025-10-17T09:54:00.916Z', 'lastPriceUpdated': '2025-10-17T09:54:00.000Z'}
         """
@@ -198,7 +198,7 @@ class MultiMarketCollector:
             if event != "QUOTE" or not isinstance(data, dict):
                 return
 
-            LOGGER.debug(f"[{stock_id}] [{event}] {data}")
+            LOGGER.debug(f"[{instrument_id}] [{event}] {data}")
             ts = data.get("updated")
             dt = datetime.now(timezone.utc)
             readable_ts = "(no timestamp)"
@@ -215,62 +215,62 @@ class MultiMarketCollector:
             sell_price = data.get("sellPrice")
             if buy_price is None or sell_price is None:
                 LOGGER.warning(
-                    f"[{stock_id}] {readable_ts} - buy/sell missing (buy={buy_price}, sell={sell_price})"
+                    f"[{instrument_id}] {readable_ts} - buy/sell missing (buy={buy_price}, sell={sell_price})"
                 )
                 return
 
             LOGGER.info(
-                f"[{stock_id}] {readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}"
+                f"[{instrument_id}] {readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}"
             )
 
-            # Only proceed if market is open for this stock at the event's timestamp
-            if not self.is_market_open(stock_id, dt):
+            # Only proceed if market is open for this instrument at the event's timestamp
+            if not self.is_market_open(instrument_id, dt):
                 LOGGER.debug(
-                    f"[{stock_id}] Outside market hours ({readable_ts}), ignoring price update."
+                    f"[{instrument_id}] Outside market hours ({readable_ts}), ignoring price update."
                 )
                 return
 
             # Anomaly detection: ignore new prices that are beyond 1.0% of last stored prices, usually caused by other market participants' orders
-            last_buy = self.last_buy_price.get(stock_id)
-            last_sell = self.last_sell_price.get(stock_id)
+            last_buy = self.last_buy_price.get(instrument_id)
+            last_sell = self.last_sell_price.get(instrument_id)
             if last_buy is not None:
                 if abs(buy_price - last_buy) / last_buy > 0.01:
                     LOGGER.warning(
-                        f"[{stock_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
+                        f"[{instrument_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
                     )
                     return
             if last_sell is not None:
                 if abs(sell_price - last_sell) / last_sell > 0.01:
                     LOGGER.warning(
-                        f"[{stock_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
+                        f"[{instrument_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
                     )
                     return
 
-            # store last prices for this stock
-            self.last_buy_price[stock_id] = buy_price
-            self.last_sell_price[stock_id] = sell_price
+            # store last prices for this instrument
+            self.last_buy_price[instrument_id] = buy_price
+            self.last_sell_price[instrument_id] = sell_price
 
-            # Update the correct StockData instance (only during market open)
+            # Update the correct InstrumentData instance (only during market open)
             # This call updates internal current bar / completed ohlc lists.
-            self.stock_data[stock_id].update_ohlc_bar(buy_price, dt)
+            self.instrument_data[instrument_id].update_ohlc_bar(buy_price, dt)
 
             # mark current bar as dirty for periodic snapshot
-            self._dirty_current.add(stock_id)
+            self._dirty_current.add(instrument_id)
 
-            # Build a tiny message describing the current bar (the StockData class should return bar dicts)
+            # Build a tiny message describing the current bar (the InstrumentData class should return bar dicts)
             try:
-                # fetch current bar & last completed bar for the stock in a thread-safe manner
-                with self.stock_data[stock_id].lock:
+                # fetch current bar & last completed bar for the instrument in a thread-safe manner
+                with self.instrument_data[instrument_id].lock:
                     curr = copy.deepcopy(
-                        self.stock_data[stock_id].current_bars.get(stock_id)
+                        self.instrument_data[instrument_id].current_bars.get(instrument_id)
                     )
                     latest_completed = (
                         copy.deepcopy(
-                            self.stock_data[stock_id].completed_ohlc[stock_id][-1]
+                            self.instrument_data[instrument_id].completed_ohlc[instrument_id][-1]
                         )
                         if (
-                            self.stock_data[stock_id].completed_ohlc.get(stock_id)
-                            and len(self.stock_data[stock_id].completed_ohlc[stock_id])
+                            self.instrument_data[instrument_id].completed_ohlc.get(instrument_id)
+                            and len(self.instrument_data[instrument_id].completed_ohlc[instrument_id])
                             > 0
                         )
                         else None
@@ -280,7 +280,7 @@ class MultiMarketCollector:
                 if curr:
                     msg = {
                         "type": "update",
-                        "stock": stock_id,
+                        "instrument": instrument_id,
                         "bar": {
                             "start_time": curr["start_time"].isoformat(),
                             "end_time": curr["end_time"].isoformat(),
@@ -292,13 +292,13 @@ class MultiMarketCollector:
                         },
                         "completed": False,
                         "meta": {
-                            "timezone": self.warrant_list[stock_id].get(
+                            "timezone": self.instrument_list[instrument_id].get(
                                 "timezone", "UTC"
                             ),
-                            "market_open": self.warrant_list[stock_id].get(
+                            "market_open": self.instrument_list[instrument_id].get(
                                 "market_open", "00:00"
                             ),
-                            "market_close": self.warrant_list[stock_id].get(
+                            "market_close": self.instrument_list[instrument_id].get(
                                 "market_close", "23:59"
                             ),
                         },
@@ -311,14 +311,14 @@ class MultiMarketCollector:
                             await self._redis.publish(
                                 self.redis_channel, json.dumps(msg)
                             )
-                            LOGGER.debug(f"[{stock_id}] Published update to Redis")
+                            LOGGER.debug(f"[{instrument_id}] Published update to Redis")
                         except Exception as e:
                             LOGGER.error(
-                                f"[{stock_id}] Failed to publish to Redis: {e}"
+                                f"[{instrument_id}] Failed to publish to Redis: {e}"
                             )
                     else:
                         LOGGER.warning(
-                            f"[{stock_id}] Redis not connected - skipping publish"
+                            f"[{instrument_id}] Redis not connected - skipping publish"
                         )
 
                 # Publish completed bar if detected
@@ -328,7 +328,7 @@ class MultiMarketCollector:
                         if latest_completed["end_time"] <= curr["start_time"]:
                             msg_completed = {
                                 "type": "completed",
-                                "stock": stock_id,
+                                "instrument": instrument_id,
                                 "bar": {
                                     "start_time": latest_completed[
                                         "start_time"
@@ -349,28 +349,28 @@ class MultiMarketCollector:
                                         self.redis_channel, json.dumps(msg_completed)
                                     )
                                     LOGGER.debug(
-                                        f"[{stock_id}] Published completed bar to Redis"
+                                        f"[{instrument_id}] Published completed bar to Redis"
                                     )
                                 except Exception as e:
                                     LOGGER.error(
-                                        f"[{stock_id}] Failed to publish completed bar to Redis: {e}"
+                                        f"[{instrument_id}] Failed to publish completed bar to Redis: {e}"
                                     )
                     except Exception as e:
                         LOGGER.exception(
-                            f"[{stock_id}] Error detecting/publishing completed bar: {e}"
+                            f"[{instrument_id}] Error detecting/publishing completed bar: {e}"
                         )
 
             except Exception as e:
                 LOGGER.exception(
-                    f"[{stock_id}] Failed to build or publish update message: {e}"
+                    f"[{instrument_id}] Failed to build or publish update message: {e}"
                 )
 
         except Exception as e:
-            LOGGER.exception(f"[{stock_id}] Exception in callback: {e}")
+            LOGGER.exception(f"[{instrument_id}] Exception in callback: {e}")
 
     async def periodic_saver(self):
         """
-        Save all stock OHLCs to disk periodically, but only for stocks that are currently in market hours.
+        Save all instrument OHLCs to disk periodically, but only for instruments that are currently in market hours.
         Also save current (in-progress) bars every `current_snapshot_interval` seconds for durability.
         """
         last_completed_save = datetime.now(timezone.utc)
@@ -387,7 +387,7 @@ class MultiMarketCollector:
                 dirty = list(self._dirty_current)
                 for sid in dirty:
                     try:
-                        sd = self.stock_data[sid]
+                        sd = self.instrument_data[sid]
                         with sd.lock:
                             curr = sd.current_bars.get(sid)
                         if not curr:
@@ -419,8 +419,8 @@ class MultiMarketCollector:
             if (
                 now_utc - last_completed_save
             ).total_seconds() >= self.completed_save_interval:
-                for sid, sd in self.stock_data.items():
-                    # only save if market is open right now for this stock (or optionally always)
+                for sid, sd in self.instrument_data.items():
+                    # only save if market is open right now for this instrument (or optionally always)
                     try:
                         # We choose to save regardless of market open to not lose completed bars.
                         with sd.lock:
@@ -439,7 +439,7 @@ class MultiMarketCollector:
                 last_completed_save = now_utc
 
     def load_all_ohlc_from_disk(self):
-        for sid, sd in self.stock_data.items():
+        for sid, sd in self.instrument_data.items():
             data_file = f"ohlc_{sid}.json"
             try:
                 with open(data_file, "r") as f:
@@ -470,7 +470,7 @@ class MultiMarketCollector:
                 LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
 
         # attempt to load current bar snapshots (if any) to restore in-progress bars after crash
-        for sid, sd in self.stock_data.items():
+        for sid, sd in self.instrument_data.items():
             snap_file = f"ohlc_current_{sid}.json"
             try:
                 with open(snap_file, "r") as f:
@@ -504,40 +504,40 @@ class MultiMarketCollector:
             except Exception as e:
                 LOGGER.error(f"[{sid}] Failed to restore current snapshot: {e}")
 
-    async def _run_sse_client_loop(self, avanza, stock_id, warrant_id):
+    async def _run_sse_client_loop(self, avanza, instrument_id, warrant_id):
         while True:
             # if shutdown requested, exit loop instead of creating new clients
             if self._shutting_down:
                 LOGGER.info(
-                    f"[{stock_id}] Shutdown requested — exiting _run_sse_client_loop."
+                    f"[{instrument_id}] Shutdown requested — exiting _run_sse_client_loop."
                 )
                 break
 
             client = None
             try:
                 client = SSEClient(avanza, self.quote_base_url + warrant_id)
-                self._sse_clients[stock_id] = client
-                client.add_listener(partial(self._callback_quote_web_push, stock_id))
+                self._sse_clients[instrument_id] = client
+                client.add_listener(partial(self._callback_quote_web_push, instrument_id))
                 LOGGER.info(
-                    f"[{stock_id}] Starting SSE client for warrant {warrant_id}"
+                    f"[{instrument_id}] Starting SSE client for warrant {warrant_id}"
                 )
                 await client.start()
                 LOGGER.info(
-                    f"[{stock_id}] SSE client stopped cleanly (will reconnect)."
+                    f"[{instrument_id}] SSE client stopped cleanly (will reconnect)."
                 )
 
                 # after client.start() returns, check if shutdown was requested
                 if self._shutting_down:
                     LOGGER.info(
-                        f"[{stock_id}] Shutdown requested after client stopped — exiting loop."
+                        f"[{instrument_id}] Shutdown requested after client stopped — exiting loop."
                     )
                     # attempt to remove client reference and break
-                    self._sse_clients.pop(stock_id, None)
+                    self._sse_clients.pop(instrument_id, None)
                     break
 
             except asyncio.CancelledError:
                 LOGGER.info(
-                    f"[{stock_id}] _run_sse_client_loop cancelled: attempting client stop."
+                    f"[{instrument_id}] _run_sse_client_loop cancelled: attempting client stop."
                 )
                 try:
                     if client is not None:
@@ -550,14 +550,14 @@ class MultiMarketCollector:
                                 await res
                 except Exception as e:
                     LOGGER.debug(
-                        f"[{stock_id}] Exception while stopping client on cancel: {e}"
+                        f"[{instrument_id}] Exception while stopping client on cancel: {e}"
                     )
                 finally:
-                    self._sse_clients.pop(stock_id, None)
+                    self._sse_clients.pop(instrument_id, None)
                     raise
             except Exception as e:
                 LOGGER.error(
-                    f"[{stock_id}] SSE client error: {e}. Reconnecting in 5s..."
+                    f"[{instrument_id}] SSE client error: {e}. Reconnecting in 5s..."
                 )
                 try:
                     if client is not None:
@@ -570,18 +570,18 @@ class MultiMarketCollector:
                                 await res
                 except Exception:
                     pass
-                self._sse_clients.pop(stock_id, None)
+                self._sse_clients.pop(instrument_id, None)
                 # if shutdown flag set, don't sleep & reconnect — break
                 if self._shutting_down:
                     LOGGER.info(
-                        f"[{stock_id}] Shutdown requested during error; exiting client loop."
+                        f"[{instrument_id}] Shutdown requested during error; exiting client loop."
                     )
                     break
                 await asyncio.sleep(5)
 
     async def real_market_loop(self):
         """
-        Create one Avanza instance and start an SSE client loop for every stock.
+        Create one Avanza instance and start an SSE client loop for every instrument.
         If Avanza creation fails we retry (so the whole set reconnects together).
         """
         # create / connect redis client for publishing
@@ -605,7 +605,7 @@ class MultiMarketCollector:
                 self._avanza = avanza
                 LOGGER.info("Avanza login OK.")
 
-                # start per-stock SSE loops (each loop handles its own reconnects)
+                # start per-instrument SSE loops (each loop handles its own reconnects)
                 self._tasks = []
                 for sid, wid in self.warrant_ids.items():
                     t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, wid))
@@ -627,20 +627,20 @@ class MultiMarketCollector:
                 finally:
                     self._avanza = None
 
-    def force_save_stock(self, stock_id, timestamp: datetime = None):
+    def force_save_instrument(self, instrument_id, timestamp: datetime = None):
         """
-        Immediately save OHLC data for `stock_id`.
+        Immediately save OHLC data for `instrument_id`.
         If timestamp is provided (aware UTC), use it as the current-bar end_time;
         otherwise use the current UTC time.
         """
         ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
-        sd = self.stock_data[stock_id]
+        sd = self.instrument_data[instrument_id]
         try:
             with sd.lock:
                 # copy completed bars
-                bars = copy.deepcopy(sd.completed_ohlc[stock_id])
+                bars = copy.deepcopy(sd.completed_ohlc[instrument_id])
                 # snapshot current bar if present
-                current = sd.current_bars.get(stock_id)
+                current = sd.current_bars.get(instrument_id)
                 if current:
                     curr_copy = copy.deepcopy(current)
                     # set end_time to provided timestamp (ensure tz-aware)
@@ -660,14 +660,14 @@ class MultiMarketCollector:
                 bar["start_time"] = bar["start_time"].isoformat()
                 bar["end_time"] = bar["end_time"].isoformat()
                 data.append(bar)
-            data_file = f"ohlc_{stock_id}.json"
+            data_file = f"ohlc_{instrument_id}.json"
             save_json_atomic(data_file, data)
             LOGGER.info(
-                f"[{stock_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
+                f"[{instrument_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
             )
             # also persist current snapshot for fast recovery
             if current:
-                snap_file = f"ohlc_current_{stock_id}.json"
+                snap_file = f"ohlc_current_{instrument_id}.json"
                 snap = {
                     "start_time": current["start_time"].isoformat(),
                     "end_time": current["end_time"].isoformat(),
@@ -679,19 +679,19 @@ class MultiMarketCollector:
                 }
                 save_json_atomic(snap_file, snap)
         except Exception as e:
-            LOGGER.error(f"[{stock_id}] Failed force-save: {e}")
+            LOGGER.error(f"[{instrument_id}] Failed force-save: {e}")
 
     def force_save_all(self, timestamp: datetime = None):
         """
-        Force-save OHLC for all stocks immediately.
+        Force-save OHLC for all instruments immediately.
         If timestamp is provided it's used as the end_time for in-progress bars;
         otherwise current UTC time is used.
         """
         ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
-        LOGGER.info(f"Force-saving all stocks at {ts.isoformat()}")
-        for sid in list(self.stock_data.keys()):
+        LOGGER.info(f"Force-saving all instruments at {ts.isoformat()}")
+        for sid in list(self.instrument_data.keys()):
             try:
-                self.force_save_stock(sid, ts)
+                self.force_save_instrument(sid, ts)
             except Exception as e:
                 LOGGER.error(f"[{sid}] Exception during force_save_all: {e}")
 
@@ -740,7 +740,7 @@ class MultiMarketCollector:
                 LOGGER.debug(f"Exception while closing Avanza: {e}")
 
         # 4) Cancel outstanding tasks we created and await them
-        # include self._tasks (per-stock loops), plus other tasks except current
+        # include self._tasks (per-instrument loops), plus other tasks except current
         to_cancel = list(self._tasks) if self._tasks else []
         # gather other tasks (exclude current task)
         for t in asyncio.all_tasks(loop):
@@ -829,7 +829,7 @@ class MultiMarketCollector:
         finally:
             # final cleanup: ensure tasks stopped
             try:
-                LOGGER.info("Final force-save for all stocks (final cleanup)")
+                LOGGER.info("Final force-save for all instruments (final cleanup)")
                 self.force_save_all()
             except Exception as e:
                 LOGGER.error(f"Final force-save failed: {e}")
@@ -887,31 +887,31 @@ def parse_args():
             interval_str = val
             i += 2
         else:
-            # ignore other positional args — stock ids come from warrant_list.json
+            # ignore other positional args — instrument ids come from instrument_list.json
             LOGGER.debug(
-                f"Ignoring CLI arg '{args[i]}' (stock ids loaded from warrant_list.json)"
+                f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from instrument_list.json)"
             )
             i += 1
 
     try:
-        with open(WARRANT_LIST_PATH, "r") as f:
+        with open(INSTRUMENT_LIST_PATH, "r") as f:
             wl = json.load(f)
-        stocks = list(wl.keys())
+        instruments = list(wl.keys())
     except Exception as e:
-        LOGGER.error(f"Failed to read warrant_list from {WARRANT_LIST_PATH}: {e}")
+        LOGGER.error(f"Failed to read instrument_list from {INSTRUMENT_LIST_PATH}: {e}")
         sys.exit(1)
 
-    if not stocks:
-        LOGGER.error(f"No warrant ids found in {WARRANT_LIST_PATH}")
+    if not instruments:
+        LOGGER.error(f"No warrant ids found in {INSTRUMENT_LIST_PATH}")
         sys.exit(1)
-    return stocks, interval_str
+    return instruments, interval_str
 
 
 if __name__ == "__main__":
-    stock_ids, interval_str = parse_args()
+    instrument_ids, interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
     # Default redis URL and channel; adjust with env vars or CLI wrapper if you want
     collector = MultiMarketCollector(
-        stock_ids, interval_seconds, redis_url="redis://localhost:6379/0"
+        instrument_ids, interval_seconds, redis_url="redis://localhost:6379/0"
     )
     collector.run()

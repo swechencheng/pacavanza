@@ -1,21 +1,21 @@
 // trading.js (slim)
 // Assumes DOM elements and styling are provided by chart.html.
 // Responsibilities:
-// - load warrant_list.json for defaults
-// - set order volume default when stock selection changes
+// - load instrument_list.json for defaults
+// - set order volume default when instrument selection changes
 // - handle button clicks to call trade endpoints and show results in #trade-info
 
 (async function () {
   // load warrant list (for order_volume defaults)
   let warrantList = {};
   try {
-    const r = await fetch("/warrant_list.json");
+    const r = await fetch("/instrument_list.json");
     if (r.ok) warrantList = await r.json();
   } catch (e) {
-    console.warn("Could not load warrant_list.json", e);
+    console.warn("Could not load instrument_list.json", e);
   }
 
-  const stockSelect = document.getElementById("stock");
+  const instrumentSelect = document.getElementById("instrument");
   const volInput = document.getElementById("order-volume");
   const infoEl = document.getElementById("trade-info");
 
@@ -38,8 +38,8 @@
 
   // default volume update based on selected instrument
   function updateVolumeDefault() {
-    if (!stockSelect || !volInput) return;
-    const inst = stockSelect.value;
+    if (!instrumentSelect || !volInput) return;
+    const inst = instrumentSelect.value;
     if (!inst) return;
     const info = warrantList[inst];
     if (info && info.order_volume !== undefined) {
@@ -47,8 +47,8 @@
     }
   }
 
-  if (stockSelect) {
-    stockSelect.addEventListener("change", updateVolumeDefault);
+  if (instrumentSelect) {
+    instrumentSelect.addEventListener("change", updateVolumeDefault);
     // in case options already set
     updateVolumeDefault();
   }
@@ -83,7 +83,7 @@
 
   // button handlers (do minimal validation)
   function getInstrumentAndVolume() {
-    const instrumentId = stockSelect ? stockSelect.value : null;
+    const instrumentId = instrumentSelect ? instrumentSelect.value : null;
     const volume = volInput ? parseFloat(volInput.value) : null;
     if (!instrumentId) {
       showInfo("Select instrument");

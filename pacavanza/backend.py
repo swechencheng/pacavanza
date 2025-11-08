@@ -74,12 +74,12 @@ def create_app(
 
     manager = WebSocketManager()
 
-    # in-memory per-stock state (keeps recent history for EMA calculation).
+    # in-memory per-instrument state (keeps recent history for EMA calculation).
     # For many symbols or long history you might want to persist this or cap size.
     recent_bars: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    # ema_state[stock][length] = last EMA value
+    # ema_state[instrument][length] = last EMA value
     ema_state: Dict[str, Dict[int, float]] = defaultdict(dict)
-    # Optional: map stock -> metadata (timezone, market_open/close) passed from collector in messages
+    # Optional: map instrument -> metadata (timezone, market_open/close) passed from collector in messages
     metadata: Dict[str, Dict[str, Any]] = {}
 
     # Background task: subscribe to redis channel and forward events
@@ -159,7 +159,7 @@ def create_app(
         """
         LOGGER.debug("Handling redis payload: %s", payload)
         mtype = payload.get("type")
-        sid = payload.get("stock")
+        sid = payload.get("instrument")
         if not sid:
             return
 
@@ -216,7 +216,7 @@ def create_app(
 
             out = {
                 "type": "update",
-                "stock": sid,
+                "instrument": sid,
                 "bar": bar,
                 "emas": emas,
             }
@@ -255,7 +255,7 @@ def create_app(
 
             out = {
                 "type": "completed",
-                "stock": sid,
+                "instrument": sid,
                 "bar": bar,
                 "emas": emas,
             }
@@ -291,11 +291,11 @@ def create_app(
     # MOUNT STATIC FILES - ADD THIS LINE
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    # Expose warrant_list.json
-    @app.get("/warrant_list.json")
+    # Expose instrument_list.json
+    @app.get("/instrument_list.json")
     async def get_bar_json():
         return FileResponse(
-            ROOT / "warrant_list.json",
+            ROOT / "instrument_list.json",
             media_type="application/json",
             headers={"Cache-Control": "public, max-age=3600"}
         )
@@ -311,14 +311,14 @@ def create_app(
         # return an empty 204 response (no body, no Content-Length mismatch)
         return Response(status_code=204)
 
-    @app.get("/history/{stock_id}")
-    async def get_history(stock_id: str, limit: int = 500):
+    @app.get("/history/{instrument_id}")
+    async def get_history(instrument_id: str, limit: int = 500):
         """
-        Return the most recent completed_ohlc for stock.
+        Return the most recent completed_ohlc for instrument.
         This reads existing disk file (preferred) or uses in-memory snapshot if available.
         """
         # first attempt to read disk file (collector is authoritative)
-        data_file = f"ohlc_{stock_id}.json"
+        data_file = f"ohlc_{instrument_id}.json"
         try:
             with open(data_file, "r") as f:
                 data = json.load(f)
@@ -328,7 +328,7 @@ def create_app(
             return JSONResponse(content=data)
         except FileNotFoundError:
             # fallback to in-memory recent_bars
-            lst = recent_bars.get(stock_id, [])
+            lst = recent_bars.get(instrument_id, [])
             out = []
             for b in lst[-limit:]:
                 out.append(

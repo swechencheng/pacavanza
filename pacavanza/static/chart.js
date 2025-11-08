@@ -64,7 +64,7 @@
 
     // ********** OHLC TOOLTIP FOR CONTROLS LINE **********
     // Get the tooltip element
-    const toolTip = document.getElementById("chart-tooltip");
+    const toolTip = document.getElementById("chart-ohlc-info");
 
     // Subscribe to crosshair movements
     chart.subscribeCrosshairMove((param) => {
@@ -136,7 +136,7 @@
     // Track current data to avoid duplicates and handle updates properly
     let currentData = new Map(); // time -> candle data
     let lastBarTime = null;
-    let currentStock = null; // Track the currently displayed stock
+    let currentInstrument = null; // Track the currently displayed instrument
     let ema20Data = new Map(); // time -> ema20 value for incremental updates
 
     // keep a quick cache of the latest EMA and its time to avoid sorting each tick
@@ -361,9 +361,9 @@
       ema20Series.update({ time: newTime, value: newEMA });
     }
 
-    async function fetchHistory(stock) {
+    async function fetchHistory(instrument) {
       const res = await fetch(
-        `/history/${encodeURIComponent(stock)}?limit=900`
+        `/history/${encodeURIComponent(instrument)}?limit=900`
       );
       if (!res.ok) throw new Error("history fetch failed: " + res.status);
       return await res.json();
@@ -373,7 +373,7 @@
     function clearChartData() {
       currentData.clear();
       lastBarTime = null;
-      ema20Data.clear(); // Clear EMA20 data when switching stocks
+      ema20Data.clear(); // Clear EMA20 data when switching instruments
       lastEMAValue = null;
       lastEMATime = null;
       candleSeries.setData([]);
@@ -421,7 +421,7 @@
       };
     }
 
-    // grouping state per stock (no markers)
+    // grouping state per instrument (no markers)
     const groupingState = {
       sessionTZ: null,
       sessionOpenMinutes: null,
@@ -435,21 +435,21 @@
     // map for quick tooltip lookup: time -> bar_group_count
     const barGroupMap = new Map();
 
-    // load warrant_list.json (user requested this is exposed at /warrant_list.json)
+    // load instrument_list.json (user requested this is exposed at /instrument_list.json)
     let warrantMap = null;
 
-    // ---------------- NEW: populate select with keys from warrant_list.json ------------
-    async function populateStockSelect() {
-      const sel = document.getElementById("stock");
+    // ---------------- NEW: populate select with keys from instrument_list.json ------------
+    async function populateInstrumentSelect() {
+      const sel = document.getElementById("instrument");
       if (!sel) return;
       try {
         // If we already have warrantMap, reuse
         if (!warrantMap) {
-          const res = await fetch("/warrant_list.json");
+          const res = await fetch("/instrument_list.json");
           if (!res.ok)
-            throw new Error("warrant_list.json fetch failed: " + res.status);
+            throw new Error("instrument_list.json fetch failed: " + res.status);
           warrantMap = await res.json();
-          log("Loaded warrant JSON from /warrant_list.json (populate)");
+          log("Loaded warrant JSON from /instrument_list.json (populate)");
         }
 
         // clear existing options
@@ -460,7 +460,7 @@
         if (keys.length === 0) {
           const opt = document.createElement("option");
           opt.value = "";
-          opt.textContent = "(no stocks)";
+          opt.textContent = "(no instruments)";
           sel.appendChild(opt);
           return;
         }
@@ -477,7 +477,7 @@
           sel.value = keys[0];
         }
       } catch (e) {
-        warn("populateStockSelect failed:", e);
+        warn("populateInstrumentSelect failed:", e);
       }
     }
     // -------------------------------------------------------------------------------
@@ -485,27 +485,27 @@
     async function loadWarrantJSON() {
       try {
         if (warrantMap) return warrantMap;
-        const res = await fetch("/warrant_list.json");
+        const res = await fetch("/instrument_list.json");
         if (!res.ok)
-          throw new Error("warrant_list.json fetch failed: " + res.status);
+          throw new Error("instrument_list.json fetch failed: " + res.status);
         const data = await res.json();
-        log("Loaded warrant JSON from /warrant_list.json");
+        log("Loaded warrant JSON from /instrument_list.json");
         warrantMap = data;
         return data;
       } catch (e) {
         warn(
-          "Could not load /warrant_list.json; session grouping will be disabled for this stock."
+          "Could not load /instrument_list.json; session grouping will be disabled for this instrument."
         );
         return null;
       }
     }
 
     // configure session from warrant entry
-    function setStockSessionConfigFromWarrant(stockId) {
+    function setInstrumentSessionConfigFromWarrant(instrumentId) {
       if (!warrantMap) return;
-      const conf = warrantMap[stockId];
+      const conf = warrantMap[instrumentId];
       if (!conf) {
-        warn("No warrant entry for", stockId);
+        warn("No warrant entry for", instrumentId);
         groupingState.sessionTZ = null;
         groupingState.sessionOpenMinutes = null;
         groupingState.sessionCloseMinutes = null;
@@ -516,7 +516,7 @@
       groupingState.sessionCloseMinutes = hhmmToMinutes(conf.market_close);
       log(
         "Session config:",
-        stockId,
+        instrumentId,
         groupingState.sessionTZ,
         groupingState.sessionOpenMinutes,
         groupingState.sessionCloseMinutes
@@ -691,23 +691,23 @@
     // ----------------- END: session & grouping helpers -----------------
 
     // helper to load history and setData on the candlestick series
-    async function loadHistoryFor(stock) {
+    async function loadHistoryFor(instrument) {
       document.getElementById("status").textContent = "Loading history...";
       try {
-        // Clear previous data if switching stocks
-        if (currentStock !== stock) {
+        // Clear previous data if switching instruments
+        if (currentInstrument !== instrument) {
           clearChartData();
-          currentStock = stock;
+          currentInstrument = instrument;
         }
 
         // ensure warrant JSON loaded BEFORE configuring session & grouping
         if (!warrantMap) {
           warrantMap = await loadWarrantJSON();
         }
-        // configure session params for this stock (may clear grouping)
-        setStockSessionConfigFromWarrant(stock);
+        // configure session params for this instrument (may clear grouping)
+        setInstrumentSessionConfigFromWarrant(instrument);
 
-        const bars = await fetchHistory(stock);
+        const bars = await fetchHistory(instrument);
         const barData = bars
           .map((b) => {
             const time = isoToLWTime(b.start_time);
@@ -733,7 +733,7 @@
 
         // Clear current data and repopulate
         currentData.clear();
-        ema20Data.clear(); // Clear EMA20 data for new stock
+        ema20Data.clear(); // Clear EMA20 data for new instrument
         barData.forEach((bar) => {
           currentData.set(bar.time, bar);
         });
@@ -778,7 +778,7 @@
           groupingState.bar_group_count = 0;
           groupingState.currentDay = null;
           sortedData.forEach((bar) => {
-            // Only grouping for bars that fall inside trading session for the currentStock
+            // Only grouping for bars that fall inside trading session for the currentInstrument
             processBarForGrouping(bar);
           });
           // ---------------- end grouping for history ------------------
@@ -787,7 +787,7 @@
         // After loading history, ensure countdown if market open (countdown is default display when open)
         ensureMarketCountdown();
 
-        log("History loaded for", stock, barData.length);
+        log("History loaded for", instrument, barData.length);
         return barData.length;
       } catch (err) {
         error("History load failed:", err);
@@ -798,13 +798,13 @@
     }
 
     // NEW: auto-reload when select changes
-    const stockSelect = document.getElementById("stock");
-    if (stockSelect) {
-      stockSelect.addEventListener("change", async (ev) => {
-        const newStock = ev.target.value;
-        if (!newStock) return;
+    const instrumentSelect = document.getElementById("instrument");
+    if (instrumentSelect) {
+      instrumentSelect.addEventListener("change", async (ev) => {
+        const newInstrument = ev.target.value;
+        if (!newInstrument) return;
         try {
-          await loadHistoryFor(newStock);
+          await loadHistoryFor(newInstrument);
         } catch (e) {
           // loadHistoryFor logs its own errors
         }
@@ -836,12 +836,12 @@
           try {
             const msg = JSON.parse(evt.data);
 
-            // CRITICAL FIX: Only process messages for the currently displayed stock
-            if (!msg || msg.stock !== currentStock) {
+            // CRITICAL FIX: Only process messages for the currently displayed instrument
+            if (!msg || msg.instrument !== currentInstrument) {
               // Log for debugging (optional)
-              if (msg && msg.stock) {
+              if (msg && msg.instrument) {
                 log(
-                  `Ignoring message for stock: ${msg.stock}, current: ${currentStock}`
+                  `Ignoring message for instrument: ${msg.instrument}, current: ${currentInstrument}`
                 );
               }
               return;
@@ -1117,18 +1117,18 @@
     }
 
     // ------------- AUTO-LOAD on first page open -------------
-    // Immediately load history for the currently selected stock (no button click).
+    // Immediately load history for the currently selected instrument (no button click).
     // This happens once during initialization.
     (async () => {
-      // First populate the select with warrant keys, then pick initialStock from select.value
-      await populateStockSelect();
+      // First populate the select with warrant keys, then pick initialInstrument from select.value
+      await populateInstrumentSelect();
 
-      const initialStock = document.getElementById("stock").value;
-      currentStock = initialStock; // Set the initial stock
+      const initialInstrument = document.getElementById("instrument").value;
+      currentInstrument = initialInstrument; // Set the initial instrument
       try {
         // load warrant JSON early so session config exists before history grouping
         warrantMap = warrantMap || (await loadWarrantJSON());
-        await loadHistoryFor(initialStock);
+        await loadHistoryFor(initialInstrument);
       } catch (e) {
         // already logged in loadHistoryFor; continue to setup WS regardless so
         // live ticks can still arrive and update the chart.
