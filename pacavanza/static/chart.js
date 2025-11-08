@@ -25,8 +25,8 @@
           background: { type: "Solid", color: "#0b1220" },
         },
         grid: {
-          vertLines: { color: "#727272ff" },
-          horzLines: { color: "#727272ff" },
+          vertLines: { color: "transparent" },
+          horzLines: { color: "transparent" },
         },
         rightPriceScale: { scaleMargins: { top: 0.2, bottom: 0.2 } },
         timeScale: {
