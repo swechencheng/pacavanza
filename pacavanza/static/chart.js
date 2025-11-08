@@ -363,7 +363,7 @@
 
     async function fetchHistory(stock) {
       const res = await fetch(
-        `/history/${encodeURIComponent(stock)}?limit=500`
+        `/history/${encodeURIComponent(stock)}?limit=900`
       );
       if (!res.ok) throw new Error("history fetch failed: " + res.status);
       return await res.json();
