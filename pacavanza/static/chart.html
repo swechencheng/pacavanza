@@ -14,35 +14,62 @@
         font-family: system-ui, -apple-system, "Segoe UI", Roboto,
           "Helvetica Neue", Arial;
       }
+
+      .buy {
+        color: #4caf50;
+        font-weight: 600;
+      }
+
+      .sell {
+        color: #f44336;
+        font-weight: 600;
+      }
+      .volume-input {
+        width: 60px;
+        background: #0f172a; /* deep dark tone */
+        border: 1px solid #333;
+        color: #ddd;
+        padding: 4px 6px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-family: monospace;
+        outline: none;
+        transition: border 0.2s, box-shadow 0.2s;
+      }
+
+      .volume-input:hover {
+        border-color: #444;
+      }
+
+      .volume-input:focus {
+        border-color: #4caf50; /* match buy color */
+        box-shadow: 0 0 4px #4caf50;
+      }
+
       #chart {
         height: 80vh;
         width: 100%;
       }
+
       #controls {
-        padding: 6px;
-      }
-      /* moved status to fixed top-right */
-      #status {
-        position: fixed;
-        top: 8px;
-        right: 12px;
-        background: rgba(26, 36, 61, 0.9);
-        color: #ffcc66;
         padding: 6px 10px;
-        border-radius: 6px;
-        font-weight: 600;
-        z-index: 5000;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
-        pointer-events: none; /* avoid blocking clicks */
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
       }
-      .small {
-        font-size: 12px;
-        color: #888;
-        margin-left: 6px;
+
+      #controls select,
+      #controls input {
+        background: #1a243d;
+        border: 1px solid #333;
+        color: #ddd;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 14px;
       }
-      /* ADD TOOLTIP STYLING FOR CONTROLS LINE */
+
       #chart-tooltip {
-        margin-left: 12px;
         padding: 4px 8px;
         background: #1a243d;
         border-radius: 4px;
@@ -50,20 +77,62 @@
         font-family: monospace;
       }
 
-      /* keep controls on the left (status is fixed separately) */
-      #controls .left {
-        display: inline-block;
-        vertical-align: middle;
+      #trading-panel {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-left: auto; /* push to right */
       }
 
-      /* small responsive tweak so controls don't overlap fixed status on small screens */
-      @media (max-width: 520px) {
+      #trading-panel button {
+        background: #1a243d;
+        border: 1px solid #333;
+        color: #ddd;
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+
+      #trading-panel button:hover {
+        background: #273455;
+      }
+
+      #status {
+        position: fixed;
+        top: 8px;
+        right: 12px;
+        background: rgba(26, 36, 61, 0.9);
+        color: #ffcc66;
+        padding: 4px 6px;
+        border-radius: 6px;
+        font-weight: 600;
+        z-index: 5000;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+        pointer-events: none;
+      }
+
+      #trade-info {
+        position: fixed;
+        top: 40px;
+        right: 12px;
+        background: rgba(26, 36, 61, 0.9);
+        color: #ddd;
+        padding: 4px 6px;
+        border-radius: 6px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+        pointer-events: none;
+      }
+
+      @media (max-width: 600px) {
         #controls {
-          padding-right: 96px; /* leave room for fixed status */
+          flex-direction: column;
+          align-items: flex-start;
         }
-        #chart-tooltip {
-          display: block;
-          margin-top: 6px;
+        #trading-panel {
+          width: 100%;
+          justify-content: flex-start;
+          margin-left: 0;
         }
       }
     </style>
@@ -72,21 +141,40 @@
   </head>
   <body>
     <div id="controls">
-      <div class="left">
-        <label>
-          <select id="stock">
-            <!-- options will be inserted by chart.js on load -->
-          </select>
-        </label>
-      </div>
+      <label>
+        <select id="stock"></select>
+      </label>
       <span id="chart-tooltip"></span>
+    </div>
+
+    <div id="trading-panel">
+      <label>
+        <input
+          type="number"
+          id="order-volume"
+          value="1"
+          min="1"
+          class="volume-input"
+        />
+      </label>
+      <button id="btn-buy-stop"><span class="buy">B</span> Stop</button>
+      <button id="btn-sell-stop"><span class="sell">S</span> Stop</button>
+      <button id="btn-late-buy-stop">
+        <span class="buy">B</span> Stop Late
+      </button>
+      <button id="btn-late-sell-stop">
+        <span class="sell">S</span> Stop Late
+      </button>
+      <button id="btn-market-buy"><span class="buy">B</span> Market</button>
+      <button id="btn-market-sell"><span class="sell">S</span> Market</button>
     </div>
 
     <div id="chart"></div>
 
-    <!-- status moved to top-right but kept same id for JS compatibility -->
     <span id="status">Disconnected</span>
+    <span id="trade-info">...</span>
 
     <script src="/static/chart.js"></script>
+    <script src="/static/trading.js"></script>
   </body>
 </html>
