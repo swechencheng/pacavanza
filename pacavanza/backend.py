@@ -277,9 +277,13 @@ def create_app(
                 try:
                     await task
                 except asyncio.CancelledError:
-                    LOGGER.debug("Redis subscriber task cancelled cleanly during shutdown")
+                    LOGGER.debug(
+                        "Redis subscriber task cancelled cleanly during shutdown"
+                    )
                 except Exception:
-                    LOGGER.exception("Error awaiting redis subscriber task during shutdown")
+                    LOGGER.exception(
+                        "Error awaiting redis subscriber task during shutdown"
+                    )
             # close redis client using aclose() to avoid deprecation
             try:
                 await redis_client.aclose()
@@ -299,7 +303,7 @@ def create_app(
         return FileResponse(
             ROOT / "instrument_list.json",
             media_type="application/json",
-            headers={"Cache-Control": "public, max-age=3600"}
+            headers={"Cache-Control": "public, max-age=3600"},
         )
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools

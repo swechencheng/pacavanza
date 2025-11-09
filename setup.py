@@ -14,7 +14,5 @@ setuptools.setup(
         "fastapi",
         "uvicorn",
     ],
-    entry_points={
-        "console_scripts": ["run-pacavanza = pacavanza.backend:main"]
-    },
+    entry_points={"console_scripts": ["run-pacavanza = pacavanza.backend:main"]},
 )
