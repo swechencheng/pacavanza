@@ -22,8 +22,10 @@
   const btnMarketBuy = document.getElementById("btn-market-buy");
   const btnMarketSell = document.getElementById("btn-market-sell");
   const btnBuyStop = document.getElementById("btn-buy-stop");
+  const btnCancelBuyStop = document.getElementById("btn-cancel-buy-stop");
   const btnLateBuyStop = document.getElementById("btn-late-buy-stop");
   const btnSellStop = document.getElementById("btn-sell-stop");
+  const btnCancelSellStop = document.getElementById("btn-cancel-sell-stop");
   const btnLateSellStop = document.getElementById("btn-late-sell-stop");
 
   function showInfo(txt, timeout = 4000) {
@@ -130,6 +132,18 @@
     });
   }
 
+  if (btnCancelBuyStop) {
+    btnCancelBuyStop.addEventListener("click", async () => {
+      const p = getInstrumentAndVolume();
+      if (!p) return;
+      // scheduled: server waits for next completed bar
+      await callTrade("/trade/cancel_buy_stop", {
+        instrumentId: p.instrumentId,
+        volume: p.volume,
+      });
+    });
+  }
+
   if (btnLateBuyStop) {
     btnLateBuyStop.addEventListener("click", async () => {
       const p = getInstrumentAndVolume();
@@ -146,6 +160,17 @@
       const p = getInstrumentAndVolume();
       if (!p) return;
       await callTrade("/trade/sell_stop", {
+        instrumentId: p.instrumentId,
+        volume: p.volume,
+      });
+    });
+  }
+
+  if (btnCancelSellStop) {
+    btnCancelSellStop.addEventListener("click", async () => {
+      const p = getInstrumentAndVolume();
+      if (!p) return;
+      await callTrade("/trade/cancel_sell_stop", {
         instrumentId: p.instrumentId,
         volume: p.volume,
       });

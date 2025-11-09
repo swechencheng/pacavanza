@@ -104,6 +104,8 @@ class AvanzaTrading:
         # map-protection locks for creating per-instrument locks safely
         self._bars_map_lock: asyncio.Lock = bars_map_lock or asyncio.Lock()
         self._metadata_map_lock: asyncio.Lock = metadata_map_lock or asyncio.Lock()
+        # scheduled tasks per instrument: { instrument_id: { "buy_stop": {"task": task,"bar_start": dt}, "sell_stop": {...} } }
+        self._scheduled_tasks: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     # helper: validate instrument exists in instrument_list.json.
     def _get_instrument_info(self, instrument_id: str) -> Dict[str, Any]:
@@ -285,6 +287,70 @@ class AvanzaTrading:
         order_out.setdefault("ts", datetime.now(tz=timezone.utc).isoformat())
         self.logger.info("Simulated order: %s", json.dumps(order_out, default=str))
 
+    # scheduled-task helpers: set/clear/check under per-instrument bars lock
+    async def _get_scheduled_for(self, instrument_id: str) -> Dict[str, Dict[str, Any]]:
+        # ensure dict exists
+        lock = await self._get_bars_lock(instrument_id)
+        async with lock:
+            d = self._scheduled_tasks.get(instrument_id)
+            if d is None:
+                d = {}
+                self._scheduled_tasks[instrument_id] = d
+            # return a shallow copy to avoid external mutation
+            return dict(d)
+
+    async def _set_scheduled(
+        self, instrument_id: str, kind: str, bar_start: datetime, task: asyncio.Task
+    ):
+        lock = await self._get_bars_lock(instrument_id)
+        async with lock:
+            d = self._scheduled_tasks.get(instrument_id)
+            if d is None:
+                d = {}
+                self._scheduled_tasks[instrument_id] = d
+            d[kind] = {"task": task, "bar_start": bar_start}
+
+    async def _clear_scheduled(self, instrument_id: str, kind: str):
+        lock = await self._get_bars_lock(instrument_id)
+        async with lock:
+            d = self._scheduled_tasks.get(instrument_id)
+            if not d:
+                return
+            if kind in d:
+                # attempt cancellation removal only; do not cancel if already running
+                d.pop(kind, None)
+            if not d:
+                # cleanup empty map
+                self._scheduled_tasks.pop(instrument_id, None)
+
+    async def _cancel_scheduled(self, instrument_id: str, kind: str) -> bool:
+        """
+        Cancel scheduled task for instrument/kind if present and not done.
+        Returns True if we cancelled something, False otherwise.
+        """
+        lock = await self._get_bars_lock(instrument_id)
+        async with lock:
+            d = self._scheduled_tasks.get(instrument_id)
+            if not d:
+                return False
+            entry = d.get(kind)
+            if not entry:
+                return False
+            task: asyncio.Task = entry.get("task")
+            if task and not task.done():
+                task.cancel()
+                # remove entry
+                d.pop(kind, None)
+                if not d:
+                    self._scheduled_tasks.pop(instrument_id, None)
+                return True
+            else:
+                # task already done
+                d.pop(kind, None)
+                if not d:
+                    self._scheduled_tasks.pop(instrument_id, None)
+                return False
+
     # Public API methods used by endpoints
 
     async def place_market_buy(
@@ -338,20 +404,41 @@ class AvanzaTrading:
         - Use profit ratio 2:1 to compute take-profit and place sell limit:
           take-profit = high_last_completed + 2*(high_last_completed - low_swing_leg) - 1 tick_size.
         - Log orders.
+        - If a buy_stop is already scheduled for the same instrument for the same next bar boundary, ignore duplicate calls.
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
 
+        # compute next bar start aligned to 5-minute grid (bar interval is 5m)
+        now = datetime.now(tz=timezone.utc)
+        minute = (now.minute // 5) * 5
+        bar_start = now.replace(minute=minute, second=0, microsecond=0)
+        # next bar start:
+        next_bar_start = bar_start + timedelta(minutes=5)
+
+        # check if already scheduled for this instrument/kind at the same bar
+        existing = await self._get_scheduled_for(instrument_id)
+        entry = existing.get("buy_stop")
+        if (
+            entry
+            and entry.get("bar_start") == next_bar_start
+            and not entry.get("task").done()
+        ):
+            return {
+                "status": "already_scheduled",
+                "note": "buy_stop already scheduled for this bar",
+            }
+
         # schedule background task that waits until the current bar completes
         async def _task():
             try:
-                # compute next bar start aligned to 5-minute grid (bar interval is 5m)
-                now = datetime.now(tz=timezone.utc)
-                minute = (now.minute // 5) * 5
-                bar_start = now.replace(minute=minute, second=0, microsecond=0)
-                # next bar start:
-                next_bar_start = bar_start + timedelta(minutes=5)
-                sleep_seconds = (next_bar_start - now).total_seconds()
+                now_inner = datetime.now(tz=timezone.utc)
+                minute_inner = (now_inner.minute // 5) * 5
+                bar_start_inner = now_inner.replace(
+                    minute=minute_inner, second=0, microsecond=0
+                )
+                next_bar_start_inner = bar_start_inner + timedelta(minutes=5)
+                sleep_seconds = (next_bar_start_inner - now_inner).total_seconds()
                 if sleep_seconds > 0:
                     await asyncio.sleep(sleep_seconds)
                 # now exactly at 0 second of new bar; take a snapshot
@@ -420,14 +507,19 @@ class AvanzaTrading:
                 self._log_order(buy_order)
                 self._log_order(sell_stop_order)
                 self._log_order(take_profit_order)
+            except asyncio.CancelledError:
+                self.logger.info("Scheduled buy_stop cancelled for %s", instrument_id)
+                raise
             except Exception as e:
                 self.logger.exception("Error in scheduled buy_stop: %s", e)
+            finally:
+                # cleanup scheduled entry
+                await self._clear_scheduled(instrument_id, "buy_stop")
 
-        asyncio.create_task(_task())
-        return {
-            "status": "scheduled",
-            "note": "buy_stop scheduled at next bar boundary",
-        }
+        # create the asyncio task and register it
+        task = asyncio.create_task(_task())
+        await self._set_scheduled(instrument_id, "buy_stop", next_bar_start, task)
+        return {"status": "scheduled", "bar_start": next_bar_start.isoformat()}
 
     async def late_buy_stop(self, instrument_id: str, volume: float) -> Dict[str, Any]:
         """
@@ -513,18 +605,40 @@ class AvanzaTrading:
         Place a sell stop order:
         - Wait for current bar to complete. Exactly at new bar 0s, stop price = 1 tick_size below low of last completed bar.
         - Place sell stop order immediately at that stop price.
+        - If a sell_stop is already scheduled for the same instrument for the same next bar boundary, ignore duplicate calls.
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
 
+        # compute next bar start aligned to 5-minute grid (bar interval is 5m)
+        now = datetime.now(tz=timezone.utc)
+        minute = (now.minute // 5) * 5
+        bar_start = now.replace(minute=minute, second=0, microsecond=0)
+        # next bar start:
+        next_bar_start = bar_start + timedelta(minutes=5)
+
+        # check if already scheduled for this instrument/kind at the same bar
+        existing = await self._get_scheduled_for(instrument_id)
+        entry = existing.get("sell_stop")
+        if (
+            entry
+            and entry.get("bar_start") == next_bar_start
+            and not entry.get("task").done()
+        ):
+            return {
+                "status": "already_scheduled",
+                "note": "sell_stop already scheduled for this bar",
+            }
+
         async def _task():
             try:
-                # compute next bar start aligned to 5-minute grid
-                now = datetime.now(tz=timezone.utc)
-                minute = (now.minute // 5) * 5
-                bar_start = now.replace(minute=minute, second=0, microsecond=0)
-                next_bar_start = bar_start + timedelta(minutes=5)
-                sleep_seconds = (next_bar_start - now).total_seconds()
+                now_inner = datetime.now(tz=timezone.utc)
+                minute_inner = (now_inner.minute // 5) * 5
+                bar_start_inner = now_inner.replace(
+                    minute=minute_inner, second=0, microsecond=0
+                )
+                next_bar_start_inner = bar_start_inner + timedelta(minutes=5)
+                sleep_seconds = (next_bar_start_inner - now_inner).total_seconds()
                 if sleep_seconds > 0:
                     await asyncio.sleep(sleep_seconds)
                 lst = await self._get_snapshot(instrument_id)
@@ -550,14 +664,18 @@ class AvanzaTrading:
                     "note": "scheduled sell stop (placed at new bar 0s)",
                 }
                 self._log_order(sell_order)
+            except asyncio.CancelledError:
+                self.logger.info("Scheduled sell_stop cancelled for %s", instrument_id)
+                raise
             except Exception as e:
                 self.logger.exception("Error in scheduled sell_stop: %s", e)
+            finally:
+                # cleanup scheduled entry
+                await self._clear_scheduled(instrument_id, "sell_stop")
 
-        asyncio.create_task(_task())
-        return {
-            "status": "scheduled",
-            "note": "sell_stop scheduled at next bar boundary",
-        }
+        task = asyncio.create_task(_task())
+        await self._set_scheduled(instrument_id, "sell_stop", next_bar_start, task)
+        return {"status": "scheduled", "bar_start": next_bar_start.isoformat()}
 
     async def late_sell_stop(self, instrument_id: str, volume: float) -> Dict[str, Any]:
         """
@@ -590,6 +708,15 @@ class AvanzaTrading:
         }
         self._log_order(sell_order)
         return {"status": "placed", "order": sell_order}
+
+    # cancellation API helpers
+    async def cancel_buy_stop(self, instrument_id: str) -> Dict[str, Any]:
+        cancelled = await self._cancel_scheduled(instrument_id, "buy_stop")
+        return {"cancelled": cancelled}
+
+    async def cancel_sell_stop(self, instrument_id: str) -> Dict[str, Any]:
+        cancelled = await self._cancel_scheduled(instrument_id, "sell_stop")
+        return {"cancelled": cancelled}
 
 
 def create_app(
@@ -1130,6 +1257,41 @@ def create_app(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         res = await trading.late_sell_stop(instrument_id, volume)
+        return JSONResponse(content=res)
+
+    # --------------------
+    # Cancellation endpoints
+    # --------------------
+    @app.post("/trade/cancel_buy_stop")
+    async def cancel_buy_stop(req: Request):
+        """
+        Cancel a scheduled buy_stop for instrument if it exists and hasn't executed yet.
+        """
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        if instrument_id not in instrument_list:
+            raise HTTPException(
+                status_code=400, detail="instrumentId not found in instrument_list.json"
+            )
+        res = await trading.cancel_buy_stop(instrument_id)
+        return JSONResponse(content=res)
+
+    @app.post("/trade/cancel_sell_stop")
+    async def cancel_sell_stop(req: Request):
+        """
+        Cancel a scheduled sell_stop for instrument if it exists and hasn't executed yet.
+        """
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        if instrument_id not in instrument_list:
+            raise HTTPException(
+                status_code=400, detail="instrumentId not found in instrument_list.json"
+            )
+        res = await trading.cancel_sell_stop(instrument_id)
         return JSONResponse(content=res)
 
     return app
