@@ -6,11 +6,11 @@
 // - handle button clicks to call trade endpoints and show results in #trade-info
 
 (async function () {
-  // load warrant list (for order_volume defaults)
-  let warrantList = {};
+  // load instrument list (for order_volume defaults)
+  let instrumentList = {};
   try {
     const r = await fetch("/instrument_list.json");
-    if (r.ok) warrantList = await r.json();
+    if (r.ok) instrumentList = await r.json();
   } catch (e) {
     console.warn("Could not load instrument_list.json", e);
   }
@@ -41,7 +41,7 @@
     if (!instrumentSelect || !volInput) return;
     const inst = instrumentSelect.value;
     if (!inst) return;
-    const info = warrantList[inst];
+    const info = instrumentList[inst];
     if (info && info.order_volume !== undefined) {
       volInput.value = info.order_volume;
     }

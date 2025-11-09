@@ -436,27 +436,27 @@
     const barGroupMap = new Map();
 
     // load instrument_list.json (user requested this is exposed at /instrument_list.json)
-    let warrantMap = null;
+    let instrumentMap = null;
 
     // ---------------- NEW: populate select with keys from instrument_list.json ------------
     async function populateInstrumentSelect() {
       const sel = document.getElementById("instrument");
       if (!sel) return;
       try {
-        // If we already have warrantMap, reuse
-        if (!warrantMap) {
+        // If we already have instrumentMap, reuse
+        if (!instrumentMap) {
           const res = await fetch("/instrument_list.json");
           if (!res.ok)
             throw new Error("instrument_list.json fetch failed: " + res.status);
-          warrantMap = await res.json();
-          log("Loaded warrant JSON from /instrument_list.json (populate)");
+          instrumentMap = await res.json();
+          log("Loaded instrument JSON from /instrument_list.json (populate)");
         }
 
         // clear existing options
         sel.innerHTML = "";
 
-        // Insert keys from warrantMap as options (text==key, value==key)
-        const keys = Object.keys(warrantMap);
+        // Insert keys from instrumentMap as options (text==key, value==key)
+        const keys = Object.keys(instrumentMap);
         if (keys.length === 0) {
           const opt = document.createElement("option");
           opt.value = "";
@@ -482,15 +482,15 @@
     }
     // -------------------------------------------------------------------------------
 
-    async function loadWarrantJSON() {
+    async function loadInstrumentJSON() {
       try {
-        if (warrantMap) return warrantMap;
+        if (instrumentMap) return instrumentMap;
         const res = await fetch("/instrument_list.json");
         if (!res.ok)
           throw new Error("instrument_list.json fetch failed: " + res.status);
         const data = await res.json();
-        log("Loaded warrant JSON from /instrument_list.json");
-        warrantMap = data;
+        log("Loaded instrument JSON from /instrument_list.json");
+        instrumentMap = data;
         return data;
       } catch (e) {
         warn(
@@ -500,12 +500,12 @@
       }
     }
 
-    // configure session from warrant entry
-    function setInstrumentSessionConfigFromWarrant(instrumentId) {
-      if (!warrantMap) return;
-      const conf = warrantMap[instrumentId];
+    // configure session from instrument entry
+    function setInstrumentSessionConfigFromInstrument(instrumentId) {
+      if (!instrumentMap) return;
+      const conf = instrumentMap[instrumentId];
       if (!conf) {
-        warn("No warrant entry for", instrumentId);
+        warn("No instrument entry for", instrumentId);
         groupingState.sessionTZ = null;
         groupingState.sessionOpenMinutes = null;
         groupingState.sessionCloseMinutes = null;
@@ -700,12 +700,12 @@
           currentInstrument = instrument;
         }
 
-        // ensure warrant JSON loaded BEFORE configuring session & grouping
-        if (!warrantMap) {
-          warrantMap = await loadWarrantJSON();
+        // ensure instrument JSON loaded BEFORE configuring session & grouping
+        if (!instrumentMap) {
+          instrumentMap = await loadInstrumentJSON();
         }
         // configure session params for this instrument (may clear grouping)
-        setInstrumentSessionConfigFromWarrant(instrument);
+        setInstrumentSessionConfigFromInstrument(instrument);
 
         const bars = await fetchHistory(instrument);
         const barData = bars
@@ -1120,14 +1120,14 @@
     // Immediately load history for the currently selected instrument (no button click).
     // This happens once during initialization.
     (async () => {
-      // First populate the select with warrant keys, then pick initialInstrument from select.value
+      // First populate the select with instrument keys, then pick initialInstrument from select.value
       await populateInstrumentSelect();
 
       const initialInstrument = document.getElementById("instrument").value;
       currentInstrument = initialInstrument; // Set the initial instrument
       try {
-        // load warrant JSON early so session config exists before history grouping
-        warrantMap = warrantMap || (await loadWarrantJSON());
+        // load instrument JSON early so session config exists before history grouping
+        instrumentMap = instrumentMap || (await loadInstrumentJSON());
         await loadHistoryFor(initialInstrument);
       } catch (e) {
         // already logged in loadHistoryFor; continue to setup WS regardless so
