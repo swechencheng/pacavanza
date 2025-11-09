@@ -38,7 +38,6 @@ class MultiMarketCollector:
 
     def __init__(
         self,
-        instrument_ids,
         interval_seconds,
         secret_path="./pacavanza/../secret.json",
         instrument_list_path=INSTRUMENT_LIST_PATH,
@@ -53,7 +52,7 @@ class MultiMarketCollector:
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
         self.instrument_list = json.load(open(instrument_list_path))
-        self.instrument_ids = instrument_ids
+        self.instrument_ids = self.instrument_list.keys()
 
         # per-instrument storage objects
         # If caller provided existing InstrumentData instances, use them so the
@@ -62,28 +61,26 @@ class MultiMarketCollector:
         if instrument_datas is not None:
             # only pick the instruments we were asked to collect
             self.instrument_data = {
-                instrument_id: instrument_datas[instrument_id] for instrument_id in instrument_ids
+                sid: instrument_datas[sid] for sid in self.instrument_ids
             }
         else:
             self.instrument_data = {
-                instrument_id: InstrumentData(interval_seconds, instrument_id)
-                for instrument_id in instrument_ids
+                sid: InstrumentData(interval_seconds, sid)
+                for sid in self.instrument_ids
             }
 
         # per-instrument metadata
-        self.last_buy_price = {sid: None for sid in instrument_ids}
-        self.last_sell_price = {sid: None for sid in instrument_ids}
+        self.last_buy_price = {sid: None for sid in self.instrument_ids}
+        self.last_sell_price = {sid: None for sid in self.instrument_ids}
 
-        # validate warrant list (and resolve warrant ids)
-        self.warrant_ids = {}
-        for sid in instrument_ids:
-            if sid not in self.instrument_list:
-                raise ValueError(f"Instrument ID {sid} not found in warrant list")
-            info = self.instrument_list[sid]
-            wid = info.get("ID")
-            if not wid:
-                raise ValueError(f"Warrant ID not found for {sid}")
-            self.warrant_ids[sid] = wid
+        # validate product list (and resolve product ids)
+        self.product_ids = {}
+        for sid in self.instrument_ids:
+            info = self.instrument_list.get(sid, {})
+            pid = info.get("ID")
+            if not pid:
+                raise ValueError(f"Product ID not found for {sid}")
+            self.product_ids[sid] = pid
 
         # track tasks & clients for graceful shutdown
         self._tasks = []  # list of asyncio.Task objects we create
@@ -262,15 +259,25 @@ class MultiMarketCollector:
                 # fetch current bar & last completed bar for the instrument in a thread-safe manner
                 with self.instrument_data[instrument_id].lock:
                     curr = copy.deepcopy(
-                        self.instrument_data[instrument_id].current_bars.get(instrument_id)
+                        self.instrument_data[instrument_id].current_bars.get(
+                            instrument_id
+                        )
                     )
                     latest_completed = (
                         copy.deepcopy(
-                            self.instrument_data[instrument_id].completed_ohlc[instrument_id][-1]
+                            self.instrument_data[instrument_id].completed_ohlc[
+                                instrument_id
+                            ][-1]
                         )
                         if (
-                            self.instrument_data[instrument_id].completed_ohlc.get(instrument_id)
-                            and len(self.instrument_data[instrument_id].completed_ohlc[instrument_id])
+                            self.instrument_data[instrument_id].completed_ohlc.get(
+                                instrument_id
+                            )
+                            and len(
+                                self.instrument_data[instrument_id].completed_ohlc[
+                                    instrument_id
+                                ]
+                            )
                             > 0
                         )
                         else None
@@ -504,7 +511,7 @@ class MultiMarketCollector:
             except Exception as e:
                 LOGGER.error(f"[{sid}] Failed to restore current snapshot: {e}")
 
-    async def _run_sse_client_loop(self, avanza, instrument_id, warrant_id):
+    async def _run_sse_client_loop(self, avanza, instrument_id, product_id):
         while True:
             # if shutdown requested, exit loop instead of creating new clients
             if self._shutting_down:
@@ -515,11 +522,13 @@ class MultiMarketCollector:
 
             client = None
             try:
-                client = SSEClient(avanza, self.quote_base_url + warrant_id)
+                client = SSEClient(avanza, self.quote_base_url + product_id)
                 self._sse_clients[instrument_id] = client
-                client.add_listener(partial(self._callback_quote_web_push, instrument_id))
+                client.add_listener(
+                    partial(self._callback_quote_web_push, instrument_id)
+                )
                 LOGGER.info(
-                    f"[{instrument_id}] Starting SSE client for warrant {warrant_id}"
+                    f"[{instrument_id}] Starting SSE client for product {product_id}"
                 )
                 await client.start()
                 LOGGER.info(
@@ -607,8 +616,8 @@ class MultiMarketCollector:
 
                 # start per-instrument SSE loops (each loop handles its own reconnects)
                 self._tasks = []
-                for sid, wid in self.warrant_ids.items():
-                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, wid))
+                for sid, pid in self.product_ids.items():
+                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, pid))
                     self._tasks.append(t)
 
                 # Wait for all tasks (they are infinite loops that only stop on unexpected error)
@@ -893,25 +902,12 @@ def parse_args():
             )
             i += 1
 
-    try:
-        with open(INSTRUMENT_LIST_PATH, "r") as f:
-            wl = json.load(f)
-        instruments = list(wl.keys())
-    except Exception as e:
-        LOGGER.error(f"Failed to read instrument_list from {INSTRUMENT_LIST_PATH}: {e}")
-        sys.exit(1)
-
-    if not instruments:
-        LOGGER.error(f"No warrant ids found in {INSTRUMENT_LIST_PATH}")
-        sys.exit(1)
-    return instruments, interval_str
+    return interval_str
 
 
 if __name__ == "__main__":
-    instrument_ids, interval_str = parse_args()
+    interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
     # Default redis URL and channel; adjust with env vars or CLI wrapper if you want
-    collector = MultiMarketCollector(
-        instrument_ids, interval_seconds, redis_url="redis://localhost:6379/0"
-    )
+    collector = MultiMarketCollector(interval_seconds)
     collector.run()
