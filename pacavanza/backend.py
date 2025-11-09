@@ -134,8 +134,8 @@ def create_app(
                         LOGGER.exception(f"Error handling redis payload: {e}")
 
         except asyncio.CancelledError:
-            LOGGER.info("Redis subscriber task cancelled")
-            raise
+            LOGGER.info("Redis subscriber task cancelled (normal shutdown)")
+            return  # Do not re-raise — clean exit
         except Exception as e:
             LOGGER.exception(f"Redis subscriber error: {e}")
             # Try to reconnect after delay
@@ -276,8 +276,10 @@ def create_app(
                 task.cancel()
                 try:
                     await task
+                except asyncio.CancelledError:
+                    LOGGER.debug("Redis subscriber task cancelled cleanly during shutdown")
                 except Exception:
-                    pass
+                    LOGGER.exception("Error awaiting redis subscriber task during shutdown")
             # close redis client using aclose() to avoid deprecation
             try:
                 await redis_client.aclose()
