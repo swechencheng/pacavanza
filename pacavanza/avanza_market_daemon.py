@@ -308,6 +308,8 @@ class MultiMarketCollector:
                             "market_close": self.instrument_list[instrument_id].get(
                                 "market_close", "23:59"
                             ),
+                            "last_buy": self.last_buy_price[instrument_id],
+                            "last_sell": self.last_sell_price[instrument_id],
                         },
                     }
 
