@@ -840,9 +840,9 @@
             if (!msg || msg.instrument !== currentInstrument) {
               // Log for debugging (optional)
               if (msg && msg.instrument) {
-                log(
-                  `Ignoring message for instrument: ${msg.instrument}, current: ${currentInstrument}`
-                );
+                // log(
+                //   `Ignoring message for instrument: ${msg.instrument}, current: ${currentInstrument}`
+                // );
               }
               return;
             }
@@ -1086,9 +1086,9 @@
                           }
                         } else {
                           // ignore equal/older backend EMA to avoid overwriting historical/local EMA
-                          log(
-                            `Ignoring backend EMA for time ${emaTime} (not newer than lastEMATime ${lastEMATime})`
-                          );
+                          // log(
+                          //   `Ignoring backend EMA for time ${emaTime} (not newer than lastEMATime ${lastEMATime})`
+                          // );
                         }
                       }
                     } catch (e) {
