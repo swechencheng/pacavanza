@@ -397,9 +397,10 @@ class AvanzaTrading:
                     return
                 last_bar = lst[last_idx]
                 high_last = float(last_bar["high"])
-                stop_price = high_last + round(tick * tick_coeff, 2)
+                stop_price = high_last + (tick * tick_coeff)
                 # Need to add an extra tick to match sell side since the data is only buy side
                 stop_price += tick
+                stop_price = round(stop_price, 2)
                 # swing leg low (consecutive bull bars ending at last_completed_idx)
                 try:
                     low_swing = self._find_consecutive_bull_leg_low_from_snapshot(
@@ -407,10 +408,10 @@ class AvanzaTrading:
                     )
                 except Exception:
                     low_swing = float(last_bar["low"])
-                sell_stop_price = low_swing - tick
+                sell_stop_price = round(low_swing - tick, 2)
                 # take-profit calculation
                 distance = high_last - low_swing
-                take_profit = high_last + 2 * distance - tick
+                take_profit = round(high_last + 2 * distance - tick, 2)
 
                 buy_order = {
                     "side": "buy",
@@ -476,9 +477,10 @@ class AvanzaTrading:
             raise HTTPException(status_code=400, detail="No completed bar available")
         last_bar = lst[last_idx]
         high_last = float(last_bar["high"])
-        stop_price = high_last + round(tick * tick_coeff, 2)
+        stop_price = high_last + tick * tick_coeff
         # Need to add an extra tick to match sell side since the data is only buy side
         stop_price += tick
+        stop_price = round(stop_price, 2)
         # swing leg excluding the current bar which is not completed => use end_index = last_idx (already excludes in-progress)
         try:
             low_swing = self._find_consecutive_bull_leg_low_from_snapshot(
@@ -486,9 +488,9 @@ class AvanzaTrading:
             )
         except Exception:
             low_swing = float(last_bar["low"])
-        sell_stop_price = low_swing - tick
+        sell_stop_price = round(low_swing - tick, 2)
         distance = high_last - low_swing
-        take_profit = high_last + 2 * distance - tick
+        take_profit = round(high_last + 2 * distance - tick, 2)
 
         buy_order = {
             "side": "buy",
@@ -578,7 +580,7 @@ class AvanzaTrading:
                     return
                 last_bar = lst[last_idx]
                 low_last = float(last_bar["low"])
-                stop_price = low_last - round(tick * tick_coeff, 2)
+                stop_price = round(low_last - tick * tick_coeff, 2)
                 sell_order = {
                     "side": "sell",
                     "type": "stop",
@@ -619,7 +621,7 @@ class AvanzaTrading:
             raise HTTPException(status_code=400, detail="No completed bar available")
         last_bar = lst[last_idx]
         low_last = float(last_bar["low"])
-        stop_price = low_last - round(tick * tick_coeff, 2)
+        stop_price = round(low_last - tick * tick_coeff, 2)
         sell_order = {
             "side": "sell",
             "type": "stop",
