@@ -124,6 +124,14 @@ class AvanzaTrading:
             raise ValueError(f"No tick_size for {instrument_id}")
         return float(tick_sz)
 
+    # helper: get tick_coefficient (float)
+    def _get_tick_coeff(self, instrument_id: str) -> float:
+        info = self._get_instrument_info(instrument_id)
+        tick_coeff = info.get("tick_coefficient")
+        if not tick_coeff:
+            raise ValueError(f"No tick_coefficient for {instrument_id}")
+        return float(tick_coeff)
+
     # helper: prune bars older than 7 days for memory saving (called under lock by caller)
     def prune_old_bars_snapshot(
         self, lst: List[Dict[str, Any]]
@@ -397,6 +405,7 @@ class AvanzaTrading:
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
+        tick_coeff = self._get_tick_coeff(instrument_id)
 
         # compute next bar start aligned to 5-minute grid (bar interval is 5m)
         now = datetime.now(tz=timezone.utc)
@@ -442,7 +451,7 @@ class AvanzaTrading:
                     return
                 last_bar = lst[last_idx]
                 high_last = float(last_bar["high"])
-                stop_price = high_last + tick  #TODO needs coefficent adjustment
+                stop_price = high_last + round(tick * tick_coeff, 2)
                 # Need to add an extra tick to match sell side since the data is only buy side
                 stop_price += tick
                 # swing leg low (consecutive bull bars ending at last_completed_idx)
@@ -511,6 +520,7 @@ class AvanzaTrading:
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
+        tick_coeff = self._get_tick_coeff(instrument_id)
 
         lst = await self._get_snapshot(instrument_id)
         if not lst:
@@ -520,7 +530,7 @@ class AvanzaTrading:
             raise HTTPException(status_code=400, detail="No completed bar available")
         last_bar = lst[last_idx]
         high_last = float(last_bar["high"])
-        stop_price = high_last + tick  #TODO needs coefficent adjustment
+        stop_price = high_last + round(tick * tick_coeff, 2)
         # Need to add an extra tick to match sell side since the data is only buy side
         stop_price += tick
         # swing leg excluding the current bar which is not completed => use end_index = last_idx (already excludes in-progress)
@@ -579,6 +589,7 @@ class AvanzaTrading:
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
+        tick_coeff = self._get_tick_coeff(instrument_id)
 
         # compute next bar start aligned to 5-minute grid (bar interval is 5m)
         now = datetime.now(tz=timezone.utc)
@@ -621,7 +632,7 @@ class AvanzaTrading:
                     return
                 last_bar = lst[last_idx]
                 low_last = float(last_bar["low"])
-                stop_price = low_last - tick  #TODO needs coefficent adjustment
+                stop_price = low_last - round(tick * tick_coeff, 2)
                 sell_order = {
                     "side": "sell",
                     "type": "stop",
@@ -652,6 +663,7 @@ class AvanzaTrading:
         """
         info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
+        tick_coeff = self._get_tick_coeff(instrument_id)
 
         lst = await self._get_snapshot(instrument_id)
         if not lst:
@@ -661,7 +673,7 @@ class AvanzaTrading:
             raise HTTPException(status_code=400, detail="No completed bar available")
         last_bar = lst[last_idx]
         low_last = float(last_bar["low"])
-        stop_price = low_last - tick  #TODO needs coefficent adjustment
+        stop_price = low_last - round(tick * tick_coeff, 2)
         sell_order = {
             "side": "sell",
             "type": "stop",
