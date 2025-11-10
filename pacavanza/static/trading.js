@@ -6,6 +6,10 @@
 // - handle button clicks to call trade endpoints and show results in #trade-info
 
 (async function () {
+  const log = (...a) => console.log("[trade]", ...a);
+  const warn = (...a) => console.warn("[trade]", ...a);
+  const error = (...a) => console.error("[trade]", ...a);
+
   // load instrument list (for order_volume defaults)
   let instrumentList = {};
   try {
@@ -69,15 +73,16 @@
           parsed = JSON.parse(text);
         } catch (e) {}
         showInfo("Trade failed: " + (res.status || ""));
-        console.error("Trade failed", res.status, parsed);
+        error("Trade failed", res.status, parsed);
         return null;
       }
       const j = JSON.parse(text);
       const summary = j.order || j.orders || j.note || j;
       showInfo("OK: " + JSON.stringify(summary));
+      log("OK: " + JSON.stringify(summary));
       return j;
     } catch (e) {
-      console.error("Trade request failed", e);
+      error("Trade request failed", e);
       showInfo("Trade request failed");
       return null;
     }
@@ -88,10 +93,12 @@
     const instrumentId = instrumentSelect ? instrumentSelect.value : null;
     const volume = volInput ? parseFloat(volInput.value) : null;
     if (!instrumentId) {
+      error("Select instrument")
       showInfo("Select instrument");
       return null;
     }
     if (!volume || Number.isNaN(volume) || volume <= 0) {
+      error("Set volume > 0");
       showInfo("Set volume > 0");
       return null;
     }
