@@ -99,6 +99,36 @@ def create_app(
     except Exception as e:
         LOGGER.warning("Could not load instrument_list.json: %s", e)
 
+    recent_bars = {
+        sid: []
+        for sid in instrument_list.keys()
+    }
+
+    for sid, _sd in recent_bars.items():
+        data_file = f"ohlc_{sid}.json"
+        try:
+            with open(data_file, "r") as f:
+                data = json.load(f)
+            for bar in data:
+                start = datetime.fromisoformat(bar["start_time"])
+                end = datetime.fromisoformat(bar["end_time"])
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=timezone.utc)
+                else:
+                    start = start.astimezone(timezone.utc)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=timezone.utc)
+                else:
+                    end = end.astimezone(timezone.utc)
+                bar["start_time"] = start
+                bar["end_time"] = end
+                recent_bars[sid].append(bar)
+            LOGGER.info(f"[{sid}] Loaded {len(recent_bars[sid])} bars from {data_file}")
+        except FileNotFoundError:
+            LOGGER.info(f"[{sid}] No previous data file {data_file}.")
+        except Exception as e:
+            LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
+
     # instantiate AvanzaTrading with references to in-memory state and the lock maps
     trading = AvanzaTrading(
         recent_bars,
@@ -234,10 +264,10 @@ def create_app(
             bars_lock = await _get_bars_lock_for(sid)
             async with bars_lock:
                 lst = recent_bars[sid]
-                if not lst or lst[-1]["start_time"] != bar["start_time"]:
+                if not lst or lst[-1]["start_time"] != ts:
                     lst.append(
                         {
-                            "start_time": datetime.fromisoformat(bar["start_time"]),
+                            "start_time": ts,
                             "end_time": datetime.fromisoformat(bar["end_time"]),
                             "open": bar["open"],
                             "high": bar["high"],
@@ -261,18 +291,6 @@ def create_app(
                 if len(lst) > 5000:
                     lst[:] = lst[-5000:]
 
-                # NEW: prune bars older than one week to save memory
-                try:
-                    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
-                    lst[:] = [
-                        b
-                        for b in lst
-                        if (b["start_time"].astimezone(timezone.utc) >= cutoff)
-                    ]
-                except Exception:
-                    if len(lst) > 5000:
-                        lst[:] = lst[-5000:]
-
             # compute incremental EMA updates (fast) - uses the global recent_bars dict; reading latest snapshot is fine
             emas = {}
             for L in (20, 50, 100, 220):
@@ -282,7 +300,7 @@ def create_app(
                 )
                 if new is not None:
                     ema_state[sid][L] = new
-                    emas[str(L)] = {"time": bar["start_time"], "value": new}
+                    emas[str(L)] = {"time": ts, "value": new}
 
             out = {
                 "type": "update",
@@ -297,34 +315,34 @@ def create_app(
             bar = payload.get("bar")
             if not bar:
                 return
+            # use start_time as canonical timestamp
+            ts = datetime.fromisoformat(bar["start_time"])
             # convert and append under per-instrument lock
             bars_lock = await _get_bars_lock_for(sid)
             async with bars_lock:
                 lst = recent_bars[sid]
-                lst.append(
-                    {
-                        "start_time": datetime.fromisoformat(bar["start_time"]),
-                        "end_time": datetime.fromisoformat(bar["end_time"]),
-                        "open": bar["open"],
-                        "high": bar["high"],
-                        "low": bar["low"],
-                        "close": bar["close"],
-                        "volume": bar.get("volume", 0),
-                    }
-                )
+                for i in range(len(lst) - 1, -1, -1):
+                    b = lst[i]
+                    start = b["start_time"]
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=timezone.utc)
+                    if start == ts:
+                        lst[i].update(
+                            {
+                                "start_time": ts,
+                                "end_time": datetime.fromisoformat(bar["end_time"]),
+                                "open": bar["open"],
+                                "high": bar["high"],
+                                "low": bar["low"],
+                                "close": bar["close"],
+                                "volume": bar.get("volume", 0),
+                            }
+                        )
+                        break
+                # limit history length (e.g. 5000 bars)
                 if len(lst) > 5000:
                     lst[:] = lst[-5000:]
-                # NEW: prune to one week
-                try:
-                    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
-                    lst[:] = [
-                        b
-                        for b in lst
-                        if (b["start_time"].astimezone(timezone.utc) >= cutoff)
-                    ]
-                except Exception:
-                    if len(lst) > 5000:
-                        lst[:] = lst[-5000:]
+
             # recompute EMAs using incremental update with the finalized close
             emas = {}
             for L in (20, 50, 100, 220):

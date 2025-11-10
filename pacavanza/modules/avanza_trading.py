@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("avanza_trading").setLevel(logging.INFO)
+logging.getLogger("avanza_trading").setLevel(logging.DEBUG)
 LOGGER = logging.getLogger("avanza_trading")
 
 class AvanzaTrading:
@@ -123,6 +123,7 @@ class AvanzaTrading:
         lock = await self._get_bars_lock(instrument_id)
         async with lock:
             lst = list(self.recent_bars.get(instrument_id, []))
+        LOGGER.debug(f"len(lst): {len(lst)}")
         return lst
 
     # helper: snapshot metadata safely via per-instrument lock
@@ -144,7 +145,8 @@ class AvanzaTrading:
             end = b["end_time"]
             if end.tzinfo is None:
                 end = end.replace(tzinfo=timezone.utc)
-            if end <= now:
+            if end < now:
+                LOGGER.debug(f"Return idx: {i}")
                 return i
         return None
 
@@ -190,6 +192,7 @@ class AvanzaTrading:
             )
 
         if end_index is None:
+            LOGGER.warning(f"Idx missing, using {len(lst) - 1}")
             end_index = len(lst) - 1
 
         # guard indexes
@@ -207,15 +210,17 @@ class AvanzaTrading:
             }
         )
 
-        # Determine bull bars: close > open
-        bull_mask = df["close"] > df["open"]
+        # Determine bull bars: close >= open
+        bull_mask = df["close"] >= df["open"]
 
         # Walk backwards from end_index and collect consecutive bulls
+        LOGGER.debug(f"start from end idx: {end_index}")
         i = end_index
         bull_indices = []
         while i >= 0 and bull_mask.iloc[i]:
             bull_indices.append(i)
             i -= 1
+        LOGGER.debug(json.dumps(bull_indices))
 
         if not bull_indices:
             # fallback to low at end_index
@@ -358,7 +363,7 @@ class AvanzaTrading:
         minute = (now.minute // 5) * 5
         bar_start = now.replace(minute=minute, second=0, microsecond=0)
         # next bar start:
-        next_bar_start = bar_start + timedelta(minutes=5)
+        next_bar_start = bar_start + timedelta(minutes=5, seconds=1)
 
         # check if already scheduled for this instrument/kind at the same bar
         existing = await self._get_scheduled_for(instrument_id)
@@ -544,7 +549,7 @@ class AvanzaTrading:
         minute = (now.minute // 5) * 5
         bar_start = now.replace(minute=minute, second=0, microsecond=0)
         # next bar start:
-        next_bar_start = bar_start + timedelta(minutes=5)
+        next_bar_start = bar_start + timedelta(minutes=5, seconds=1)
 
         # check if already scheduled for this instrument/kind at the same bar
         existing = await self._get_scheduled_for(instrument_id)
