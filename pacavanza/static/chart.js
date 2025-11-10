@@ -212,13 +212,13 @@
       clearCountdown(false); // clear any existing timer (don't override status text here)
       countdownEndTime = end;
 
-      // Debug log to help confirm timer started
-      log(
-        "Starting countdown for bar, endUnix:",
-        countdownEndTime,
-        "now:",
-        now
-      );
+      // // Debug log to help confirm timer started
+      // log(
+      //   "Starting countdown for bar, endUnix:",
+      //   countdownEndTime,
+      //   "now:",
+      //   now
+      // );
 
       // immediately update then schedule per-second ticks
       updateCountdownDisplay();
@@ -953,7 +953,7 @@
                 existing.low === candleData.low &&
                 existing.close === candleData.close
               ) {
-                log(`Ignoring Duplicate completed bar for ${t}`);
+                // log(`Ignoring Duplicate completed bar for ${t}`);
                 // still update lastBarTime if necessary
                 if (lastBarTime === null || t > lastBarTime) lastBarTime = t;
                 // completed -> stop countdown (bar finalized)
