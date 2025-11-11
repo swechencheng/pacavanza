@@ -479,7 +479,7 @@ class AvanzaTrading:
                 )
                 sl_buy_evt = StopLossOrderEvent(
                     type=OrderType.BUY,
-                    price=stop_price,
+                    price=round(stop_price + 0.01, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -504,7 +504,7 @@ class AvanzaTrading:
                 )
                 sl_sell_evt = StopLossOrderEvent(
                     type=OrderType.SELL,
-                    price=sell_stop_price,
+                    price=round(sell_stop_price - 0.01, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -529,7 +529,7 @@ class AvanzaTrading:
                 )
                 tp_sell_evt = StopLossOrderEvent(
                     type=OrderType.SELL,
-                    price=take_profit,
+                    price=round(take_profit - 0.01, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -628,7 +628,7 @@ class AvanzaTrading:
         )
         sl_buy_evt = StopLossOrderEvent(
             type=OrderType.BUY,
-            price=stop_price,
+            price=round(stop_price + 0.01, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
@@ -653,7 +653,7 @@ class AvanzaTrading:
         )
         sl_sell_evt = StopLossOrderEvent(
             type=OrderType.SELL,
-            price=sell_stop_price,
+            price=round(sell_stop_price - 0.01, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
@@ -678,7 +678,7 @@ class AvanzaTrading:
         )
         tp_sell_evt = StopLossOrderEvent(
             type=OrderType.SELL,
-            price=take_profit,
+            price=round(take_profit - 0.01, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
@@ -770,7 +770,7 @@ class AvanzaTrading:
                 )
                 sl_sell_evt = StopLossOrderEvent(
                     type=OrderType.SELL,
-                    price=stop_price,
+                    price=round(stop_price - 0.01, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -834,7 +834,7 @@ class AvanzaTrading:
         )
         sl_sell_evt = StopLossOrderEvent(
             type=OrderType.SELL,
-            price=stop_price,
+            price=round(stop_price - 0.01, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
