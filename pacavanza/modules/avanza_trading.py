@@ -3,13 +3,14 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 import pandas as pd
+
 # import pandas_ta as ta
 from datetime import datetime, timedelta, timezone
-from fastapi import HTTPException
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_trading").setLevel(logging.DEBUG)
 LOGGER = logging.getLogger("avanza_trading")
+
 
 class AvanzaTrading:
     """
@@ -57,9 +58,7 @@ class AvanzaTrading:
     def _get_instrument_info(self, instrument_id: str) -> Dict[str, Any]:
         info = self.instrument_list.get(instrument_id)
         if not info:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown instrument: {instrument_id}"
-            )
+            raise Exception(f"Unknown instrument: {instrument_id}")
         return info
 
     # helper: get tick_size (float)
@@ -187,9 +186,7 @@ class AvanzaTrading:
         If none found, return low of the bar at end_index (fallback).
         """
         if not lst:
-            raise HTTPException(
-                status_code=400, detail="No bar data available for instrument"
-            )
+            raise Exception("No bar data available for instrument")
 
         if end_index is None:
             LOGGER.warning(f"Idx missing, using {len(lst) - 1}")
@@ -198,7 +195,7 @@ class AvanzaTrading:
         # guard indexes
         end_index = min(end_index, len(lst) - 1)
         if end_index < 0:
-            raise HTTPException(status_code=400, detail="No completed bars")
+            raise Exception("No completed bars")
 
         # Build a small DataFrame for TA usage (though we just need bull sequences)
         df = pd.DataFrame(
@@ -310,7 +307,7 @@ class AvanzaTrading:
         # The price should be the current last sell price from the redis data.
         price = await self._get_last_sell_price(instrument_id)
         if price is None:
-            raise HTTPException(status_code=400, detail="No price data available")
+            raise Exception("No price data available")
         order = {
             "side": "buy",
             "type": "market",
@@ -328,7 +325,7 @@ class AvanzaTrading:
         info = self._get_instrument_info(instrument_id)
         price = await self._get_last_buy_price(instrument_id)
         if price is None:
-            raise HTTPException(status_code=400, detail="No price data available")
+            raise Exception("No price data available")
         order = {
             "side": "sell",
             "type": "market",
@@ -476,10 +473,10 @@ class AvanzaTrading:
 
         lst = await self._get_snapshot(instrument_id)
         if not lst:
-            raise HTTPException(status_code=400, detail="No completed bar available")
+            raise Exception("No completed bar available")
         last_idx = self._last_completed_index_from_snapshot(lst)
         if last_idx is None:
-            raise HTTPException(status_code=400, detail="No completed bar available")
+            raise Exception("No completed bar available")
         last_bar = lst[last_idx]
         high_last = float(last_bar["high"])
         stop_price = high_last + tick * tick_coeff
@@ -620,10 +617,10 @@ class AvanzaTrading:
 
         lst = await self._get_snapshot(instrument_id)
         if not lst:
-            raise HTTPException(status_code=400, detail="No completed bar available")
+            raise Exception("No completed bar available")
         last_idx = self._last_completed_index_from_snapshot(lst)
         if last_idx is None:
-            raise HTTPException(status_code=400, detail="No completed bar available")
+            raise Exception("No completed bar available")
         last_bar = lst[last_idx]
         low_last = float(last_bar["low"])
         stop_price = round(low_last - tick * tick_coeff, 2)

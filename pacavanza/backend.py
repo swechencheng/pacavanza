@@ -99,10 +99,7 @@ def create_app(
     except Exception as e:
         LOGGER.warning("Could not load instrument_list.json: %s", e)
 
-    recent_bars = {
-        sid: []
-        for sid in instrument_list.keys()
-    }
+    recent_bars = {sid: [] for sid in instrument_list.keys()}
 
     for sid, _sd in recent_bars.items():
         data_file = f"ohlc_{sid}.json"
@@ -500,7 +497,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        order = await trading.place_market_buy(instrument_id, volume)
+        try:
+            order = await trading.place_market_buy(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
 
     @app.post("/trade/market_sell")
@@ -520,7 +520,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        order = await trading.place_market_sell(instrument_id, volume)
+        try:
+            order = await trading.place_market_sell(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
 
     @app.post("/trade/buy_stop")
@@ -546,7 +549,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.schedule_buy_stop(instrument_id, volume)
+        try:
+            res = await trading.schedule_buy_stop(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     @app.post("/trade/late_buy_stop")
@@ -572,7 +578,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.late_buy_stop(instrument_id, volume)
+        try:
+            res = await trading.late_buy_stop(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     @app.post("/trade/sell_stop")
@@ -594,7 +603,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.schedule_sell_stop(instrument_id, volume)
+        try:
+            res = await trading.schedule_sell_stop(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     @app.post("/trade/late_sell_stop")
@@ -616,7 +628,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.late_sell_stop(instrument_id, volume)
+        try:
+            res = await trading.late_sell_stop(instrument_id, volume)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     # --------------------
@@ -635,7 +650,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.cancel_buy_stop(instrument_id)
+        try:
+            res = await trading.cancel_buy_stop(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     @app.post("/trade/cancel_sell_stop")
@@ -651,7 +669,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
-        res = await trading.cancel_sell_stop(instrument_id)
+        try:
+            res = await trading.cancel_sell_stop(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
     return app
