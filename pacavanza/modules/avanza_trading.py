@@ -6,6 +6,18 @@ import pandas as pd
 
 # import pandas_ta as ta
 from datetime import datetime, timedelta, timezone
+from avanza import Avanza
+from avanza.entities import (
+    StopLossTrigger,
+    StopLossTriggerType,
+    StopLossPriceType,
+    StopLossOrderEvent,
+)
+from avanza.constants import OrderType
+
+SECRETS = json.load(open("./pacavanza/../secret.json"))
+AVANZA = Avanza(SECRETS)
+ACCOUNT_ID = SECRETS["accountId"]
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_trading").setLevel(logging.DEBUG)
@@ -316,6 +328,15 @@ class AvanzaTrading:
             "price": float(price),
             "note": "market buy simulated (price: last sell)",
         }
+        ret = AVANZA.place_order(
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            order_type=OrderType.BUY,
+            price=price,
+            volume=volume,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+        )
+        LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
         self._log_order(order)
         return order
 
@@ -334,6 +355,15 @@ class AvanzaTrading:
             "price": float(price),
             "note": "market sell simulated (price: last buy)",
         }
+        ret = AVANZA.place_order(
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            order_type=OrderType.SELL,
+            price=price,
+            volume=volume,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+        )
+        LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
         self._log_order(order)
         return order
 
@@ -351,7 +381,6 @@ class AvanzaTrading:
         - Log orders.
         - If a buy_stop is already scheduled for the same instrument for the same next bar boundary, ignore duplicate calls.
         """
-        info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
         tick_coeff = self._get_tick_coeff(instrument_id)
 
@@ -440,9 +469,80 @@ class AvanzaTrading:
                     "note": "scheduled take-profit (2:1)",
                 }
 
-                # Log them (simulate immediate placement)
+                info = self._get_instrument_info(instrument_id)
+                sl_buy_trig = StopLossTrigger(
+                    type=StopLossTriggerType.MORE_OR_EQUAL,
+                    value=stop_price,
+                    valid_until=datetime.now(tz=timezone.utc).date(),
+                    value_type=StopLossPriceType.MONETARY,
+                    trigger_on_market_maker_quote=True,
+                )
+                sl_buy_evt = StopLossOrderEvent(
+                    type=OrderType.BUY,
+                    price=stop_price,
+                    volume=volume,
+                    valid_days=1,
+                    price_type=StopLossPriceType.MONETARY,
+                    short_selling_allowed=False,
+                )
+                ret = AVANZA.place_stop_loss_order(
+                    parent_stop_loss_id="0",
+                    account_id=ACCOUNT_ID,
+                    order_book_id=info["ID"],
+                    stop_loss_trigger=sl_buy_trig,
+                    stop_loss_order_event=sl_buy_evt,
+                )
+                LOGGER.info(f"Placed buy stop loss order via Avanza API: {ret}")
                 self._log_order(buy_order)
+
+                sl_sell_trig = StopLossTrigger(
+                    type=StopLossTriggerType.LESS_OR_EQUAL,
+                    value=sell_stop_price,
+                    valid_until=datetime.now(tz=timezone.utc).date(),
+                    value_type=StopLossPriceType.MONETARY,
+                    trigger_on_market_maker_quote=True,
+                )
+                sl_sell_evt = StopLossOrderEvent(
+                    type=OrderType.SELL,
+                    price=sell_stop_price,
+                    volume=volume,
+                    valid_days=1,
+                    price_type=StopLossPriceType.MONETARY,
+                    short_selling_allowed=False,
+                )
+                ret = AVANZA.place_stop_loss_order(
+                    parent_stop_loss_id="0",
+                    account_id=ACCOUNT_ID,
+                    order_book_id=info["ID"],
+                    stop_loss_trigger=sl_sell_trig,
+                    stop_loss_order_event=sl_sell_evt,
+                )
+                LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
                 self._log_order(sell_stop_order)
+
+                tp_sell_trig = StopLossTrigger(
+                    type=StopLossTriggerType.MORE_OR_EQUAL,
+                    value=take_profit,
+                    valid_until=datetime.now(tz=timezone.utc).date(),
+                    value_type=StopLossPriceType.MONETARY,
+                    trigger_on_market_maker_quote=True,
+                )
+                tp_sell_evt = StopLossOrderEvent(
+                    type=OrderType.SELL,
+                    price=take_profit,
+                    volume=volume,
+                    valid_days=1,
+                    price_type=StopLossPriceType.MONETARY,
+                    short_selling_allowed=False,
+                )
+                ret = AVANZA.place_stop_loss_order(
+                    parent_stop_loss_id="0",
+                    account_id=ACCOUNT_ID,
+                    order_book_id=info["ID"],
+                    stop_loss_trigger=tp_sell_trig,
+                    stop_loss_order_event=tp_sell_evt,
+                )
+                LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
                 self._log_order(take_profit_order)
             except asyncio.CancelledError:
                 self.logger.info("Scheduled buy_stop cancelled for %s", instrument_id)
@@ -467,7 +567,6 @@ class AvanzaTrading:
         - Take profit same formula but using last completed bar high.
         - Log orders.
         """
-        info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
         tick_coeff = self._get_tick_coeff(instrument_id)
 
@@ -519,9 +618,80 @@ class AvanzaTrading:
             "note": "late buy stop take-profit (2:1)",
         }
 
-        # Log them (simulate immediate placement)
+        info = self._get_instrument_info(instrument_id)
+        sl_buy_trig = StopLossTrigger(
+            type=StopLossTriggerType.MORE_OR_EQUAL,
+            value=stop_price,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+            value_type=StopLossPriceType.MONETARY,
+            trigger_on_market_maker_quote=True,
+        )
+        sl_buy_evt = StopLossOrderEvent(
+            type=OrderType.BUY,
+            price=stop_price,
+            volume=volume,
+            valid_days=1,
+            price_type=StopLossPriceType.MONETARY,
+            short_selling_allowed=False,
+        )
+        ret = AVANZA.place_stop_loss_order(
+            parent_stop_loss_id="0",
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            stop_loss_trigger=sl_buy_trig,
+            stop_loss_order_event=sl_buy_evt,
+        )
+        LOGGER.info(f"Placed buy stop loss order via Avanza API: {ret}")
         self._log_order(buy_order)
+
+        sl_sell_trig = StopLossTrigger(
+            type=StopLossTriggerType.LESS_OR_EQUAL,
+            value=sell_stop_price,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+            value_type=StopLossPriceType.MONETARY,
+            trigger_on_market_maker_quote=True,
+        )
+        sl_sell_evt = StopLossOrderEvent(
+            type=OrderType.SELL,
+            price=sell_stop_price,
+            volume=volume,
+            valid_days=1,
+            price_type=StopLossPriceType.MONETARY,
+            short_selling_allowed=False,
+        )
+        ret = AVANZA.place_stop_loss_order(
+            parent_stop_loss_id="0",
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            stop_loss_trigger=sl_sell_trig,
+            stop_loss_order_event=sl_sell_evt,
+        )
+        LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
         self._log_order(sell_stop_order)
+
+        tp_sell_trig = StopLossTrigger(
+            type=StopLossTriggerType.MORE_OR_EQUAL,
+            value=take_profit,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+            value_type=StopLossPriceType.MONETARY,
+            trigger_on_market_maker_quote=True,
+        )
+        tp_sell_evt = StopLossOrderEvent(
+            type=OrderType.SELL,
+            price=take_profit,
+            volume=volume,
+            valid_days=1,
+            price_type=StopLossPriceType.MONETARY,
+            short_selling_allowed=False,
+        )
+        ret = AVANZA.place_stop_loss_order(
+            parent_stop_loss_id="0",
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            stop_loss_trigger=tp_sell_trig,
+            stop_loss_order_event=tp_sell_evt,
+        )
+        LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
         self._log_order(take_profit_order)
         return {
             "status": "placed",
@@ -537,7 +707,6 @@ class AvanzaTrading:
         - Place sell stop order immediately at that stop price.
         - If a sell_stop is already scheduled for the same instrument for the same next bar boundary, ignore duplicate calls.
         """
-        info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
         tick_coeff = self._get_tick_coeff(instrument_id)
 
@@ -591,6 +760,30 @@ class AvanzaTrading:
                     "stop_price": float(stop_price),
                     "note": "scheduled sell stop (placed at new bar 0s)",
                 }
+                info = self._get_instrument_info(instrument_id)
+                sl_sell_trig = StopLossTrigger(
+                    type=StopLossTriggerType.LESS_OR_EQUAL,
+                    value=stop_price,
+                    valid_until=datetime.now(tz=timezone.utc).date(),
+                    value_type=StopLossPriceType.MONETARY,
+                    trigger_on_market_maker_quote=True,
+                )
+                sl_sell_evt = StopLossOrderEvent(
+                    type=OrderType.SELL,
+                    price=stop_price,
+                    volume=volume,
+                    valid_days=1,
+                    price_type=StopLossPriceType.MONETARY,
+                    short_selling_allowed=False,
+                )
+                ret = AVANZA.place_stop_loss_order(
+                    parent_stop_loss_id="0",
+                    account_id=ACCOUNT_ID,
+                    order_book_id=info["ID"],
+                    stop_loss_trigger=sl_sell_trig,
+                    stop_loss_order_event=sl_sell_evt,
+                )
+                LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
                 self._log_order(sell_order)
             except asyncio.CancelledError:
                 self.logger.info("Scheduled sell_stop cancelled for %s", instrument_id)
@@ -611,7 +804,6 @@ class AvanzaTrading:
         - Immediately calculate stop price = 1 tick_size below low of last completed bar.
         - Place sell stop at that price.
         """
-        info = self._get_instrument_info(instrument_id)
         tick = self._get_tick_size(instrument_id)
         tick_coeff = self._get_tick_coeff(instrument_id)
 
@@ -632,6 +824,30 @@ class AvanzaTrading:
             "stop_price": float(stop_price),
             "note": "late sell stop placed immediately",
         }
+        info = self._get_instrument_info(instrument_id)
+        sl_sell_trig = StopLossTrigger(
+            type=StopLossTriggerType.LESS_OR_EQUAL,
+            value=stop_price,
+            valid_until=datetime.now(tz=timezone.utc).date(),
+            value_type=StopLossPriceType.MONETARY,
+            trigger_on_market_maker_quote=True,
+        )
+        sl_sell_evt = StopLossOrderEvent(
+            type=OrderType.SELL,
+            price=stop_price,
+            volume=volume,
+            valid_days=1,
+            price_type=StopLossPriceType.MONETARY,
+            short_selling_allowed=False,
+        )
+        ret = AVANZA.place_stop_loss_order(
+            parent_stop_loss_id="0",
+            account_id=ACCOUNT_ID,
+            order_book_id=info["ID"],
+            stop_loss_trigger=sl_sell_trig,
+            stop_loss_order_event=sl_sell_evt,
+        )
+        LOGGER.info(f"Placed sell stop loss order via Avanza API: {ret}")
         self._log_order(sell_order)
         return {"status": "placed", "order": sell_order}
 
