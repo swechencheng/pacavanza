@@ -69,6 +69,9 @@ class MultiMarketCollector:
                 for sid in self.instrument_ids
             }
 
+        # market open/close detection
+        self.last_market_check = {sid: False for sid in self.instrument_ids}
+
         # per-instrument metadata
         self.last_buy_price = {sid: None for sid in self.instrument_ids}
         self.last_sell_price = {sid: None for sid in self.instrument_ids}
@@ -221,27 +224,34 @@ class MultiMarketCollector:
             )
 
             # Only proceed if market is open for this instrument at the event's timestamp
-            if not self.is_market_open(instrument_id, dt):
+            market_check = self.is_market_open(instrument_id, dt)
+            if not market_check:
+                self.last_market_check[instrument_id] = market_check
                 LOGGER.debug(
                     f"[{instrument_id}] Outside market hours ({readable_ts}), ignoring price update."
                 )
                 return
 
-            # Anomaly detection: ignore new prices that are beyond 1.0% of last stored prices, usually caused by other market participants' orders
-            last_buy = self.last_buy_price.get(instrument_id)
-            last_sell = self.last_sell_price.get(instrument_id)
-            if last_buy is not None:
-                if abs(buy_price - last_buy) / last_buy > 0.01:
-                    LOGGER.warning(
-                        f"[{instrument_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
-                    )
-                    return
-            if last_sell is not None:
-                if abs(sell_price - last_sell) / last_sell > 0.01:
-                    LOGGER.warning(
-                        f"[{instrument_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
-                    )
-                    return
+            if not self.last_market_check[instrument_id]:
+                # Accept market gap and skip anomaly detection
+                LOGGER.info(f"[{instrument_id}] Market just opened at {readable_ts}.")
+            else:
+                # Anomaly detection: ignore new prices that are beyond 1.0% of last stored prices, usually caused by other market participants' orders
+                last_buy = self.last_buy_price.get(instrument_id)
+                last_sell = self.last_sell_price.get(instrument_id)
+                if last_buy is not None:
+                    if abs(buy_price - last_buy) / last_buy > 0.01:
+                        LOGGER.warning(
+                            f"[{instrument_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
+                        )
+                        return
+                if last_sell is not None:
+                    if abs(sell_price - last_sell) / last_sell > 0.01:
+                        LOGGER.warning(
+                            f"[{instrument_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
+                        )
+                        return
+            self.last_market_check[instrument_id] = market_check
 
             # store last prices for this instrument
             self.last_buy_price[instrument_id] = buy_price
