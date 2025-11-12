@@ -26,9 +26,8 @@ LOGGER = logging.getLogger("avanza_trading")
 
 class AvanzaTrading:
     """
-    AvanzaTrading class (simulated) that schedules and logs orders using the same in-memory data
-    (recent_bars, metadata, instrument_list). It does not place real orders — it only logs
-    the simulated order details.
+    AvanzaTrading class that schedules and logs orders using the same in-memory data
+    (recent_bars, metadata, instrument_list).
 
     It expects:
       - recent_bars: Dict[instrument, List[bar_dict]] (bar_dict fields: start_time (dt), end_time (dt), open, high, low, close, volume)
@@ -237,12 +236,12 @@ class AvanzaTrading:
         lows = [lst[idx]["low"] for idx in bull_indices]
         return float(min(lows))
 
-    # Simulated order logger
+    # Order logger
     def _log_order(self, order: Dict[str, Any]):
         # include timestamp
         order_out = dict(order)
         order_out.setdefault("ts", datetime.now(tz=timezone.utc).isoformat())
-        self.logger.info("Simulated order: %s", json.dumps(order_out, default=str))
+        self.logger.info("Reference order: %s", json.dumps(order_out, default=str))
 
     # scheduled-task helpers: set/clear/check under per-instrument bars lock
     async def _get_scheduled_for(self, instrument_id: str) -> Dict[str, Dict[str, Any]]:
@@ -326,7 +325,7 @@ class AvanzaTrading:
             "instrument": instrument_id,
             "volume": volume,
             "price": float(price),
-            "note": "market buy simulated (price: last sell)",
+            "note": "market buy reference (price: last sell)",
         }
         ret = AVANZA.place_order(
             account_id=ACCOUNT_ID,
@@ -353,7 +352,7 @@ class AvanzaTrading:
             "instrument": instrument_id,
             "volume": volume,
             "price": float(price),
-            "note": "market sell simulated (price: last buy)",
+            "note": "market sell reference (price: last buy)",
         }
         ret = AVANZA.place_order(
             account_id=ACCOUNT_ID,
