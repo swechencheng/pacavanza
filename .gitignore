@@ -6,4 +6,5 @@ logs/
 pacavanza.egg-info/
 
 .temp
+temp_*.py
 ohlc_*.json
