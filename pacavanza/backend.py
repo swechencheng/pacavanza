@@ -284,9 +284,9 @@ def create_app(
                             "volume": bar.get("volume", 0),
                         }
                     )
-                # limit history length (e.g. 5000 bars)
-                if len(lst) > 5000:
-                    lst[:] = lst[-5000:]
+                # limit history length (e.g. 1500 bars)
+                if len(lst) > 1500:
+                    lst[:] = lst[-1500:]
 
             # compute incremental EMA updates (fast) - uses the global recent_bars dict; reading latest snapshot is fine
             emas = {}
@@ -336,9 +336,9 @@ def create_app(
                             }
                         )
                         break
-                # limit history length (e.g. 5000 bars)
-                if len(lst) > 5000:
-                    lst[:] = lst[-5000:]
+                # limit history length (e.g. 1500 bars)
+                if len(lst) > 1500:
+                    lst[:] = lst[-1500:]
 
             # recompute EMAs using incremental update with the finalized close
             emas = {}
