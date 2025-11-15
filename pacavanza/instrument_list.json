@@ -129,12 +129,12 @@
         "market_close": "21:50",
         "forex": "USD/SEK"
     },
-    "mini-l-bund-ava-18": {
-        "name": "MINI L BUND AVA 18",
-        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1455157/mini-l-bund-ava-18",
-        "ID": "1455157",
-        "ratio": 0.1,
-        "order_volume": 4500,
+    "mini-l-bitcoin-ava-4": {
+        "name": "MINI L BITCOIN AVA 4",
+        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2090443/mini-l-bitcoin-ava-4",
+        "ID": "2090443",
+        "ratio": 10000,
+        "order_volume": 900,
         "tick_size": 0.02,
         "tick_coefficient": 1.5,
         "timezone": "Europe/Stockholm",
@@ -142,12 +142,12 @@
         "market_close": "21:50",
         "forex": "USD/SEK"
     },
-    "mini-s-bund-ava-26": {
-        "name": "MINI S BUND AVA 26",
-        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1395428/mini-s-bund-ava-26",
-        "ID": "1395428",
-        "ratio": 0.1,
-        "order_volume": 4500,
+    "mini-s-bitcoin-ava-2": {
+        "name": "MINI S BITCOIN AVA 2",
+        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2091372/mini-s-bitcoin-ava-2",
+        "ID": "2091372",
+        "ratio": 10000,
+        "order_volume": 900,
         "tick_size": 0.02,
         "tick_coefficient": 1.5,
         "timezone": "Europe/Stockholm",
