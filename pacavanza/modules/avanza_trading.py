@@ -858,3 +858,24 @@ class AvanzaTrading:
     async def cancel_sell_stop(self, instrument_id: str) -> Dict[str, Any]:
         cancelled = await self._cancel_scheduled(instrument_id, "sell_stop")
         return {"cancelled": cancelled}
+
+    # Order API helpers
+    def edit_order(
+        self,
+        order_id: str,
+        account_id: str,
+        price: float,
+        volume: int,
+        valid_until: str,
+    ) -> Dict[str, Any]:
+        """Sample successful order return:
+        {'orderRequestStatus': 'SUCCESS', 'message': '', 'parameters': [''], 'orderId': '123456789'}
+        """
+        ret = AVANZA.edit_order(
+            order_id=order_id,
+            account_id=account_id,
+            price=price,
+            volume=volume,
+            valid_until=datetime.strptime(valid_until, "%Y-%m-%d"),
+        )
+        return ret

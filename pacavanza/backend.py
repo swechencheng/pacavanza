@@ -675,6 +675,53 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
 
+    @app.post("/trade/edit_order")
+    async def trade_edit_order(req: Request):
+        """
+        Place a market buy order, using input parameters: instrumentId, volume.
+        The price should be the current last sell price from the redis data.
+        """
+        body = await req.json()
+        order_id = body.get("orderId")
+        account_id = body.get("accountId")
+        price = body.get("price")
+        volume = body.get("volume")
+        valid_until = body.get("valid_until")
+        if not order_id or not account_id or not price or not volume or not valid_until:
+            raise HTTPException(
+                status_code=400,
+                detail="order_id, account_id, price, volume, and valid_until required",
+            )
+        if not isinstance(order_id, str):
+            raise HTTPException(status_code=400, detail="order_id must be str")
+        if not isinstance(account_id, str):
+            raise HTTPException(status_code=400, detail="account_id must be str")
+        if not isinstance(price, float):
+            raise HTTPException(status_code=400, detail="price must be float")
+        if not isinstance(volume, int):
+            raise HTTPException(status_code=400, detail="volume must be int")
+        if not isinstance(valid_until, str):
+            raise HTTPException(status_code=400, detail="valid_until must be str")
+
+        try:
+            order_ret = trading.edit_order(
+                order_id=order_id,
+                account_id=account_id,
+                price=price,
+                volume=volume,
+                valid_until=valid_until,
+            )
+            order_status = order_ret.get("orderRequestStatus")
+            if not order_status:
+                raise HTTPException(
+                    status_code=500, detail=str("No orderRequestStatus")
+                )
+            if order_status != "SUCCESS":
+                raise HTTPException(status_code=500, detail=str(json.dumps(order_ret)))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order_ret})
+
     return app
 
 
