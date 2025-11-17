@@ -35,3 +35,10 @@ def save_json_atomic(path: str, obj):
                 os.remove(tmp)
             except Exception:
                 pass
+
+
+def find_key_by_id(data, target_id):
+    for key, item in data.items():
+        if item["ID"] == target_id:
+            return key
+    return None

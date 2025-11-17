@@ -14,6 +14,7 @@ from avanza.entities import (
     StopLossOrderEvent,
 )
 from avanza.constants import OrderType
+from pacavanza.utils.utils import find_key_by_id
 
 SECRETS = json.load(open("./pacavanza/../secret.json"))
 AVANZA = Avanza(SECRETS)
@@ -892,9 +893,10 @@ class AvanzaTrading:
             order_id=order_id,
             account_id=account_id,
         )
-        instrument_id = order.get("orderbookId")
-        if not instrument_id:
-            raise Exception("No orderbookId/instrument available")
+        LOGGER.debug(f"Found: {order}")
+        orderbood_id = order.get("orderbookId")
+        if not orderbood_id:
+            raise Exception("No orderbookId available")
         volume = order.get("volume")
         if not volume:
             raise Exception("No volume available")
@@ -911,10 +913,16 @@ class AvanzaTrading:
         if not modifiable:
             raise Exception("Un-modifiable")
 
-        if side == OrderType.SELL:
+        instrument_id = find_key_by_id(self.instrument_list, orderbood_id)
+        if not instrument_id:
+            raise Exception(f"No instrument available for {orderbood_id}")
+        new_price = None
+        if side == "SELL":
             new_price = await self._get_last_buy_price(instrument_id)
-        elif side == OrderType.BUY:
+        elif side == "BUY":
             new_price = await self._get_last_sell_price(instrument_id)
+        else:
+            raise Exception(f"Unknown side {side}")
         if not new_price:
             raise Exception("No market buy/sell available")
         return self.edit_order(

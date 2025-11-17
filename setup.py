@@ -13,6 +13,7 @@ setuptools.setup(
         "redis",
         "fastapi",
         "uvicorn",
+        "aiohttp",
     ],
     entry_points={"console_scripts": ["run-pacavanza = pacavanza.backend:main"]},
 )
