@@ -879,3 +879,48 @@ class AvanzaTrading:
             valid_until=datetime.strptime(valid_until, "%Y-%m-%d"),
         )
         return ret
+
+    async def edit_order_follow_market(
+        self,
+        order_id: str,
+        account_id: str,
+    ) -> Dict[str, Any]:
+        """Sample successful order return:
+        {'orderRequestStatus': 'SUCCESS', 'message': '', 'parameters': [''], 'orderId': '123456789'}
+        """
+        order = AVANZA.get_order(
+            order_id=order_id,
+            account_id=account_id,
+        )
+        instrument_id = order.get("orderbookId")
+        if not instrument_id:
+            raise Exception("No orderbookId/instrument available")
+        volume = order.get("volume")
+        if not volume:
+            raise Exception("No volume available")
+        side = order.get("side")
+        if not side:
+            raise Exception("No side available")
+        state = order.get("state")
+        if not state:
+            raise Exception("No state available")
+        valid_until = order.get("validUntil")
+        if not valid_until:
+            raise Exception("No validUntil available")
+        modifiable = order.get("modifiable")
+        if not modifiable:
+            raise Exception("Un-modifiable")
+
+        if side == OrderType.SELL:
+            new_price = await self._get_last_buy_price(instrument_id)
+        elif side == OrderType.BUY:
+            new_price = await self._get_last_sell_price(instrument_id)
+        if not new_price:
+            raise Exception("No market buy/sell available")
+        return self.edit_order(
+            order_id=order_id,
+            account_id=account_id,
+            price=new_price,
+            volume=volume,
+            valid_until=valid_until,
+        )

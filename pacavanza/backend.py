@@ -722,6 +722,41 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order_ret})
 
+    @app.post("/trade/edit_order_follow_market")
+    async def trade_edit_order_follow_market(req: Request):
+        """
+        Place a market buy order, using input parameters: instrumentId, volume.
+        The price should be the current last sell price from the redis data.
+        """
+        body = await req.json()
+        order_id = body.get("orderId")
+        account_id = body.get("accountId")
+        if not order_id or not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="order_id and account_id required",
+            )
+        if not isinstance(order_id, str):
+            raise HTTPException(status_code=400, detail="order_id must be str")
+        if not isinstance(account_id, str):
+            raise HTTPException(status_code=400, detail="account_id must be str")
+
+        try:
+            order_ret = await trading.edit_order_follow_market(
+                order_id=order_id,
+                account_id=account_id,
+            )
+            order_status = order_ret.get("orderRequestStatus")
+            if not order_status:
+                raise HTTPException(
+                    status_code=500, detail=str("No orderRequestStatus")
+                )
+            if order_status != "SUCCESS":
+                raise HTTPException(status_code=500, detail=str(json.dumps(order_ret)))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order_ret})
+
     return app
 
 
