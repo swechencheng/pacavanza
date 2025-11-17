@@ -5,7 +5,7 @@ import signal
 import threading
 from functools import partial
 from pacavanza.modules.avanza_sse_client import AvanzaSSEClient as SSEClient
-from pacavanza.modules.avanza_trading import AVANZA, ACCOUNT_ID
+from pacavanza.modules.avanza_trading import AVANZA
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("trading_monitor").setLevel(logging.INFO)
@@ -33,43 +33,43 @@ class TradingMonitor:
             {
                 "orders": [
                     {
-                    "account": {
-                        "accountId": "5433963",
-                        "name": {
-                            "value": "5433963"
+                        "account": {
+                            "accountId": "5433963",
+                            "name": {
+                                "value": "5433963"
+                            },
+                            "type": {
+                                "accountType": "INVESTERINGSSPARKONTO"
+                            },
+                            "urlParameterId": "RosI2M8iyqbf03TQfm58fw"
                         },
-                        "type": {
-                            "accountType": "INVESTERINGSSPARKONTO"
+                        "orderId": "820200850",
+                        "volume": 720,
+                        "originalVolume": 720,
+                        "price": 510,
+                        "amount": 367200,
+                        "orderbookId": "2044158",
+                        "side": "SELL",
+                        "validUntil": "2025-11-17",
+                        "created": "2025-11-15T17:16:38",
+                        "deletable": true,
+                        "modifiable": true,
+                        "message": "Din order skickas iväg när marknaden öppnar.",
+                        "state": "ACTIVE_PENDING",
+                        "stateText": "Väntande",
+                        "stateMessage": "Din order skickas iväg när marknaden öppnar.",
+                        "orderbook": {
+                            "id": "2044158",
+                            "name": "MINI L OMX AVA 1366",
+                            "countryCode": "SE",
+                            "currency": "SEK",
+                            "instrumentType": "Warrant",
+                            "volumeFactor": "1",
+                            "isin": "GB00BTL17G92",
+                            "mic": "FNSE"
                         },
-                        "urlParameterId": "RosI2M8iyqbf03TQfm58fw"
-                    },
-                    "orderId": "820200850",
-                    "volume": 720,
-                    "originalVolume": 720,
-                    "price": 510,
-                    "amount": 367200,
-                    "orderbookId": "2044158",
-                    "side": "SELL",
-                    "validUntil": "2025-11-17",
-                    "created": "2025-11-15T17:16:38",
-                    "deletable": true,
-                    "modifiable": true,
-                    "message": "Din order skickas iväg när marknaden öppnar.",
-                    "state": "ACTIVE_PENDING",
-                    "stateText": "Väntande",
-                    "stateMessage": "Din order skickas iväg när marknaden öppnar.",
-                    "orderbook": {
-                        "id": "2044158",
-                        "name": "MINI L OMX AVA 1366",
-                        "countryCode": "SE",
-                        "currency": "SEK",
-                        "instrumentType": "Warrant",
-                        "volumeFactor": "1",
-                        "isin": "GB00BTL17G92",
-                        "mic": "FNSE"
-                    },
-                    "additionalParameters": {},
-                    "condition": "NORMAL"
+                        "additionalParameters": {},
+                        "condition": "NORMAL"
                     }
                 ],
                 "fundOrders": [],
