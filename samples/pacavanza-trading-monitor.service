@@ -1,0 +1,15 @@
+[Unit]
+Description=PACAvanza Trading Monitor
+After=pacavanza-dashboard
+Requires=pacavanza-dashboard
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/pacavanza
+ExecStart=/path/to/pacavanza/venv/bin/python3 -m pacavanza.trading_monitor
+Restart=always
+Environment=PATH=/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
