@@ -89,6 +89,29 @@ class AvanzaTrading:
             raise ValueError(f"No tick_coefficient for {instrument_id}")
         return float(tick_coeff)
 
+    # helper: get account balance
+    def _get_account_balance(self) -> float:
+        with AVANZA._session.get(
+            "https://www.avanza.se/_api/trading-critical/rest/accountsandpositions",
+            headers={"X-SecurityToken": AVANZA._security_token,},
+        ) as response:
+            response.raise_for_status()
+            accounts_data = response.json()
+
+        for account in accounts_data:
+            if account["accountId"] == ACCOUNT_ID:
+                return float(account["availableForPurchase"])
+        raise ValueError(f"Account with ID {ACCOUNT_ID} not found.")
+
+    # helper: calculate volume size based on accout balance and price
+    def _calculate_volume_size(self, instrument_id: str, price: float, percentage: float) -> int:
+        balance = self._get_account_balance()
+        # This is of strong personal preference, the number must be multiple of 3
+        vol = int((balance / price * percentage / 100) // 3) * 3
+        if (price * vol) < 1000.01:
+            raise ValueError(f"Order size too small for {instrument_id}")
+        return vol
+
     # helper: prune bars older than 7 days for memory saving (called under lock by caller)
     def prune_old_bars_snapshot(
         self, lst: List[Dict[str, Any]]
