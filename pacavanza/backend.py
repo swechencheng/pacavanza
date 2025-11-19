@@ -482,15 +482,15 @@ def create_app(
     @app.post("/trade/market_buy")
     async def trade_market_buy(req: Request):
         """
-        Place a market buy order, using input parameters: instrumentId, volume.
+        Place a market buy order, using input parameters: instrumentId, percentage.
         The price should be the current last sell price from the redis data.
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId and percentage required"
             )
         # instrumentId should be inside instrument_list.json.
         if instrument_id not in instrument_list:
@@ -498,7 +498,7 @@ def create_app(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            order = await trading.place_market_buy(instrument_id, volume)
+            order = await trading.place_market_buy(instrument_id, percentage)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
@@ -506,22 +506,21 @@ def create_app(
     @app.post("/trade/market_sell")
     async def trade_market_sell(req: Request):
         """
-        Place a market sell order, using input parameters: instrumentId, volume.
+        Place a market sell order, using input parameters: instrumentId..
         The price should be the current last buy price from the redis data.
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        if not instrument_id:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId required"
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            order = await trading.place_market_sell(instrument_id, volume)
+            order = await trading.place_market_sell(instrument_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
@@ -540,17 +539,17 @@ def create_app(
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId and percentage required"
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            res = await trading.schedule_buy_stop(instrument_id, volume)
+            res = await trading.schedule_buy_stop(instrument_id, percentage)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
@@ -569,17 +568,17 @@ def create_app(
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId and percentage required"
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            res = await trading.late_buy_stop(instrument_id, volume)
+            res = await trading.late_buy_stop(instrument_id, percentage)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
@@ -594,17 +593,16 @@ def create_app(
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        if not instrument_id:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId required"
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            res = await trading.schedule_sell_stop(instrument_id, volume)
+            res = await trading.schedule_sell_stop(instrument_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)
@@ -619,17 +617,16 @@ def create_app(
         """
         body = await req.json()
         instrument_id = body.get("instrumentId")
-        volume = body.get("volume")
-        if not instrument_id or volume is None:
+        if not instrument_id:
             raise HTTPException(
-                status_code=400, detail="instrumentId and volume required"
+                status_code=400, detail="instrumentId required"
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
             )
         try:
-            res = await trading.late_sell_stop(instrument_id, volume)
+            res = await trading.late_sell_stop(instrument_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content=res)

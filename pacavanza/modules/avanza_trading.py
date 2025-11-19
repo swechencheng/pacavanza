@@ -89,19 +89,49 @@ class AvanzaTrading:
             raise ValueError(f"No tick_coefficient for {instrument_id}")
         return float(tick_coeff)
 
-    # helper: get account balance
-    def _get_account_balance(self) -> float:
+    # helper: get accounts and positions
+    def _get_accounts_and_positions(self) -> Dict[str, Any]:
         with AVANZA._session.get(
             "https://www.avanza.se/_api/trading-critical/rest/accountsandpositions",
             headers={"X-SecurityToken": AVANZA._security_token,},
         ) as response:
             response.raise_for_status()
             accounts_data = response.json()
+            for account in accounts_data:
+                if account["accountId"] == ACCOUNT_ID:
+                    return account
+            raise ValueError(f"Account with ID {ACCOUNT_ID} not found.")
 
-        for account in accounts_data:
-            if account["accountId"] == ACCOUNT_ID:
-                return float(account["availableForPurchase"])
-        raise ValueError(f"Account with ID {ACCOUNT_ID} not found.")
+    # helper: get account balance
+    def _get_account_balance(self) -> float:
+        account_data = self._get_accounts_and_positions()
+
+        balance = account_data["availableForPurchase"]
+        LOGGER.debug(f"Account balance: {balance}")
+        return float(balance)
+
+    # helper: get account positions
+    def _get_account_positions(self) -> List[Dict[str, Any]]:
+        account_data = self._get_accounts_and_positions()
+        return account_data["positions"]
+
+    # helper: get instrument position
+    def _get_instrument_position(self, instrument_id: str) -> Dict[str, Any]:
+        positions = self._get_account_positions()
+        for position in positions:
+            iid = find_key_by_id(self.instrument_list, position["orderbookId"])
+            if instrument_id == iid:
+                return position
+        return None
+
+    # helper: get instrument position size
+    def _get_instrument_position_size(self, instrument_id: str) -> int:
+        position = self._get_instrument_position(instrument_id)
+        if not position:
+            return 0
+        volume = position["volume"]
+        LOGGER.debug(f"Instrument {instrument_id} position size: {volume}")
+        return volume
 
     # helper: calculate volume size based on accout balance and price
     def _calculate_volume_size(self, instrument_id: str, price: float, percentage: float) -> int:
@@ -334,15 +364,17 @@ class AvanzaTrading:
     # Public API methods used by endpoints
 
     async def place_market_buy(
-        self, instrument_id: str, volume: float
+        self, instrument_id: str, percentage: float
     ) -> Dict[str, Any]:
         # instrumentId should be inside instrument_list.json.
         info = self._get_instrument_info(instrument_id)
-        # Place a market buy order, using input parameters: instrumentId, volume.
+        # Place a market buy order, using input parameters: instrumentId, percentage.
         # The price should be the current last sell price from the redis data.
         price = await self._get_last_sell_price(instrument_id)
         if price is None:
             raise Exception("No price data available")
+        volume = self._calculate_volume_size(instrument_id, price, percentage)
+
         order = {
             "side": "buy",
             "type": "market",
@@ -363,13 +395,17 @@ class AvanzaTrading:
         self._log_order(order)
         return order
 
-    async def place_market_sell(
-        self, instrument_id: str, volume: float
-    ) -> Dict[str, Any]:
+    async def place_market_sell(self, instrument_id: str) -> Dict[str, Any]:
         info = self._get_instrument_info(instrument_id)
         price = await self._get_last_buy_price(instrument_id)
         if price is None:
             raise Exception("No price data available")
+        volume = self._get_instrument_position_size(instrument_id)
+        if volume is None:
+            raise Exception("No position data available")
+        if volume == 0:
+            raise Exception("No position found")
+
         order = {
             "side": "sell",
             "type": "market",
@@ -391,7 +427,7 @@ class AvanzaTrading:
         return order
 
     async def schedule_buy_stop(
-        self, instrument_id: str, volume: float
+        self, instrument_id: str, percentage: float
     ) -> Dict[str, Any]:
         """
         Place a buy stop order:
@@ -466,6 +502,7 @@ class AvanzaTrading:
                 # take-profit calculation
                 distance = high_last - low_swing
                 take_profit = round(high_last + 2 * distance - tick, 2)
+                volume = self._calculate_volume_size(instrument_id, stop_price, percentage)
 
                 buy_order = {
                     "side": "buy",
@@ -581,7 +618,7 @@ class AvanzaTrading:
         await self._set_scheduled(instrument_id, "buy_stop", next_bar_start, task)
         return {"status": "scheduled", "bar_start": next_bar_start.isoformat()}
 
-    async def late_buy_stop(self, instrument_id: str, volume: float) -> Dict[str, Any]:
+    async def late_buy_stop(self, instrument_id: str, percentage: float) -> Dict[str, Any]:
         """
         Place a late buy stop order immediately:
         - Immediately calculate stop price = 1 tick_size above high of last completed bar.
@@ -615,6 +652,7 @@ class AvanzaTrading:
         sell_stop_price = round(low_swing - tick, 2)
         distance = high_last - low_swing
         take_profit = round(high_last + 2 * distance - tick, 2)
+        volume = self._calculate_volume_size(instrument_id, stop_price, percentage)
 
         buy_order = {
             "side": "buy",
@@ -721,9 +759,7 @@ class AvanzaTrading:
             "orders": [buy_order, sell_stop_order, take_profit_order],
         }
 
-    async def schedule_sell_stop(
-        self, instrument_id: str, volume: float
-    ) -> Dict[str, Any]:
+    async def schedule_sell_stop(self, instrument_id: str) -> Dict[str, Any]:
         """
         Place a sell stop order:
         - Wait for current bar to complete. Exactly at new bar 0s, stop price = 1 tick_size below low of last completed bar.
@@ -775,6 +811,12 @@ class AvanzaTrading:
                 last_bar = lst[last_idx]
                 low_last = float(last_bar["low"])
                 stop_price = round(low_last - tick * tick_coeff, 2)
+                volume = self._get_instrument_position_size(instrument_id)
+                if volume is None:
+                    raise Exception("No position data available")
+                if volume == 0:
+                    raise Exception("No position found")
+
                 sell_order = {
                     "side": "sell",
                     "type": "stop",
@@ -821,7 +863,7 @@ class AvanzaTrading:
         await self._set_scheduled(instrument_id, "sell_stop", next_bar_start, task)
         return {"status": "scheduled", "bar_start": next_bar_start.isoformat()}
 
-    async def late_sell_stop(self, instrument_id: str, volume: float) -> Dict[str, Any]:
+    async def late_sell_stop(self, instrument_id: str) -> Dict[str, Any]:
         """
         Place a late sell stop order immediately:
         - Immediately calculate stop price = 1 tick_size below low of last completed bar.
@@ -839,6 +881,12 @@ class AvanzaTrading:
         last_bar = lst[last_idx]
         low_last = float(last_bar["low"])
         stop_price = round(low_last - tick * tick_coeff, 2)
+        volume = self._get_instrument_position_size(instrument_id)
+        if volume is None:
+            raise Exception("No position data available")
+        if volume == 0:
+            raise Exception("No position found")
+
         sell_order = {
             "side": "sell",
             "type": "stop",
