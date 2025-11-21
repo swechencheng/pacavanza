@@ -113,6 +113,51 @@ class AvanzaTrading:
     # helper: get account positions
     def _get_account_positions(self) -> List[Dict[str, Any]]:
         account_data = self._get_accounts_and_positions()
+        """
+        Sample positions e.g.:
+        [
+            {
+                "accountId": "5501234",
+                "volume": 6,
+                "isin": "IE00B3VWN393",
+                "currency": "USD",
+                "orderbookId": "1792198",
+                "name": "iShares $ Treasury Bond 3-7yr UCITS ETF USD (Acc)",
+                "instrumentType": "EXCHANGE_TRADED_FUND",
+                "countryCode": "DE",
+                "price": 142.240,
+                "marketValue": 8194.3042,
+                "averageAquiredValue": 1409.477001,
+                "averageAcquiredPriceOrderbookCurrency": 140.24,
+                "acquiredValueOrderbookCurrency": 841.44,
+                "acquiredAmount": 8456.86,
+                "amountDevelopment": -262.5578,
+                "percentDevelopment": -0.0310,
+                "volumeFactor": 1.00,
+                "availableVolume": 6
+            },
+            {
+                "accountId": "5501234",
+                "volume": 90,
+                "isin": "IE00BGR7L912",
+                "currency": "EUR",
+                "orderbookId": "1063814",
+                "name": "iShares $ Treasury Bond 0-1yr UCITS ETF USD (Dist)",
+                "instrumentType": "EXCHANGE_TRADED_FUND",
+                "countryCode": "DE",
+                "price": 4.3067,
+                "marketValue": 4290.7652,
+                "averageAquiredValue": 54.566405,
+                "averageAcquiredPriceOrderbookCurrency": 4.745111,
+                "acquiredValueOrderbookCurrency": 427.059990,
+                "acquiredAmount": 4910.98,
+                "amountDevelopment": -620.2113,
+                "percentDevelopment": -0.1263,
+                "volumeFactor": 1.00,
+                "availableVolume": 90
+            }
+        ]
+        """
         return account_data["positions"]
 
     # helper: get instrument position
@@ -141,6 +186,129 @@ class AvanzaTrading:
         if (price * vol) < 1000.01:
             raise ValueError(f"Order size too small for {instrument_id}")
         return vol
+
+    # helper: cleanup residual stop-losses
+    def cleanup_residual_sell_stop_losses(self) -> List[Dict[str, Any]]:
+        """
+        Sample AVANZA.get_all_stop_losses() returns, e.g.:
+        [
+            {
+                "id": "A1^1758088942733^999999",
+                "status": "ACTIVE",
+                "account": {
+                    "id": "5554321",
+                    "name": "5554321",
+                    "type": "INVESTERINGSSPARKONTO",
+                    "urlParameterId": "RosI2M8iyqbf03TQfm58fw"
+                },
+                "orderbook": {
+                    "id": "854155",
+                    "name": "Jefferies Financial Group",
+                    "countryCode": "US",
+                    "currency": "USD",
+                    "shortName": "JEF",
+                    "type": "STOCK",
+                    "stoplossMarketMakerQuote": false
+                },
+                "message": "",
+                "trigger": {
+                    "value": 63.01,
+                    "type": "MORE_OR_EQUAL",
+                    "validUntil": "2026-02-06",
+                    "valueType": "MONETARY",
+                    "triggerOnMarketMakerQuote": false
+                },
+                "order": {
+                    "type": "SELL",
+                    "price": 63,
+                    "volume": 18,
+                    "shortSellingAllowed": false,
+                    "validDays": 1,
+                    "priceType": "MONETARY",
+                    "priceDecimalPrecision": 0
+                },
+                "editable": true,
+                "deletable": true
+            },
+            {
+                "id": "A1^1758088942733^999998",
+                "status": "ACTIVE",
+                "account": {
+                    "id": "5554321",
+                    "name": "5554321",
+                    "type": "INVESTERINGSSPARKONTO",
+                    "urlParameterId": "RosI2M8iyqbf03TQfm58fw"
+                },
+                "orderbook": {
+                    "id": "1424051",
+                    "name": "Pagaya Technologies A",
+                    "countryCode": "US",
+                    "currency": "USD",
+                    "shortName": "PGY",
+                    "type": "STOCK",
+                    "stoplossMarketMakerQuote": false
+                },
+                "message": "",
+                "trigger": {
+                    "value": 39.01,
+                    "type": "MORE_OR_EQUAL",
+                    "validUntil": "2026-01-30",
+                    "valueType": "MONETARY",
+                    "triggerOnMarketMakerQuote": false
+                },
+                "order": {
+                    "type": "SELL",
+                    "price": 39,
+                    "volume": 36,
+                    "shortSellingAllowed": false,
+                    "validDays": 1,
+                    "priceType": "MONETARY",
+                    "priceDecimalPrecision": 0
+                },
+                "editable": true,
+                "deletable": true
+            }
+        ]
+        """
+        all_stop_losses = AVANZA.get_all_stop_losses()
+        all_positions = self._get_account_positions()
+
+        # Group stop losses by orderbook id
+        sl_by_orderbook: Dict[str, List[Dict[str, Any]]] = {}
+        for sl in all_stop_losses:
+            # Ensure we only look at active stop losses for our account if needed, 
+            # though get_all_stop_losses usually returns for the logged in user.
+            # The structure of sl is as shown in the docstring.
+            ob_id = sl["orderbook"]["id"]
+            if ob_id not in sl_by_orderbook:
+                sl_by_orderbook[ob_id] = []
+            sl_by_orderbook[ob_id].append(sl)
+
+        # Get set of orderbook ids that have positions
+        position_orderbook_ids = set(p["orderbookId"] for p in all_positions)
+
+        # Iterate over grouped stop losses
+        for ob_id, sl_list in sl_by_orderbook.items():
+            # Check if we have a position for this orderbook
+            if ob_id in position_orderbook_ids:
+                continue
+
+            # Check if there are any BUY stop losses
+            has_buy_sl = any(sl["order"]["type"] == "BUY" for sl in sl_list)
+            if has_buy_sl:
+                continue
+
+            # If we are here:
+            # 1. No active position for this orderbook
+            # 2. No BUY stop losses for this orderbook
+            # We should delete all SELL stop losses for this orderbook
+            for sl in sl_list:
+                if sl["order"]["type"] == "SELL":
+                    LOGGER.info(f"Deleting residual sell stop loss: {sl['id']} for orderbook {ob_id}")
+                    try:
+                        AVANZA.delete_stop_loss_order(account_id=ACCOUNT_ID, stop_loss_id=sl["id"])
+                    except Exception as e:
+                        LOGGER.error(f"Failed to delete stop loss {sl['id']}: {e}")
 
     # helper: prune bars older than 7 days for memory saving (called under lock by caller)
     def prune_old_bars_snapshot(
