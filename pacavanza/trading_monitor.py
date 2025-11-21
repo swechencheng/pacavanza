@@ -266,7 +266,7 @@ class TradingMonitor:
                     o.get("orderId") for o in active_orders if o.get("orderId")
                 }
                 instrument_keys = (
-                    item.get("ID") for item in self._instrument_list.values()
+                    item.get("orderbookId") for item in self._instrument_list.values()
                 )  # Relies on _load_instrument_list
 
                 # 1. Queue new relevant orders for monitoring (Req 1)

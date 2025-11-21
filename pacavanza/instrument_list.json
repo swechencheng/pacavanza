@@ -2,7 +2,7 @@
     "mini-l-omx-ava-468": {
         "name": "MINI L OMX AVA 468",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1153662/mini-l-omx-ava-468",
-        "ID": "1153662",
+        "orderbookId": "1153662",
         "ratio": 1,
         "order_volume": 90,
         "tick_size": 0.25,
@@ -15,7 +15,7 @@
     "mini-l-omx-ava-1366": {
         "name": "MINI L OMX AVA 1366",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2044158/mini-l-omx-ava-1366",
-        "ID": "2044158",
+        "orderbookId": "2044158",
         "ratio": 1,
         "order_volume": 180,
         "tick_size": 0.25,
@@ -28,7 +28,7 @@
     "mini-s-omx-ava-1575": {
         "name": "MINI S OMX AVA 1575",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141626/mini-s-omx-ava-1575",
-        "ID": "2141626",
+        "orderbookId": "2141626",
         "ratio": 1,
         "order_volume": 90,
         "tick_size": 0.25,
@@ -41,7 +41,7 @@
     "mini-s-omx-ava-1620": {
         "name": "MINI S OMX AVA 1620",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2199990/mini-s-omx-ava-1620",
-        "ID": "2199990",
+        "orderbookId": "2199990",
         "ratio": 1,
         "order_volume": 180,
         "tick_size": 0.25,
@@ -54,7 +54,7 @@
     "mini-l-sp500-ava-309": {
         "name": "MINI L SP500 AVA 309",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2054171/mini-l-sp500-ava-309",
-        "ID": "2054171",
+        "orderbookId": "2054171",
         "ratio": 100,
         "order_volume": 300,
         "tick_size": 0.03,
@@ -67,7 +67,7 @@
     "mini-l-sp500-ava-333": {
         "name": "MINI L SP500 AVA 333",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2074903/mini-l-sp500-ava-333",
-        "ID": "2074903",
+        "orderbookId": "2074903",
         "ratio": 100,
         "order_volume": 750,
         "tick_size": 0.03,
@@ -80,7 +80,7 @@
     "mini-s-sp500-ava-330": {
         "name": "MINI S SP500 AVA 330",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141631/mini-s-sp500-ava-330",
-        "ID": "2141631",
+        "orderbookId": "2141631",
         "ratio": 100,
         "order_volume": 300,
         "tick_size": 0.03,
@@ -93,7 +93,7 @@
     "mini-s-sp500-ava-342": {
         "name": "MINI S SP500 AVA 342",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2204749/mini-s-sp500-ava-342",
-        "ID": "2204749",
+        "orderbookId": "2204749",
         "ratio": 100,
         "order_volume": 750,
         "tick_size": 0.03,
@@ -106,7 +106,7 @@
     "mini-l-usdsek-ava-75": {
         "name": "MINI L USDSEK AVA 75",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1437725/mini-l-usdsek-ava-75",
-        "ID": "1437725",
+        "orderbookId": "1437725",
         "ratio": 0.1,
         "order_volume": 4500,
         "tick_size": 0.02,
@@ -119,7 +119,7 @@
     "mini-s-usdsek-ava-120": {
         "name": "MINI S USDSEK AVA 120",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1352333/mini-s-usdsek-ava-120",
-        "ID": "1352333",
+        "orderbookId": "1352333",
         "ratio": 0.1,
         "order_volume": 4500,
         "tick_size": 0.02,
@@ -132,7 +132,7 @@
     "mini-l-bitcoin-ava-4": {
         "name": "MINI L BITCOIN AVA 4",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2090443/mini-l-bitcoin-ava-4",
-        "ID": "2090443",
+        "orderbookId": "2090443",
         "ratio": 10000,
         "order_volume": 900,
         "tick_size": 0.02,
@@ -145,7 +145,7 @@
     "mini-s-bitcoin-ava-2": {
         "name": "MINI S BITCOIN AVA 2",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2091372/mini-s-bitcoin-ava-2",
-        "ID": "2091372",
+        "orderbookId": "2091372",
         "ratio": 10000,
         "order_volume": 900,
         "tick_size": 0.48,
@@ -158,7 +158,7 @@
     "mini-l-guld-ava-270": {
         "name": "MINI L GULD AVA 270",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2135575/mini-l-guld-ava-270",
-        "ID": "2135575",
+        "orderbookId": "2135575",
         "ratio": 0.1,
         "order_volume": 900,
         "tick_size": 0.48,
@@ -171,7 +171,7 @@
     "mini-s-guld-ava-390": {
         "name": "MINI S GULD AVA 390",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2198481/mini-s-guld-ava-390",
-        "ID": "2198481",
+        "orderbookId": "2198481",
         "ratio": 0.1,
         "order_volume": 900,
         "tick_size": 0.02,
@@ -184,7 +184,7 @@
     "mini-l-olja-ava-486": {
         "name": "MINI L OLJA AVA 486",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1337592/mini-l-olja-ava-486",
-        "ID": "1337592",
+        "orderbookId": "1337592",
         "ratio": 0.1,
         "order_volume": 450,
         "tick_size": 0.09,
@@ -197,7 +197,7 @@
     "mini-s-olja-ava-684": {
         "name": "MINI S OLJA AVA 684",
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2124569/mini-s-olja-ava-684",
-        "ID": "2124569",
+        "orderbookId": "2124569",
         "ratio": 0.1,
         "order_volume": 450,
         "tick_size": 0.09,

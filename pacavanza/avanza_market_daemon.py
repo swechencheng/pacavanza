@@ -77,13 +77,13 @@ class MultiMarketCollector:
         self.last_sell_price = {sid: None for sid in self.instrument_ids}
 
         # validate product list (and resolve product ids)
-        self.product_ids = {}
+        self.orderbook_ids = {}
         for sid in self.instrument_ids:
             info = self.instrument_list.get(sid, {})
-            pid = info.get("ID")
-            if not pid:
-                raise ValueError(f"Product ID not found for {sid}")
-            self.product_ids[sid] = pid
+            obid = info.get("orderbookId")
+            if not obid:
+                raise ValueError(f"orderbookId not found for {sid}")
+            self.orderbook_ids[sid] = obid
 
         # track tasks & clients for graceful shutdown
         self._tasks = []  # list of asyncio.Task objects we create
@@ -628,8 +628,8 @@ class MultiMarketCollector:
 
                 # start per-instrument SSE loops (each loop handles its own reconnects)
                 self._tasks = []
-                for sid, pid in self.product_ids.items():
-                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, pid))
+                for sid, obid in self.orderbook_ids.items():
+                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, obid))
                     self._tasks.append(t)
 
                 # Wait for all tasks (they are infinite loops that only stop on unexpected error)

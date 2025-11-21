@@ -14,7 +14,7 @@ from avanza.entities import (
     StopLossOrderEvent,
 )
 from avanza.constants import OrderType
-from pacavanza.utils.utils import find_key_by_id
+from pacavanza.utils.utils import find_key_by_orderbook_id
 
 SECRETS = json.load(open("./pacavanza/../secret.json"))
 AVANZA = Avanza(SECRETS)
@@ -119,8 +119,8 @@ class AvanzaTrading:
     def _get_instrument_position(self, instrument_id: str) -> Dict[str, Any]:
         positions = self._get_account_positions()
         for position in positions:
-            iid = find_key_by_id(self.instrument_list, position["orderbookId"])
-            if instrument_id == iid:
+            sid = find_key_by_orderbook_id(self.instrument_list, position["orderbookId"])
+            if instrument_id == sid:
                 return position
         return None
 
@@ -385,7 +385,7 @@ class AvanzaTrading:
         }
         ret = AVANZA.place_order(
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             order_type=OrderType.BUY,
             price=price,
             volume=volume,
@@ -416,7 +416,7 @@ class AvanzaTrading:
         }
         ret = AVANZA.place_order(
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             order_type=OrderType.SELL,
             price=price,
             volume=volume,
@@ -548,7 +548,7 @@ class AvanzaTrading:
                 ret = AVANZA.place_stop_loss_order(
                     parent_stop_loss_id="0",
                     account_id=ACCOUNT_ID,
-                    order_book_id=info["ID"],
+                    order_book_id=info["orderbookId"],
                     stop_loss_trigger=sl_buy_trig,
                     stop_loss_order_event=sl_buy_evt,
                 )
@@ -573,7 +573,7 @@ class AvanzaTrading:
                 ret = AVANZA.place_stop_loss_order(
                     parent_stop_loss_id="0",
                     account_id=ACCOUNT_ID,
-                    order_book_id=info["ID"],
+                    order_book_id=info["orderbookId"],
                     stop_loss_trigger=sl_sell_trig,
                     stop_loss_order_event=sl_sell_evt,
                 )
@@ -598,7 +598,7 @@ class AvanzaTrading:
                 ret = AVANZA.place_stop_loss_order(
                     parent_stop_loss_id="0",
                     account_id=ACCOUNT_ID,
-                    order_book_id=info["ID"],
+                    order_book_id=info["orderbookId"],
                     stop_loss_trigger=tp_sell_trig,
                     stop_loss_order_event=tp_sell_evt,
                 )
@@ -698,7 +698,7 @@ class AvanzaTrading:
         ret = AVANZA.place_stop_loss_order(
             parent_stop_loss_id="0",
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             stop_loss_trigger=sl_buy_trig,
             stop_loss_order_event=sl_buy_evt,
         )
@@ -723,7 +723,7 @@ class AvanzaTrading:
         ret = AVANZA.place_stop_loss_order(
             parent_stop_loss_id="0",
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             stop_loss_trigger=sl_sell_trig,
             stop_loss_order_event=sl_sell_evt,
         )
@@ -748,7 +748,7 @@ class AvanzaTrading:
         ret = AVANZA.place_stop_loss_order(
             parent_stop_loss_id="0",
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             stop_loss_trigger=tp_sell_trig,
             stop_loss_order_event=tp_sell_evt,
         )
@@ -844,7 +844,7 @@ class AvanzaTrading:
                 ret = AVANZA.place_stop_loss_order(
                     parent_stop_loss_id="0",
                     account_id=ACCOUNT_ID,
-                    order_book_id=info["ID"],
+                    order_book_id=info["orderbookId"],
                     stop_loss_trigger=sl_sell_trig,
                     stop_loss_order_event=sl_sell_evt,
                 )
@@ -914,7 +914,7 @@ class AvanzaTrading:
         ret = AVANZA.place_stop_loss_order(
             parent_stop_loss_id="0",
             account_id=ACCOUNT_ID,
-            order_book_id=info["ID"],
+            order_book_id=info["orderbookId"],
             stop_loss_trigger=sl_sell_trig,
             stop_loss_order_event=sl_sell_evt,
         )
@@ -984,7 +984,7 @@ class AvanzaTrading:
         if not modifiable:
             raise Exception("Un-modifiable")
 
-        instrument_id = find_key_by_id(self.instrument_list, orderbood_id)
+        instrument_id = find_key_by_orderbook_id(self.instrument_list, orderbood_id)
         if not instrument_id:
             raise Exception(f"No instrument available for {orderbood_id}")
         new_price = None

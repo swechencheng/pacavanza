@@ -37,8 +37,8 @@ def save_json_atomic(path: str, obj):
                 pass
 
 
-def find_key_by_id(data, target_id):
+def find_key_by_orderbook_id(data, target_id):
     for key, item in data.items():
-        if item["ID"] == target_id:
+        if item["orderbookId"] == target_id:
             return key
     return None
