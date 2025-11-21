@@ -152,6 +152,29 @@ class TradingMonitor:
                 f"Exception calling edit_order_follow_market for {order_id}: {e}"
             )
 
+    async def _call_cleanup_residual_sell_stop_losses_api(self):
+        """Calls the backend API to cleanup residual sell stop losses."""
+        if not self._http_session or self._http_session.closed:
+            LOGGER.error("HTTP session not available, cannot cleanup residual sell stop losses.")
+            return
+
+        url = f"{self._backend_url}/trade/cleanup_residual_sell_stop_losses"
+
+        try:
+            LOGGER.info("Calling cleanup_residual_sell_stop_losses...")
+            async with self._http_session.post(url) as response:
+                if response.status == 200:
+                    LOGGER.info("Successfully called cleanup_residual_sell_stop_losses")
+                else:
+                    LOGGER.error(
+                        f"Failed to call cleanup_residual_sell_stop_losses. "
+                        f"Status: {response.status}, Body: {await response.text()}"
+                    )
+        except Exception as e:
+            LOGGER.exception(
+                f"Exception calling cleanup_residual_sell_stop_losses: {e}"
+            )
+
     async def _monitor_order_task(
         self, order_id: str, account_id: str, orderbook_id: str
     ):
@@ -302,6 +325,10 @@ class TradingMonitor:
                                 task.cancel()
                             # Also remove from pending set if it was there
                             self._pending_add_set.discard(orderId)
+
+                if not active_orders:
+                    # Call backend /trade/cleanup_residual_sell_stop_losses
+                    await self._call_cleanup_residual_sell_stop_losses_api()
 
             except Exception as e:
                 LOGGER.exception(f"Error in _callback_push ORDER handling: {e}")

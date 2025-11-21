@@ -754,6 +754,17 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order_ret})
 
+    @app.post("/trade/cleanup_residual_sell_stop_losses")
+    async def cleanup_residual_sell_stop_losses(req: Request):
+        """
+        Clean up residual sell stop losses.
+        """
+        try:
+            trading.cleanup_residual_sell_stop_losses()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok"})
+
     return app
 
 
