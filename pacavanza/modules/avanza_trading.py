@@ -19,6 +19,7 @@ from pacavanza.utils.utils import find_key_by_orderbook_id
 SECRETS = json.load(open("./pacavanza/../secret.json"))
 AVANZA = Avanza(SECRETS)
 ACCOUNT_ID = SECRETS["accountId"]
+PROFIT_LOSS_RATIO = 1
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_trading").setLevel(logging.DEBUG)
@@ -669,7 +670,7 @@ class AvanzaTrading:
                 sell_stop_price = round(low_swing - tick, 2)
                 # take-profit calculation
                 distance = high_last - low_swing
-                take_profit = round(high_last + 2 * distance - tick, 2)
+                take_profit = round(high_last + PROFIT_LOSS_RATIO * distance - tick, 2)
                 volume = self._calculate_volume_size(instrument_id, stop_price, percentage)
 
                 buy_order = {
@@ -819,7 +820,7 @@ class AvanzaTrading:
             low_swing = float(last_bar["low"])
         sell_stop_price = round(low_swing - tick, 2)
         distance = high_last - low_swing
-        take_profit = round(high_last + 2 * distance - tick, 2)
+        take_profit = round(high_last + PROFIT_LOSS_RATIO * distance - tick, 2)
         volume = self._calculate_volume_size(instrument_id, stop_price, percentage)
 
         buy_order = {
