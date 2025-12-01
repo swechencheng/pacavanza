@@ -38,7 +38,7 @@ class AvanzaSSEClient:
                 self.sse_url,
                 cookies=self.session_cookie,
             ) as resp:
-                LOGGER.info("Connected to SSE stream: %s", self.sse_url)
+                LOGGER.debug("Connected to SSE stream: %s", self.sse_url)
                 async for line in resp.aiter_lines():
                     if not line:
                         continue
