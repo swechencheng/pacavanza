@@ -164,7 +164,7 @@
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1437725/mini-l-usdsek-ava-75",
         "orderbookId": "1437725",
         "tick_size": 0.02,
-        "tick_coefficient": 2.0,
+        "tick_coefficient": 1.5,
         "timezone": "Europe/Stockholm",
         "market_open": "08:15",
         "market_close": "21:50"
@@ -174,7 +174,7 @@
         "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1352333/mini-s-usdsek-ava-120",
         "orderbookId": "1352333",
         "tick_size": 0.02,
-        "tick_coefficient": 2.0,
+        "tick_coefficient": 1.5,
         "timezone": "Europe/Stockholm",
         "market_open": "08:15",
         "market_close": "21:50"
