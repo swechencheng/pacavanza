@@ -754,6 +754,25 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order_ret})
 
+    @app.post("/trade/delete_stop_losses")
+    async def delete_stop_losses(req: Request):
+        """
+        Delete stop losses for a specific instrument.
+        """
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        if instrument_id not in instrument_list:
+            raise HTTPException(
+                status_code=400, detail="instrumentId not found in instrument_list.json"
+            )
+        try:
+            trading.delete_stop_losses(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok"})
+
     @app.post("/trade/cleanup_residual_sell_stop_losses")
     async def cleanup_residual_sell_stop_losses(req: Request):
         """

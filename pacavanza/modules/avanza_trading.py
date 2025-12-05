@@ -188,6 +188,22 @@ class AvanzaTrading:
             raise ValueError(f"Order size too small for {instrument_id}")
         return vol
 
+    # helper: delete stop-losses
+    def delete_stop_losses(self, instrument_id: str) -> None:
+        info = self._get_instrument_info(instrument_id)
+        if not info:
+            raise ValueError(f"Instrument {instrument_id} not found")
+        ob_id = info.get("orderbookId")
+        if not ob_id:
+            raise ValueError(f"orderbookId for {instrument_id} not found")
+        all_stop_losses = AVANZA.get_all_stop_losses()
+        for sl in all_stop_losses:
+            if sl["orderbook"]["id"] == ob_id:
+                try:
+                    AVANZA.delete_stop_loss_order(account_id=ACCOUNT_ID, stop_loss_id=sl["id"])
+                except Exception as e:
+                    LOGGER.error(f"Failed to delete stop loss {instrument_id}: {e}")
+
     # helper: cleanup residual stop-losses
     def cleanup_residual_sell_stop_losses(self) -> List[Dict[str, Any]]:
         """

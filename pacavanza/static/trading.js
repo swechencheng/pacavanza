@@ -17,6 +17,7 @@
   const btnSellStop = document.getElementById("btn-sell-stop");
   const btnCancelSellStop = document.getElementById("btn-cancel-sell-stop");
   const btnLateSellStop = document.getElementById("btn-late-sell-stop");
+  const btnDeleteStopLosses = document.getElementById("btn-delete-stop-losses");
 
   function showInfo(txt, timeout = 4000) {
     if (!infoEl) return;
@@ -154,6 +155,16 @@
       const p = getInstrumentAndPercentage();
       if (!p) return;
       await callTrade("/trade/late_sell_stop", {
+        instrumentId: p.instrumentId,
+      });
+    });
+  }
+
+  if (btnDeleteStopLosses) {
+    btnDeleteStopLosses.addEventListener("click", async () => {
+      const p = getInstrumentAndPercentage();
+      if (!p) return;
+      await callTrade("/trade/delete_stop_losses", {
         instrumentId: p.instrumentId,
       });
     });
