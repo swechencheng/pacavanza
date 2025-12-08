@@ -62,6 +62,33 @@
       lineWidth: 1,
     });
 
+    // ********** HIGH/LOW LINES **********
+    // Dashed Blue for Yesterday
+    const yesterdayHighSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#8929ffff",
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      title: "Y-H",
+    });
+    const yesterdayLowSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#8929ffff",
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed,
+      title: "Y-L",
+    });
+
+    // Solid Blue for Today
+    const todayHighSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#c04d00ff",
+      lineWidth: 1,
+      title: "T-H",
+    });
+    const todayLowSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#c04d00ff",
+      lineWidth: 1,
+      title: "T-L",
+    });
+
     // ********** OHLC TOOLTIP FOR CONTROLS LINE **********
     // Get the tooltip element
     const toolTip = document.getElementById("chart-ohlc-info");
@@ -142,6 +169,15 @@
     // keep a quick cache of the latest EMA and its time to avoid sorting each tick
     let lastEMAValue = null;
     let lastEMATime = null;
+
+    // High/Low State
+    const highLowState = {
+      currentDay: null, // YYYY-MM-DD
+      currentHigh: -Infinity,
+      currentLow: Infinity,
+      yesterdayHigh: null,
+      yesterdayLow: null,
+    };
 
     // default bar interval: 5m (in seconds) — use this to compute countdown if end_time missing
     const INTERVAL_SECONDS = 5 * 60;
@@ -361,6 +397,140 @@
       ema20Series.update({ time: newTime, value: newEMA });
     }
 
+    // ********** HIGH/LOW CALCULATION FUNCTIONS **********
+    function calculateHistoryHighLow(bars) {
+      if (!bars || bars.length === 0 || !groupingState.sessionTZ) return;
+
+      const yhData = [];
+      const ylData = [];
+      const thData = [];
+      const tlData = [];
+
+      // We need to group bars by day first to calculate historical dailies
+      // But we also need to output sliding values for every bar.
+      // Approach: linear scan
+      let currentDay = null;
+      let dailyHigh = -Infinity;
+      let dailyLow = Infinity;
+
+      // Store completed days stats: dayKey -> {high, low}
+      const dayStats = new Map();
+
+      // Pass 1: Identify days and their ranges (to get "yesterday" for history)
+      // A bit tricky for "yesterday" if we do one pass.
+      // Actually, for "Yesterday's High", on Day X, we need Day X-1's High.
+      // We can maintain `prevDayHigh` and `prevDayLow` as we switch days.
+
+      let prevDayHigh = null;
+      let prevDayLow = null;
+
+      // State for current linear scan
+      let scanDay = null;
+      let scanHigh = -Infinity;
+      let scanLow = Infinity;
+
+      for (const bar of bars) {
+        const parts = getLocalParts(bar.time, groupingState.sessionTZ);
+        const dayKey = parts.ymd;
+
+        if (dayKey !== scanDay) {
+          // New day detected
+          if (scanDay !== null) {
+            // Finish previous day
+            prevDayHigh = scanHigh;
+            prevDayLow = scanLow;
+          }
+          scanDay = dayKey;
+          scanHigh = -Infinity;
+          scanLow = Infinity;
+        }
+
+        // Update current day stats
+        if (bar.high > scanHigh) scanHigh = bar.high;
+        if (bar.low < scanLow) scanLow = bar.low;
+
+        // Push data points
+        // Yesterday's lines (Dashed)
+        if (prevDayHigh !== null) {
+          yhData.push({ time: bar.time, value: prevDayHigh });
+          ylData.push({ time: bar.time, value: prevDayLow });
+        }
+
+        // Today's lines (Solid) - Running high/low
+        thData.push({ time: bar.time, value: scanHigh });
+        tlData.push({ time: bar.time, value: scanLow });
+      }
+
+      // Update series
+      yesterdayHighSeries.setData(yhData);
+      yesterdayLowSeries.setData(ylData);
+      todayHighSeries.setData(thData);
+      todayLowSeries.setData(tlData);
+
+      // Update state for incremental updates
+      highLowState.currentDay = scanDay;
+      highLowState.currentHigh = scanHigh;
+      highLowState.currentLow = scanLow;
+      highLowState.yesterdayHigh = prevDayHigh;
+      highLowState.yesterdayLow = prevDayLow;
+    }
+
+    function updateHighLowIncremental(bar) {
+      if (!groupingState.sessionTZ) return;
+
+      const parts = getLocalParts(bar.time, groupingState.sessionTZ);
+      const dayKey = parts.ymd;
+
+      // Check for new day
+      if (dayKey !== highLowState.currentDay) {
+        // Close out old day
+        if (highLowState.currentDay !== null) {
+          highLowState.yesterdayHigh = highLowState.currentHigh;
+          highLowState.yesterdayLow = highLowState.currentLow;
+        }
+        // Init new day
+        highLowState.currentDay = dayKey;
+        highLowState.currentHigh = -Infinity;
+        highLowState.currentLow = Infinity;
+      }
+
+      // Update current day running stats
+      // Note: bar can be an update (same time) or new bar (new time).
+      // For proper "Running High/Low", we need to distinguish finalized bars vs updates?
+      // Actually tracking "Running High of Session" is monotonic increasing (for High)
+      // unless we are correcting a bad tick.
+      // But we just receive `bar.high` and `bar.low`.
+      // If this is a new tick for SAME bar, we might need to be careful if we processed it before?
+      // Logic: simplified -> Global session High is max(currentSessionHigh, bar.high).
+      // We don't support "downgrading" a high if a trade is cancelled, but that's rare.
+
+      // Wait, if we receive an update for a bar, that bar's high might increase.
+      // If we move to a NEW bar, we continue accumulating.
+      // The issue is if we process the SAME bar multiple times, max() is safe.
+
+      if (bar.high > highLowState.currentHigh)
+        highLowState.currentHigh = bar.high;
+      if (bar.low < highLowState.currentLow) highLowState.currentLow = bar.low;
+
+      // Update Series
+      if (highLowState.yesterdayHigh !== null) {
+        yesterdayHighSeries.update({
+          time: bar.time,
+          value: highLowState.yesterdayHigh,
+        });
+        yesterdayLowSeries.update({
+          time: bar.time,
+          value: highLowState.yesterdayLow,
+        });
+      }
+
+      todayHighSeries.update({
+        time: bar.time,
+        value: highLowState.currentHigh,
+      });
+      todayLowSeries.update({ time: bar.time, value: highLowState.currentLow });
+    }
+
     async function fetchHistory(instrument) {
       const res = await fetch(
         `/history/${encodeURIComponent(instrument)}?limit=900`
@@ -378,6 +548,16 @@
       lastEMATime = null;
       candleSeries.setData([]);
       ema20Series.setData([]); // Only clear EMA20 series
+      yesterdayHighSeries.setData([]);
+      yesterdayLowSeries.setData([]);
+      todayHighSeries.setData([]);
+      todayLowSeries.setData([]);
+      // Reset High/Low State
+      highLowState.currentDay = null;
+      highLowState.currentHigh = -Infinity;
+      highLowState.currentLow = Infinity;
+      highLowState.yesterdayHigh = null;
+      highLowState.yesterdayLow = null;
       // reset grouping map/state
       barGroupMap.clear();
       groupingState.count = 0;
@@ -768,6 +948,9 @@
             );
           }
 
+          // ********** CALCULATE HIGH/LOW LINES **********
+          calculateHistoryHighLow(sortedData);
+
           // ------------------ grouping for history (added) ------------------
           // We use 5m by default (ignore Pine interval checking)
           groupingState.tf = "5";
@@ -887,6 +1070,9 @@
                   // ********** INCREMENTAL EMA20 UPDATE FOR REAL-TIME DATA **********
                   updateEMA20Incremental(close, t);
 
+                  // ********** INCREMENTAL HIGH/LOW UPDATE **********
+                  updateHighLowIncremental(candleData);
+
                   // NOTE: Do NOT run grouping/marker creation on 'update' messages.
                   // That caused multiple markers on a still-open last bar.
                   // Grouping will run for history and completed messages only.
@@ -973,6 +1159,9 @@
                 // ********** INCREMENTAL EMA20 UPDATE FOR COMPLETED BARS **********
                 updateEMA20Incremental(close, t);
 
+                // ********** INCREMENTAL HIGH/LOW UPDATE (Completed) **********
+                updateHighLowIncremental(candleData);
+
                 // Recompute grouping for that day's session using currentData snapshot.
                 // This fills barGroupMap for any completed bars that were missed.
                 recomputeGroupingForDayOf(t);
@@ -1025,6 +1214,9 @@
                       lastEMATime = lastEmaPoint.time;
                     }
                   }
+
+                  // ********** RECALCULATE HIGH/LOW ON HISTORICAL REPLACE **********
+                  calculateHistoryHighLow(sortedData);
 
                   // ********** RECALCULATE GROUPING WHEN REPLACING HISTORICAL DATA **********
                   // Recompute grouping across whole sortedData and repopulate barGroupMap
