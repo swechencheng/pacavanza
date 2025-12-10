@@ -236,17 +236,17 @@ class MultiMarketCollector:
                 # Accept market gap and skip anomaly detection
                 LOGGER.info(f"[{instrument_id}] Market just opened at {readable_ts}.")
             else:
-                # Anomaly detection: ignore new prices that are beyond 1.0% of last stored prices, usually caused by other market participants' orders
+                # Anomaly detection: ignore new prices that are beyond 3.0% of last stored prices, usually caused by other market participants' orders
                 last_buy = self.last_buy_price.get(instrument_id)
                 last_sell = self.last_sell_price.get(instrument_id)
                 if last_buy is not None:
-                    if abs(buy_price - last_buy) / last_buy > 0.01:
+                    if abs(buy_price - last_buy) / last_buy > 0.03:
                         LOGGER.warning(
                             f"[{instrument_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
                         )
                         return
                 if last_sell is not None:
-                    if abs(sell_price - last_sell) / last_sell > 0.01:
+                    if abs(sell_price - last_sell) / last_sell > 0.03:
                         LOGGER.warning(
                             f"[{instrument_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
                         )
