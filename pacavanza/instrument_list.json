@@ -259,20 +259,20 @@
         "market_open": "08:15",
         "market_close": "21:50"
     },
-    "mini-l-gas-ava-155": {
-        "name": "MINI L GAS AVA 155",
-        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2234293/mini-l-gas-ava-155",
-        "orderbookId": "2234293",
+    "mini-l-gas-ava-106": {
+        "name": "MINI L GAS AVA 106",
+        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1832675/mini-l-gas-ava-106",
+        "orderbookId": "1832675",
         "tick_size": 0.03,
         "tick_coefficient": 1.8,
         "timezone": "Europe/Stockholm",
         "market_open": "08:15",
         "market_close": "21:50"
     },
-    "mini-s-gas-ava-214": {
-        "name": "MINI S GAS AVA 214",
-        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2066606/mini-s-gas-ava-214",
-        "orderbookId": "2066606",
+    "mini-s-gas-ava-207": {
+        "name": "MINI S GAS AVA 207",
+        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2026925/mini-s-gas-ava-207",
+        "orderbookId": "2026925",
         "tick_size": 0.03,
         "tick_coefficient": 1.8,
         "timezone": "Europe/Stockholm",
