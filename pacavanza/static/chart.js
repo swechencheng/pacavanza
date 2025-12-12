@@ -22,7 +22,7 @@
         height: document.getElementById("chart").clientHeight,
         layout: {
           textColor: "#d1d4dc",
-          background: { type: "Solid", color: "#0b1220" },
+          background: { type: "Solid", color: "#000000ff" },
         },
         grid: {
           vertLines: { color: "transparent" },
