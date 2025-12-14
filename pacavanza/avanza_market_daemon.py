@@ -75,6 +75,7 @@ class MultiMarketCollector:
         # per-instrument metadata
         self.last_buy_price = {sid: None for sid in self.instrument_ids}
         self.last_sell_price = {sid: None for sid in self.instrument_ids}
+        self.anomaly_buffer = {sid: [] for sid in self.instrument_ids}
 
         # validate product list (and resolve product ids)
         self.orderbook_ids = {}
@@ -235,22 +236,52 @@ class MultiMarketCollector:
             if not self.last_market_check[instrument_id]:
                 # Accept market gap and skip anomaly detection
                 LOGGER.info(f"[{instrument_id}] Market just opened at {readable_ts}.")
+                self.anomaly_buffer[instrument_id] = []
             else:
-                # Anomaly detection: ignore new prices that are beyond 3.0% of last stored prices, usually caused by other market participants' orders
+                # Anomaly detection: ignore new prices that are beyond 3.0% of last stored prices
+                # Recovery mechanism: If 9 consecutive anomalous quotes are stable (<= 3% diff), accept them.
                 last_buy = self.last_buy_price.get(instrument_id)
                 last_sell = self.last_sell_price.get(instrument_id)
-                if last_buy is not None:
-                    if abs(buy_price - last_buy) / last_buy > 0.03:
+                is_anomalous = False
+
+                if last_buy is not None and abs(buy_price - last_buy) / last_buy > 0.03:
+                    is_anomalous = True
+                elif last_sell is not None and abs(sell_price - last_sell) / last_sell > 0.03:
+                    is_anomalous = True
+
+                if is_anomalous:
+                    buffer = self.anomaly_buffer[instrument_id]
+                    consistent = True
+                    if buffer:
+                        prev_buy, prev_sell = buffer[-1]
+                        if abs(buy_price - prev_buy) / prev_buy > 0.03:
+                            consistent = False
+                        if consistent and abs(sell_price - prev_sell) / prev_sell > 0.03:
+                            consistent = False
+                    
+                    if consistent:
+                        buffer.append((buy_price, sell_price))
+                        if len(buffer) >= 9:
+                            LOGGER.info(
+                                f"[{instrument_id}] Anomaly recovery: 9 consecutive stable quotes. "
+                                f"Accepting new level (B:{buy_price:.2f}, S:{sell_price:.2f})."
+                            )
+                            self.anomaly_buffer[instrument_id] = []
+                            # Fall through to accept logic
+                        else:
+                            LOGGER.warning(
+                                f"[{instrument_id}] Anomalous quote (B:{buy_price:.2f}, S:{sell_price:.2f}) "
+                                f"vs last (B:{last_buy}, S:{last_sell}). Stable count: {len(buffer)}/9. Ignoring."
+                            )
+                            return
+                    else:
                         LOGGER.warning(
-                            f"[{instrument_id}] Anomalous buy price {buy_price:.2f} vs last {last_buy:.2f}, ignoring."
+                            f"[{instrument_id}] Erratic anomaly. Resetting recovery buffer."
                         )
+                        self.anomaly_buffer[instrument_id] = [(buy_price, sell_price)]
                         return
-                if last_sell is not None:
-                    if abs(sell_price - last_sell) / last_sell > 0.03:
-                        LOGGER.warning(
-                            f"[{instrument_id}] Anomalous sell price {sell_price:.2f} vs last {last_sell:.2f}, ignoring."
-                        )
-                        return
+                else:
+                    self.anomaly_buffer[instrument_id] = []
             self.last_market_check[instrument_id] = market_check
 
             # store last prices for this instrument
