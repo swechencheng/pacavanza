@@ -416,7 +416,7 @@ def create_app(
         return Response(status_code=204)
 
     @app.get("/history/{instrument_id}")
-    async def get_history(instrument_id: str, limit: int = 500):
+    async def get_history(instrument_id: str, limit: int = 3600):
         """
         Return the most recent completed_ohlc for instrument.
         This reads existing disk file (preferred) or uses in-memory snapshot if available.

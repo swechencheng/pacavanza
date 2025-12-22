@@ -8,7 +8,7 @@ INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 class InstrumentData:
     def __init__(
-        self, interval_seconds: int, instrument_id: str = "TEST", max_history_hours: int = 168
+        self, interval_seconds: int, instrument_id: str = "TEST", max_history_hours: int = 720
     ):
         self.interval_seconds = interval_seconds
         self.instrument_id = instrument_id

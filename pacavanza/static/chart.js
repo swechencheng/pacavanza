@@ -533,7 +533,7 @@
 
     async function fetchHistory(instrument) {
       const res = await fetch(
-        `/history/${encodeURIComponent(instrument)}?limit=900`
+        `/history/${encodeURIComponent(instrument)}?limit=3600`
       );
       if (!res.ok) throw new Error("history fetch failed: " + res.status);
       return await res.json();
