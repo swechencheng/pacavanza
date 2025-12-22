@@ -209,10 +209,10 @@
         "market_open": "08:15",
         "market_close": "21:50"
     },
-    "mini-s-silver-ava-297": {
-        "name": "MINI S SILVER AVA 297",
-        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2237056/mini-s-silver-ava-297",
-        "orderbookId": "2237056",
+    "mini-s-silver-ava-309": {
+        "name": "MINI S SILVER AVA 309",
+        "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2258177/mini-s-silver-ava-309",
+        "orderbookId": "2258177",
         "tick_size": 0.02,
         "tick_coefficient": 2.0,
         "timezone": "Europe/Stockholm",
