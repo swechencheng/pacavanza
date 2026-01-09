@@ -1,0 +1,8 @@
+[Unit]
+Description=Start PACAvanza Trading Monitor (scheduled)
+RefuseManualStart=no
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl start pacavanza-trading-monitor.service

@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer: Stop PACAvanza Dashboard at 23:00 daily (local time)
+
+[Timer]
+OnCalendar=*-*-* 23:00:00
+Persistent=true
+WakeSystem=true
+
+[Install]
+WantedBy=timers.target

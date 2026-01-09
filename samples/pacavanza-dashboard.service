@@ -1,14 +1,18 @@
 [Unit]
-Description=PACAvanza Dashboard Daemon
+Description=PACAvanza Dashboard
 After=network.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/path/to/pacavanza
 ExecStart=/path/to/pacavanza/venv/bin/run-pacavanza
 Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
 Environment=PATH=/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

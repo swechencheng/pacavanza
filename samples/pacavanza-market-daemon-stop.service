@@ -1,0 +1,8 @@
+[Unit]
+Description=Stop PACAvanza Market Daemon (scheduled)
+RefuseManualStart=no
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop pacavanza-market-daemon.service

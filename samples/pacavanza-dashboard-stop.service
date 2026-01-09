@@ -1,0 +1,8 @@
+[Unit]
+Description=Stop PACAvanza Dashboard (scheduled)
+RefuseManualStart=no
+RefuseManualStop=yes
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop pacavanza-dashboard.service
