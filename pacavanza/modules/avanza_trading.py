@@ -724,7 +724,7 @@ class AvanzaTrading:
                 )
                 sl_buy_evt = StopLossOrderEvent(
                     type=OrderType.BUY,
-                    price=round(stop_price + 0.01, 2),
+                    price=round(stop_price + tick, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -749,7 +749,7 @@ class AvanzaTrading:
                 )
                 sl_sell_evt = StopLossOrderEvent(
                     type=OrderType.SELL,
-                    price=round(sell_stop_price - 0.01, 2),
+                    price=round(sell_stop_price - tick, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -874,7 +874,7 @@ class AvanzaTrading:
         )
         sl_buy_evt = StopLossOrderEvent(
             type=OrderType.BUY,
-            price=round(stop_price + 0.01, 2),
+            price=round(stop_price + tick, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
@@ -899,7 +899,7 @@ class AvanzaTrading:
         )
         sl_sell_evt = StopLossOrderEvent(
             type=OrderType.SELL,
-            price=round(sell_stop_price - 0.01, 2),
+            price=round(sell_stop_price - tick, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
@@ -1020,7 +1020,7 @@ class AvanzaTrading:
                 )
                 sl_sell_evt = StopLossOrderEvent(
                     type=OrderType.SELL,
-                    price=round(stop_price - 0.01, 2),
+                    price=round(stop_price - tick, 2),
                     volume=volume,
                     valid_days=1,
                     price_type=StopLossPriceType.MONETARY,
@@ -1090,7 +1090,7 @@ class AvanzaTrading:
         )
         sl_sell_evt = StopLossOrderEvent(
             type=OrderType.SELL,
-            price=round(stop_price - 0.01, 2),
+            price=round(stop_price - tick, 2),
             volume=volume,
             valid_days=1,
             price_type=StopLossPriceType.MONETARY,
