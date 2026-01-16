@@ -3,7 +3,7 @@
 <plist version="1.0">
     <dict>
         <key>Label</key>
-        <string>com.pacavanza.dashboard</string>
+        <string>com.pacavanza.daemon</string>
 
         <key>ProgramArguments</key>
         <array>
@@ -13,23 +13,10 @@
         <key>RunAtLoad</key>
         <true />
 
-        <!-- Start every day at 08:00 local time -->
-        <key>StartCalendarInterval</key>
-        <dict>
-            <key>Hour</key><integer>8</integer>
-            <key>Minute</key><integer>0</integer>
-        </dict>
-
-        <!-- Stop every day at 23:00 local time -->
-        <key>StopCalendarInterval</key>
-        <dict>
-            <key>Hour</key><integer>23</integer>
-            <key>Minute</key><integer>0</integer>
-        </dict>
-
-        <!-- Do not auto-restart outside the window -->
+        <!-- KeepAlive true ensures the controller itself is always running -->
+        <!-- The controller daemon internally handles 8AM-23PM logic for sub-processes -->
         <key>KeepAlive</key>
-        <false/>
+        <true/>
 
         <key>WorkingDirectory</key>
         <string>/path/to/pacavanza</string>
@@ -43,8 +30,8 @@
         </dict>
 
         <key>StandardOutPath</key>
-        <string>/tmp/pacavanza.stdout.log</string>
+        <string>/tmp/pacavanza.controller.stdout.log</string>
         <key>StandardErrorPath</key>
-        <string>/tmp/pacavanza.stderr.log</string>
+        <string>/tmp/pacavanza.controller.stderr.log</string>
     </dict>
 </plist>

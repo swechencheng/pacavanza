@@ -1,16 +1,16 @@
 [Unit]
-Description=PACAvanza Dashboard
-After=network.target
-Wants=network-online.target
+Description=PACAvanza Daemon
+After=network.target redis.service
+Wants=network-online.target redis.service
 
 [Service]
+User=<USERNAME>
 Type=simple
 WorkingDirectory=/path/to/pacavanza
 ExecStart=/path/to/pacavanza/venv/bin/run-pacavanza
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
-KillMode=control-group
 Environment=PATH=/path/to/pacavanza/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 Environment=PYTHONUNBUFFERED=1
 

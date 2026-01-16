@@ -15,5 +15,5 @@ setuptools.setup(
         "uvicorn",
         "aiohttp",
     ],
-    entry_points={"console_scripts": ["run-pacavanza = pacavanza.backend:main"]},
+    entry_points={"console_scripts": ["run-pacavanza = pacavanza.daemon_controller:main"]},
 )
