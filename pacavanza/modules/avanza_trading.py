@@ -94,7 +94,9 @@ class AvanzaTrading:
     def _get_accounts_and_positions(self) -> Dict[str, Any]:
         with AVANZA._session.get(
             "https://www.avanza.se/_api/trading-critical/rest/accountsandpositions",
-            headers={"X-SecurityToken": AVANZA._security_token,},
+            headers={
+                "X-SecurityToken": AVANZA._security_token,
+            },
         ) as response:
             response.raise_for_status()
             accounts_data = response.json()
@@ -165,7 +167,9 @@ class AvanzaTrading:
     def _get_instrument_position(self, instrument_id: str) -> Dict[str, Any]:
         positions = self._get_account_positions()
         for position in positions:
-            sid = find_key_by_orderbook_id(self.instrument_list, position["orderbookId"])
+            sid = find_key_by_orderbook_id(
+                self.instrument_list, position["orderbookId"]
+            )
             if instrument_id == sid:
                 return position
         return None
@@ -180,7 +184,9 @@ class AvanzaTrading:
         return volume
 
     # helper: calculate volume size based on accout balance and price
-    def _calculate_volume_size(self, instrument_id: str, price: float, percentage: float) -> int:
+    def _calculate_volume_size(
+        self, instrument_id: str, price: float, percentage: float
+    ) -> int:
         balance = self._get_account_balance()
         # This is of strong personal preference, the number must be multiple of 3
         vol = int((balance / price * percentage / 100) // 3) * 3
@@ -200,7 +206,9 @@ class AvanzaTrading:
         for sl in all_stop_losses:
             if sl["orderbook"]["id"] == ob_id:
                 try:
-                    AVANZA.delete_stop_loss_order(account_id=ACCOUNT_ID, stop_loss_id=sl["id"])
+                    AVANZA.delete_stop_loss_order(
+                        account_id=ACCOUNT_ID, stop_loss_id=sl["id"]
+                    )
                 except Exception as e:
                     LOGGER.error(f"Failed to delete stop loss {instrument_id}: {e}")
 
@@ -293,7 +301,7 @@ class AvanzaTrading:
         # Group stop losses by orderbook id
         sl_by_orderbook: Dict[str, List[Dict[str, Any]]] = {}
         for sl in all_stop_losses:
-            # Ensure we only look at active stop losses for our account if needed, 
+            # Ensure we only look at active stop losses for our account if needed,
             # though get_all_stop_losses usually returns for the logged in user.
             # The structure of sl is as shown in the docstring.
             ob_id = sl["orderbook"]["id"]
@@ -321,9 +329,13 @@ class AvanzaTrading:
             # We should delete all SELL stop losses for this orderbook
             for sl in sl_list:
                 if sl["order"]["type"] == "SELL":
-                    LOGGER.info(f"Deleting residual sell stop loss: {sl['id']} for orderbook {ob_id}")
+                    LOGGER.info(
+                        f"Deleting residual sell stop loss: {sl['id']} for orderbook {ob_id}"
+                    )
                     try:
-                        AVANZA.delete_stop_loss_order(account_id=ACCOUNT_ID, stop_loss_id=sl["id"])
+                        AVANZA.delete_stop_loss_order(
+                            account_id=ACCOUNT_ID, stop_loss_id=sl["id"]
+                        )
                     except Exception as e:
                         LOGGER.error(f"Failed to delete stop loss {sl['id']}: {e}")
 
@@ -687,7 +699,9 @@ class AvanzaTrading:
                 # take-profit calculation
                 distance = high_last - low_swing
                 take_profit = round(high_last + PROFIT_LOSS_RATIO * distance - tick, 2)
-                volume = self._calculate_volume_size(instrument_id, stop_price, percentage)
+                volume = self._calculate_volume_size(
+                    instrument_id, stop_price, percentage
+                )
 
                 buy_order = {
                     "side": "buy",
@@ -803,7 +817,9 @@ class AvanzaTrading:
         await self._set_scheduled(instrument_id, "buy_stop", next_bar_start, task)
         return {"status": "scheduled", "bar_start": next_bar_start.isoformat()}
 
-    async def late_buy_stop(self, instrument_id: str, percentage: float) -> Dict[str, Any]:
+    async def late_buy_stop(
+        self, instrument_id: str, percentage: float
+    ) -> Dict[str, Any]:
         """
         Place a late buy stop order immediately:
         - Immediately calculate stop price = 1 tick_size above high of last completed bar.
@@ -1150,8 +1166,8 @@ class AvanzaTrading:
             account_id=account_id,
         )
         LOGGER.debug(f"Found: {order}")
-        orderbood_id = order.get("orderbookId")
-        if not orderbood_id:
+        orderbook_id = order.get("orderbookId")
+        if not orderbook_id:
             raise Exception("No orderbookId available")
         volume = order.get("volume")
         if not volume:
@@ -1169,9 +1185,9 @@ class AvanzaTrading:
         if not modifiable:
             raise Exception("Un-modifiable")
 
-        instrument_id = find_key_by_orderbook_id(self.instrument_list, orderbood_id)
+        instrument_id = find_key_by_orderbook_id(self.instrument_list, orderbook_id)
         if not instrument_id:
-            raise Exception(f"No instrument available for {orderbood_id}")
+            raise Exception(f"No instrument available for {orderbook_id}")
         new_price = None
         if side == "SELL":
             new_price = await self._get_last_buy_price(instrument_id)
