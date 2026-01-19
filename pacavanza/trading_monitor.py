@@ -108,7 +108,6 @@ class TradingMonitor:
             raise Exception("HTTP session not initialized")
 
         url = f"{self._backend_url}/instrument_list.json"
-        LOGGER.info(f"Loading instrument list from {url}...")
         async with self._http_session.get(url) as response:
             response.raise_for_status()  # Raise error for bad responses
             self._instrument_list = await response.json()
@@ -136,7 +135,7 @@ class TradingMonitor:
         payload = {"orderId": order_id, "accountId": account_id}
 
         try:
-            LOGGER.info(f"Calling edit_order_follow_market for {order_id}...")
+            LOGGER.debug(f"Calling edit_order_follow_market for {order_id}...")
             async with self._http_session.post(url, json=payload) as response:
                 if response.status == 200:
                     LOGGER.info(
@@ -155,13 +154,15 @@ class TradingMonitor:
     async def _call_cleanup_residual_sell_stop_losses_api(self):
         """Calls the backend API to cleanup residual sell stop losses."""
         if not self._http_session or self._http_session.closed:
-            LOGGER.error("HTTP session not available, cannot cleanup residual sell stop losses.")
+            LOGGER.error(
+                "HTTP session not available, cannot cleanup residual sell stop losses."
+            )
             return
 
         url = f"{self._backend_url}/trade/cleanup_residual_sell_stop_losses"
 
         try:
-            LOGGER.info("Calling cleanup_residual_sell_stop_losses...")
+            LOGGER.debug("Calling cleanup_residual_sell_stop_losses...")
             async with self._http_session.post(url) as response:
                 if response.status == 200:
                     LOGGER.info("Successfully called cleanup_residual_sell_stop_losses")
@@ -254,7 +255,7 @@ class TradingMonitor:
 
     async def _queue_processor(self):
         """Background task to process the order addition queue."""
-        LOGGER.info("Order queue processor started.")
+        LOGGER.debug("Order queue processor started.")
         while not self._shutting_down:
             try:
                 # 1.a: Wait for an order
@@ -307,7 +308,7 @@ class TradingMonitor:
                                 orderId not in self._monitoring_list
                                 and orderId not in self._pending_add_set
                             ):
-                                LOGGER.info(
+                                LOGGER.debug(
                                     f"Queueing order {orderId} (book {orderbookId}) for monitoring."
                                 )
                                 self._pending_add_set.add(orderId)
