@@ -5,19 +5,10 @@
   const warn = (...a) => console.warn("[trade]", ...a);
   const error = (...a) => console.error("[trade]", ...a);
 
-  const instrumentSelect = document.getElementById("instrument");
-  const pctInput = document.getElementById("order-percentage");
-  const infoEl = document.getElementById("trade-info");
+  // Global state provided by chart.js
+  // window.PAC_TRADING_STATE = { longInstrument: "...", shortInstrument: "..." }
 
-  const btnMarketBuy = document.getElementById("btn-market-buy");
-  const btnMarketSell = document.getElementById("btn-market-sell");
-  const btnBuyStop = document.getElementById("btn-buy-stop");
-  const btnCancelBuyStop = document.getElementById("btn-cancel-buy-stop");
-  const btnLateBuyStop = document.getElementById("btn-late-buy-stop");
-  const btnSellStop = document.getElementById("btn-sell-stop");
-  const btnCancelSellStop = document.getElementById("btn-cancel-sell-stop");
-  const btnLateSellStop = document.getElementById("btn-late-sell-stop");
-  const btnDeleteStopLosses = document.getElementById("btn-delete-stop-losses");
+  const infoEl = document.getElementById("trade-info");
 
   function showInfo(txt, timeout = 4000) {
     if (!infoEl) return;
@@ -58,115 +49,109 @@
     }
   }
 
-  // button handlers (do minimal validation)
-  function getInstrumentAndPercentage() {
-    const instrumentId = instrumentSelect ? instrumentSelect.value : null;
-    const percentage = pctInput ? parseFloat(pctInput.value) : null;
-    if (!instrumentId) {
-      error("Select instrument");
-      showInfo("Select instrument");
+  function getSideState(side) {
+    if (!window.PAC_TRADING_STATE) {
+      error("PAC_TRADING_STATE unavailable");
       return null;
     }
+    if (side === "long")
+      return { instrumentId: window.PAC_TRADING_STATE.longInstrument };
+    if (side === "short")
+      return { instrumentId: window.PAC_TRADING_STATE.shortInstrument };
+    return null;
+  }
+
+  function getInstrumentAndPercentage(side) {
+    const state = getSideState(side);
+    if (!state || !state.instrumentId) {
+      showInfo(`No ${side} instrument selected`);
+      return null;
+    }
+
+    const pctInput = document.getElementById(`order-percentage-${side}`);
+    const percentage = pctInput ? parseFloat(pctInput.value) : null;
+
     if (!percentage || Number.isNaN(percentage) || percentage <= 0) {
       error("Set percentage > 0");
       showInfo("Set percentage > 0");
       return null;
     }
-    return { instrumentId, percentage };
+    return { instrumentId: state.instrumentId, percentage };
   }
 
-  if (btnMarketBuy) {
-    btnMarketBuy.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/market_buy", {
-        instrumentId: p.instrumentId,
-        percentage: p.percentage,
-      });
+  // Generic binder for a specific side ("long" or "short")
+  function bindSide(side) {
+    const s = side; // capture closure
+
+    const actions = [
+      {
+        id: `btn-market-buy-${s}`,
+        endpoint: "/trade/market_buy",
+        needsPct: true,
+      },
+      {
+        id: `btn-market-sell-${s}`,
+        endpoint: "/trade/market_sell",
+        needsPct: false,
+      },
+      { id: `btn-buy-stop-${s}`, endpoint: "/trade/buy_stop", needsPct: true },
+      {
+        id: `btn-cancel-buy-stop-${s}`,
+        endpoint: "/trade/cancel_buy_stop",
+        needsPct: false,
+      },
+      {
+        id: `btn-late-buy-stop-${s}`,
+        endpoint: "/trade/late_buy_stop",
+        needsPct: true,
+      },
+      {
+        id: `btn-sell-stop-${s}`,
+        endpoint: "/trade/sell_stop",
+        needsPct: false,
+      }, // Wait, sell stop usually needs no params? Old code: { instrumentId }
+      {
+        id: `btn-cancel-sell-stop-${s}`,
+        endpoint: "/trade/cancel_sell_stop",
+        needsPct: false,
+      },
+      {
+        id: `btn-late-sell-stop-${s}`,
+        endpoint: "/trade/late_sell_stop",
+        needsPct: false,
+      },
+      {
+        id: `btn-delete-stop-losses-${s}`,
+        endpoint: "/trade/delete_stop_losses",
+        needsPct: false,
+      },
+    ];
+
+    actions.forEach((act) => {
+      const btn = document.getElementById(act.id);
+      if (btn) {
+        btn.addEventListener("click", async () => {
+          const state = getSideState(s);
+          if (!state || !state.instrumentId) {
+            showInfo(`No ${s} instrument`);
+            return;
+          }
+
+          const payload = { instrumentId: state.instrumentId };
+
+          if (act.needsPct) {
+            const p = getInstrumentAndPercentage(s);
+            if (!p) return;
+            payload.percentage = p.percentage;
+          }
+
+          await callTrade(act.endpoint, payload);
+        });
+      }
     });
   }
 
-  if (btnMarketSell) {
-    btnMarketSell.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/market_sell", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
-
-  if (btnBuyStop) {
-    btnBuyStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      // scheduled: server waits for next completed bar
-      await callTrade("/trade/buy_stop", {
-        instrumentId: p.instrumentId,
-        percentage: p.percentage,
-      });
-    });
-  }
-
-  if (btnCancelBuyStop) {
-    btnCancelBuyStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      // scheduled: server waits for next completed bar
-      await callTrade("/trade/cancel_buy_stop", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
-
-  if (btnLateBuyStop) {
-    btnLateBuyStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/late_buy_stop", {
-        instrumentId: p.instrumentId,
-        percentage: p.percentage,
-      });
-    });
-  }
-
-  if (btnSellStop) {
-    btnSellStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/sell_stop", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
-
-  if (btnCancelSellStop) {
-    btnCancelSellStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/cancel_sell_stop", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
-
-  if (btnLateSellStop) {
-    btnLateSellStop.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/late_sell_stop", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
-
-  if (btnDeleteStopLosses) {
-    btnDeleteStopLosses.addEventListener("click", async () => {
-      const p = getInstrumentAndPercentage();
-      if (!p) return;
-      await callTrade("/trade/delete_stop_losses", {
-        instrumentId: p.instrumentId,
-      });
-    });
-  }
+  // Bind controls for both sides
+  bindSide("long");
+  bindSide("short");
 })();
