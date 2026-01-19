@@ -16,7 +16,7 @@ import redis.asyncio as aioredis
 from avanza import Avanza
 from .modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 from .modules.instrument_data import InstrumentData, INTERVAL_MAP
-from .utils.utils import save_json_atomic
+from .utils.utils import save_json_atomic, flatten_instrument_list
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
@@ -51,8 +51,10 @@ class MultiMarketCollector:
     ):
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
-        self.instrument_list = json.load(open(instrument_list_path))
-        self.instrument_ids = self.instrument_list.keys()
+        loaded_list = json.load(open(instrument_list_path))
+        # Flatten the list so we have instrument_id -> metadata mapping
+        self.instrument_list = flatten_instrument_list(loaded_list)
+        self.instrument_ids = list(self.instrument_list.keys())
 
         # per-instrument storage objects
         # If caller provided existing InstrumentData instances, use them so the

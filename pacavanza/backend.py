@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
+from .utils.utils import flatten_instrument_list
 
 # compute pacavanza package root (pacavanza/)
 ROOT = Path(__file__).resolve().parent  # pacavanza/
@@ -95,7 +96,8 @@ def create_app(
     instrument_list: Dict[str, Any] = {}
     try:
         with open(ROOT / "instrument_list.json", "r", encoding="utf-8") as f:
-            instrument_list = json.load(f)
+            raw_list = json.load(f)
+            instrument_list = flatten_instrument_list(raw_list)
     except Exception as e:
         LOGGER.warning("Could not load instrument_list.json: %s", e)
 
@@ -512,9 +514,7 @@ def create_app(
         body = await req.json()
         instrument_id = body.get("instrumentId")
         if not instrument_id:
-            raise HTTPException(
-                status_code=400, detail="instrumentId required"
-            )
+            raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
@@ -594,9 +594,7 @@ def create_app(
         body = await req.json()
         instrument_id = body.get("instrumentId")
         if not instrument_id:
-            raise HTTPException(
-                status_code=400, detail="instrumentId required"
-            )
+            raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"
@@ -618,9 +616,7 @@ def create_app(
         body = await req.json()
         instrument_id = body.get("instrumentId")
         if not instrument_id:
-            raise HTTPException(
-                status_code=400, detail="instrumentId required"
-            )
+            raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
                 status_code=400, detail="instrumentId not found in instrument_list.json"

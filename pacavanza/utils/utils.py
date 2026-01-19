@@ -37,8 +37,42 @@ def save_json_atomic(path: str, obj):
                 pass
 
 
+def flatten_instrument_list(nested_data):
+    """
+    Flattens a hierarchical instrument list (Asset -> {Metadata, Instruments...})
+    into a flat dictionary (InstrumentID -> InstrumentData) with inherited metadata.
+    """
+    flat = {}
+    for asset, data in nested_data.items():
+        # Common inheritance fields
+        common = {
+            k: v
+            for k, v in data.items()
+            if k in ["timezone", "market_open", "market_close"]
+        }
+        for k, v in data.items():
+            if isinstance(v, dict) and "orderbookId" in v:
+                # It's an instrument
+                merged = v.copy()
+                # Merge inheritables if not present/override (usually parent is default)
+                for ck, cv in common.items():
+                    if ck not in merged:
+                        merged[ck] = cv
+                flat[k] = merged
+    return flat
+
+
 def find_key_by_orderbook_id(data, target_id):
+    # Try flat lookup first (if data is already flattened or old format)
     for key, item in data.items():
-        if item["orderbookId"] == target_id:
-            return key
+        if isinstance(item, dict):
+            if item.get("orderbookId") == target_id:
+                return key
+            # Check nested children
+            for child_key, child_item in item.items():
+                if (
+                    isinstance(child_item, dict)
+                    and child_item.get("orderbookId") == target_id
+                ):
+                    return child_key
     return None

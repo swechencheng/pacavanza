@@ -616,62 +616,126 @@
     const barGroupMap = new Map();
 
     // load instrument_list.json (user requested this is exposed at /instrument_list.json)
-    let instrumentMap = null;
+    let instrumentMap = null; // flattened map: ID -> info
+    let hierarchicalMap = null; // raw nested map: Asset -> info
 
-    // ---------------- NEW: populate select with keys from instrument_list.json ------------
-    async function populateInstrumentSelect() {
-      const sel = document.getElementById("instrument");
-      if (!sel) return;
+    function flattenInstruments(data) {
+      const flat = {};
+      for (const assetKey in data) {
+        const assetData = data[assetKey];
+        const common = {};
+        // Inherit metadata if present
+        if (assetData.timezone) common.timezone = assetData.timezone;
+        if (assetData.market_open) common.market_open = assetData.market_open;
+        if (assetData.market_close)
+          common.market_close = assetData.market_close;
+
+        for (const childKey in assetData) {
+          const val = assetData[childKey];
+          // Simple check for instrument dict
+          if (typeof val === "object" && val !== null && val.orderbookId) {
+            const merged = Object.assign({}, val);
+            // merge default metadata
+            for (const k in common) {
+              if (!merged[k]) merged[k] = common[k];
+            }
+            flat[childKey] = merged;
+          }
+        }
+      }
+      return flat;
+    }
+
+    // ---------------- NEW: populate selectors with hierarchical data ------------
+    async function setupSelectors() {
+      const assetSel = document.getElementById("asset");
+      const instrSel = document.getElementById("instrument");
+      if (!assetSel || !instrSel) return;
+
       try {
-        // If we already have instrumentMap, reuse
-        if (!instrumentMap) {
-          const res = await fetch("/instrument_list.json");
-          if (!res.ok)
-            throw new Error("instrument_list.json fetch failed: " + res.status);
-          instrumentMap = await res.json();
-          log("Loaded instrument JSON from /instrument_list.json (populate)");
+        if (!hierarchicalMap || !instrumentMap) {
+          await loadInstrumentJSON();
         }
 
-        // clear existing options
-        sel.innerHTML = "";
-
-        // Insert keys from instrumentMap as options (text==key, value==key)
-        const keys = Object.keys(instrumentMap);
-        if (keys.length === 0) {
+        const assets = Object.keys(hierarchicalMap);
+        if (assets.length === 0) {
           const opt = document.createElement("option");
-          opt.value = "";
-          opt.textContent = "(no instruments)";
-          sel.appendChild(opt);
+          opt.textContent = "(no assets)";
+          assetSel.appendChild(opt);
           return;
         }
 
-        keys.forEach((k, idx) => {
+        // Helper to populate instrument select based on current asset
+        function updateInstrumentOptions(assetKey) {
+          instrSel.innerHTML = "";
+          const assetData = hierarchicalMap[assetKey];
+          if (!assetData) return;
+
+          // Filter child keys that are present in our flattened map (i.e. legitimate instruments)
+          // or perform the same check as flattenInstruments
+          const instrKeys = Object.keys(assetData).filter((k) => {
+            const val = assetData[k];
+            return typeof val === "object" && val !== null && val.orderbookId;
+          });
+
+          instrKeys.forEach((k) => {
+            const opt = document.createElement("option");
+            opt.value = k;
+            // Use name if available, else key
+            opt.textContent = assetData[k].name || k;
+            instrSel.appendChild(opt);
+          });
+
+          if (instrKeys.length > 0) {
+            instrSel.value = instrKeys[0];
+          }
+        }
+
+        // Populate Assets
+        assetSel.innerHTML = "";
+        assets.forEach((a) => {
           const opt = document.createElement("option");
-          opt.value = k;
-          opt.textContent = k; // per your request: content is the JSON keys
-          sel.appendChild(opt);
+          opt.value = a;
+          opt.textContent = a;
+          assetSel.appendChild(opt);
         });
 
-        // keep current selection if present, otherwise set to first
-        if (!sel.value && keys.length > 0) {
-          sel.value = keys[0];
+        // Set initial state
+        if (assets.length > 0) {
+          assetSel.value = assets[0];
+          updateInstrumentOptions(assets[0]);
         }
+
+        // Event Listeners
+        assetSel.addEventListener("change", () => {
+          updateInstrumentOptions(assetSel.value);
+          // Trigger load for the new first instrument
+          const newInstr = instrSel.value;
+          if (newInstr) loadHistoryFor(newInstr);
+        });
+
+        instrSel.addEventListener("change", () => {
+          const newInstr = instrSel.value;
+          if (newInstr) loadHistoryFor(newInstr);
+        });
       } catch (e) {
-        warn("populateInstrumentSelect failed:", e);
+        warn("setupSelectors failed:", e);
       }
     }
     // -------------------------------------------------------------------------------
 
     async function loadInstrumentJSON() {
       try {
-        if (instrumentMap) return instrumentMap;
+        if (instrumentMap && hierarchicalMap)
+          return { flat: instrumentMap, hierarchical: hierarchicalMap };
         const res = await fetch("/instrument_list.json");
         if (!res.ok)
           throw new Error("instrument_list.json fetch failed: " + res.status);
         const data = await res.json();
         log("Loaded instrument JSON from /instrument_list.json");
-        instrumentMap = data;
-        return data;
+        hierarchicalMap = data;
+        instrumentMap = flattenInstruments(data);
+        return { flat: instrumentMap, hierarchical: hierarchicalMap };
       } catch (e) {
         warn(
           "Could not load /instrument_list.json; session grouping will be disabled for this instrument."
@@ -980,19 +1044,8 @@
       }
     }
 
-    // NEW: auto-reload when select changes
-    const instrumentSelect = document.getElementById("instrument");
-    if (instrumentSelect) {
-      instrumentSelect.addEventListener("change", async (ev) => {
-        const newInstrument = ev.target.value;
-        if (!newInstrument) return;
-        try {
-          await loadHistoryFor(newInstrument);
-        } catch (e) {
-          // loadHistoryFor logs its own errors
-        }
-      });
-    }
+    // NEW: auto-reload handlers are now inside setupSelectors
+    // Removed old independent event listener
 
     // WebSocket for streaming updates (updates candlestick points + EMAs)
     function setupWS() {
@@ -1312,34 +1365,38 @@
     // Immediately load history for the currently selected instrument (no button click).
     // This happens once during initialization.
     (async () => {
-      // First populate the select with instrument keys, then pick initialInstrument from select.value
-      await populateInstrumentSelect();
+      // Setup UI with Asset -> Instrument cascading
+      await setupSelectors();
 
       const initialInstrument = document.getElementById("instrument").value;
-      currentInstrument = initialInstrument; // Set the initial instrument
-      try {
-        // load instrument JSON early so session config exists before history grouping
-        instrumentMap = instrumentMap || (await loadInstrumentJSON());
-        await loadHistoryFor(initialInstrument);
-      } catch (e) {
-        // already logged in loadHistoryFor; continue to setup WS regardless so
-        // live ticks can still arrive and update the chart.
-      } finally {
-        // After attempting history load, start the websocket to receive streaming updates.
-        setupWS();
-        // Also, reset tooltip to default state
-        if (toolTip) {
-          toolTip.innerHTML = [
-            `<span style="color: #ddd;">O: -</span>`,
-            `<span style="color: #4caf50;">H: -</span>`,
-            `<span style="color: #f44336;">L: -</span>`,
-            `<span style="color: #ddd;">C: -</span>`,
-            `<span style="color: #ff9900;">Bar -</span>`,
-          ].join(" ");
+      if (initialInstrument) {
+        currentInstrument = initialInstrument;
+        try {
+          // Already loaded in setupSelectors, but ensure logic consistency
+          // if we need to call loadHistoryFor explicitly
+          await loadHistoryFor(initialInstrument);
+        } catch (e) {
+          // log
         }
-        // ensure countdown display state matches market/open after WS start
-        ensureMarketCountdown();
+      } else {
+        warn("No initial instrument found.");
       }
+
+      // Finally start WS
+      setupWS();
+
+      // Also, reset tooltip to default state
+      if (toolTip) {
+        toolTip.innerHTML = [
+          `<span style="color: #ddd;">O: -</span>`,
+          `<span style="color: #4caf50;">H: -</span>`,
+          `<span style="color: #f44336;">L: -</span>`,
+          `<span style="color: #ddd;">C: -</span>`,
+          `<span style="color: #ff9900;">Bar -</span>`,
+        ].join(" ");
+      }
+      // ensure countdown display state matches market/open after WS start
+      ensureMarketCountdown();
     })();
     // ---------------- end auto-load ----------------
   } catch (e) {

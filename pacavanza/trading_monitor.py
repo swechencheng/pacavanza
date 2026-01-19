@@ -8,6 +8,7 @@ from functools import partial
 from typing import Dict, Any
 from pacavanza.modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 from pacavanza.modules.avanza_trading import AVANZA
+from pacavanza.utils.utils import flatten_instrument_list
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("trading_monitor").setLevel(logging.INFO)
@@ -110,7 +111,8 @@ class TradingMonitor:
         url = f"{self._backend_url}/instrument_list.json"
         async with self._http_session.get(url) as response:
             response.raise_for_status()  # Raise error for bad responses
-            self._instrument_list = await response.json()
+            raw_list = await response.json()
+            self._instrument_list = flatten_instrument_list(raw_list)
             LOGGER.info(
                 f"Successfully loaded {len(self._instrument_list)} instruments."
             )
