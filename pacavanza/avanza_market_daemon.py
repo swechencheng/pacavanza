@@ -220,7 +220,7 @@ class MultiMarketCollector:
                 )
                 return
 
-            LOGGER.info(
+            LOGGER.debug(
                 f"[{instrument_id}] {readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}"
             )
 
@@ -246,7 +246,10 @@ class MultiMarketCollector:
 
                 if last_buy is not None and abs(buy_price - last_buy) / last_buy > 0.03:
                     is_anomalous = True
-                elif last_sell is not None and abs(sell_price - last_sell) / last_sell > 0.03:
+                elif (
+                    last_sell is not None
+                    and abs(sell_price - last_sell) / last_sell > 0.03
+                ):
                     is_anomalous = True
 
                 if is_anomalous:
@@ -256,9 +259,12 @@ class MultiMarketCollector:
                         prev_buy, prev_sell = buffer[-1]
                         if abs(buy_price - prev_buy) / prev_buy > 0.03:
                             consistent = False
-                        if consistent and abs(sell_price - prev_sell) / prev_sell > 0.03:
+                        if (
+                            consistent
+                            and abs(sell_price - prev_sell) / prev_sell > 0.03
+                        ):
                             consistent = False
-                    
+
                     if consistent:
                         buffer.append((buy_price, sell_price))
                         if len(buffer) >= 9:
@@ -515,7 +521,7 @@ class MultiMarketCollector:
                 sd.completed_ohlc[sid] = [b for b in bars if b["end_time"] >= cutoff]
                 LOGGER.info(f"[{sid}] Loaded {len(bars)} bars from {data_file}")
             except FileNotFoundError:
-                LOGGER.info(f"[{sid}] No previous data file {data_file}.")
+                LOGGER.warning(f"[{sid}] No previous data file {data_file}.")
             except Exception as e:
                 LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
 
@@ -660,7 +666,9 @@ class MultiMarketCollector:
                 # start per-instrument SSE loops (each loop handles its own reconnects)
                 self._tasks = []
                 for sid, obid in self.orderbook_ids.items():
-                    t = asyncio.create_task(self._run_sse_client_loop(avanza, sid, obid))
+                    t = asyncio.create_task(
+                        self._run_sse_client_loop(avanza, sid, obid)
+                    )
                     self._tasks.append(t)
 
                 # Wait for all tasks (they are infinite loops that only stop on unexpected error)
