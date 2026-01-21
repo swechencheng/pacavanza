@@ -26,14 +26,14 @@
             "name": "MINI L DAX AVA 642",
             "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/1775097/mini-l-dax-ava-642",
             "orderbookId": "1775097",
-            "tick_size": 0.02,
+            "tick_size": 0.01,
             "tick_coefficient": 2.0
         },
         "mini-s-dax-ava-993": {
             "name": "MINI S DAX AVA 993",
             "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2141734/mini-s-dax-ava-993",
             "orderbookId": "2141734",
-            "tick_size": 0.02,
+            "tick_size": 0.01,
             "tick_coefficient": 2.0
         }
     },
@@ -159,14 +159,14 @@
             "name": "MINI L GULD AVA 309",
             "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2237055/mini-l-guld-ava-309",
             "orderbookId": "2237055",
-            "tick_size": 0.02,
+            "tick_size": 0.03,
             "tick_coefficient": 2.0
         },
         "mini-s-guld-ava-417": {
             "name": "MINI S GULD AVA 417",
             "URL": "https://www.avanza.se/borshandlade-produkter/warranter-torg/om-warranten.html/2289972/mini-s-guld-ava-417",
             "orderbookId": "2289972",
-            "tick_size": 0.02,
+            "tick_size": 0.03,
             "tick_coefficient": 2.0
         }
     },
