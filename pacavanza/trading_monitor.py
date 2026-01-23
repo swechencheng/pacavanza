@@ -25,9 +25,9 @@ class TradingMonitor:
             b) In the queue, process one addition of order every 3 seconds.
             c) Before finnaly put the order in the monitoring list, check orders = self._avanza.get_orders() again to see if the order is till there. If not, skip adding.
         2. For each order on the monitoring list once they are put:
-            a) Start counting for 30 seconds once the order is put on the monitoring list.
-            b) During this 30 seconds for each order, if a new ORDER event comes and no longer contains the order which has the same "orderbookId" value which is on the monitoring list, then remove the order from the monitoring list.
-            c) If 30 seconds expires and there is still order(s) on the monitoring list, then for each order, call the AVANZA delete_order API using the same "orderId" value and "account"."accountId" value.
+            a) Start counting for 9 seconds once the order is put on the monitoring list.
+            b) During this 9 seconds for each order, if a new ORDER event comes and no longer contains the order which has the same "orderbookId" value which is on the monitoring list, then remove the order from the monitoring list.
+            c) If 9 seconds expires and there is still order(s) on the monitoring list, then for each order, call the backend "/trade/edit_order_follow_market" API using the same "orderId" value and "account"."accountId" value.
         3. The monitoring list needs to be safe guarded with a Lock for every operation.
 
     A sample orders JSON:
@@ -181,20 +181,19 @@ class TradingMonitor:
     async def _monitor_order_task(
         self, order_id: str, account_id: str, orderbook_id: str
     ):
-        """The 30-second timer task for a specific order."""
+        """The 9-second timer task for a specific order."""
         try:
-            await asyncio.sleep(30)
+            await asyncio.sleep(9)
 
-            # 30 seconds elapsed, check if we are still shutting down
+            # 9 seconds elapsed, check if we are still shutting down
             if self._shutting_down:
                 LOGGER.info(f"Shutdown in progress, skipping API call for {order_id}.")
                 return
 
             LOGGER.info(
-                f"Order {order_id} (book {orderbook_id}) 30-second timer expired. Deleting order."
+                f"Order {order_id} (book {orderbook_id}) 9-second timer expired. Calling API."
             )
-            ret = self._avanza.delete_order(account_id, order_id)
-            LOGGER.info(f"Delete result: {ret.get("messages")}")
+            await self._call_edit_order_api(order_id, account_id)
 
         except asyncio.CancelledError:
             LOGGER.info(
@@ -231,7 +230,7 @@ class TradingMonitor:
                 )
                 return
 
-            # 2: Start the 30-second monitoring task
+            # 2: Start the 9-second monitoring task
             async with self._monitoring_lock:
                 # Check again in case it was cancelled/processed by another event
                 if order_id in self._monitoring_list:
