@@ -19,7 +19,7 @@ from pacavanza.utils.utils import find_key_by_orderbook_id
 SECRETS = json.load(open("./pacavanza/../secret.json"))
 AVANZA = Avanza(SECRETS)
 ACCOUNT_ID = SECRETS["accountId"]
-PROFIT_LOSS_RATIO = 1
+PROFIT_LOSS_RATIO = 2
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_trading").setLevel(logging.DEBUG)
@@ -632,8 +632,8 @@ class AvanzaTrading:
           calculate the stop price = 1 tick_size above the high of the last completed bar.
         - Place buy stop at stop price.
         - Also place a sell stop at 1 tick_size below the low of the current swing leg (consecutive bull bars).
-        - Use profit ratio 2:1 to compute take-profit and place sell limit:
-          take-profit = high_last_completed + 2*(high_last_completed - low_swing_leg) - 1 tick_size.
+        - Use profit ratio PROFIT_LOSS_RATIO:1 to compute take-profit and place sell limit:
+          take-profit = high_last_completed + PROFIT_LOSS_RATIO * (high_last_completed - low_swing_leg) - 1 tick_size.
         - Log orders.
         - If a buy_stop is already scheduled for the same instrument for the same next bar boundary, ignore duplicate calls.
         """
