@@ -20,7 +20,7 @@ class TradingMonitor:
     Implementation requirements:
     - When it is an ORDER event, we need to check if the list "orders" from orders = self._avanza.get_orders() is empty or not;
     If it is not empty, iterate the orders from list "orders", for each order:
-        1. If "orderbookId" value from each order is inside instrument_list.json, then put the order in a monitoring list using "orderId" value from the order.
+        1. If "orderbookId" value from each order is inside ava_mini_future_list.json, then put the order in a monitoring list using "orderId" value from the order.
             a) Notice that adding orders into the monitoring list needs to be queued up, they cannot be excecuted immediately due to race condition.
             b) In the queue, process one addition of order every 3 seconds.
             c) Before finnaly put the order in the monitoring list, check orders = self._avanza.get_orders() again to see if the order is till there. If not, skip adding.
@@ -108,7 +108,7 @@ class TradingMonitor:
         if not self._http_session:
             raise Exception("HTTP session not initialized")
 
-        url = f"{self._backend_url}/instrument_list.json"
+        url = f"{self._backend_url}/ava_mini_future_list.json"
         async with self._http_session.get(url) as response:
             response.raise_for_status()  # Raise error for bad responses
             raw_list = await response.json()

@@ -505,7 +505,7 @@
 
       const isOpenBar =
         parts.hour * 60 + parts.minute ===
-          cm.groupingState.sessionOpenMinutes && parts.second === 0;
+        cm.groupingState.sessionOpenMinutes && parts.second === 0;
 
       if (isOpenBar) {
         cm.groupingState.count = 1;
@@ -635,7 +635,7 @@
 
     async function loadInstrumentJSON() {
       if (instrumentMapFlat && hierarchicalMap) return;
-      const res = await fetch("/instrument_list.json");
+      const res = await fetch("/ava_mini_future_list.json");
       const data = await res.json();
       hierarchicalMap = data;
       instrumentMapFlat = flattenInstruments(data); // Re-use flatten helper logic

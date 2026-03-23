@@ -33,7 +33,7 @@ class AvanzaTrading:
 
     It expects:
       - recent_bars: Dict[instrument, List[bar_dict]] (bar_dict fields: start_time (dt), end_time (dt), open, high, low, close, volume)
-      - instrument_list: dict loaded from instrument_list.json
+      - instrument_list: dict loaded from ava_mini_future_list.json
       - metadata: optional instrument metadata dict
       - logger: logging.Logger
       - bars_locks_map: Dict[str, asyncio.Lock] for per-instrument bars lock
@@ -67,7 +67,7 @@ class AvanzaTrading:
         # scheduled tasks per instrument: { instrument_id: { "buy_stop": {"task": task,"bar_start": dt}, "sell_stop": {...} } }
         self._scheduled_tasks: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
-    # helper: validate instrument exists in instrument_list.json.
+    # helper: validate instrument exists in ava_mini_future_list.json.
     def _get_instrument_info(self, instrument_id: str) -> Dict[str, Any]:
         info = self.instrument_list.get(instrument_id)
         if not info:
@@ -563,7 +563,7 @@ class AvanzaTrading:
     async def place_market_buy(
         self, instrument_id: str, percentage: float
     ) -> Dict[str, Any]:
-        # instrumentId should be inside instrument_list.json.
+        # instrumentId should be inside ava_mini_future_list.json.
         info = self._get_instrument_info(instrument_id)
         # Place a market buy order, using input parameters: instrumentId, percentage.
         # The price should be the current last sell price from the redis data.

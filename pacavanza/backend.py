@@ -92,14 +92,14 @@ def create_app(
     # ema_state[instrument][length] = last EMA value
     ema_state: Dict[str, Dict[int, float]] = defaultdict(dict)
 
-    # NEW: load instrument_list.json into memory for quick access
+    # NEW: load ava_mini_future_list.json into memory for quick access
     instrument_list: Dict[str, Any] = {}
     try:
-        with open(ROOT / "instrument_list.json", "r", encoding="utf-8") as f:
+        with open(ROOT / "ava_mini_future_list.json", "r", encoding="utf-8") as f:
             raw_list = json.load(f)
             instrument_list = flatten_instrument_list(raw_list)
     except Exception as e:
-        LOGGER.warning("Could not load instrument_list.json: %s", e)
+        LOGGER.warning("Could not load ava_mini_future_list.json: %s", e)
 
     recent_bars = {sid: [] for sid in instrument_list.keys()}
 
@@ -397,11 +397,11 @@ def create_app(
     # MOUNT STATIC FILES - ADD THIS LINE
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    # Expose instrument_list.json
-    @app.get("/instrument_list.json")
+    # Expose ava_mini_future_list.json
+    @app.get("/ava_mini_future_list.json")
     async def get_bar_json():
         return FileResponse(
-            ROOT / "instrument_list.json",
+            ROOT / "ava_mini_future_list.json",
             media_type="application/json",
             headers={"Cache-Control": "public, max-age=3600"},
         )
@@ -494,10 +494,10 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="instrumentId and percentage required"
             )
-        # instrumentId should be inside instrument_list.json.
+        # instrumentId should be inside ava_mini_future_list.json.
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             order = await trading.place_market_buy(instrument_id, percentage)
@@ -517,7 +517,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             order = await trading.place_market_sell(instrument_id)
@@ -546,7 +546,7 @@ def create_app(
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.schedule_buy_stop(instrument_id, percentage)
@@ -575,7 +575,7 @@ def create_app(
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.late_buy_stop(instrument_id, percentage)
@@ -597,7 +597,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.schedule_sell_stop(instrument_id)
@@ -619,7 +619,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.late_sell_stop(instrument_id)
@@ -641,7 +641,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.cancel_buy_stop(instrument_id)
@@ -660,7 +660,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             res = await trading.cancel_sell_stop(instrument_id)
@@ -761,7 +761,7 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in instrument_list.json"
+                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
             )
         try:
             trading.delete_stop_losses(instrument_id)

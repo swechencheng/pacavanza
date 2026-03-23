@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
 LOGGER = logging.getLogger("avanza_market_daemon")
 
-INSTRUMENT_LIST_PATH = "./pacavanza/instrument_list.json"
+INSTRUMENT_LIST_PATH = "./pacavanza/ava_mini_future_list.json"
 
 
 class MultiMarketCollector:
@@ -949,9 +949,9 @@ def parse_args():
             interval_str = val
             i += 2
         else:
-            # ignore other positional args — instrument ids come from instrument_list.json
+            # ignore other positional args — instrument ids come from ava_mini_future_list.json
             LOGGER.debug(
-                f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from instrument_list.json)"
+                f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from ava_mini_future_list.json)"
             )
             i += 1
 
