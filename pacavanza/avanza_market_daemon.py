@@ -25,7 +25,7 @@ LOGGER = logging.getLogger("avanza_market_daemon")
 INSTRUMENT_LIST_PATH = "./pacavanza/ava_mini_future_list.json"
 
 
-class MultiMarketCollector:
+class AvanzaMarketCollector:
     """
     Run multiple SSE clients (one per instrument) while using a single Avanza instance.
     Each instrument keeps its own InstrumentData, own file, and its own SSEClient.
@@ -962,5 +962,5 @@ if __name__ == "__main__":
     interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
     # Default redis URL and channel; adjust with env vars or CLI wrapper if you want
-    collector = MultiMarketCollector(interval_seconds)
+    collector = AvanzaMarketCollector(interval_seconds)
     collector.run()
