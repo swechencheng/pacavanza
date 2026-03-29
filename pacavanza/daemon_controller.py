@@ -111,13 +111,21 @@ def main():
                 ):
                     time.sleep(30)
 
-                # 2. Dashboard
+                # 2. Future Daemon (Always ensure it is running)
+                if start_process(
+                    "future_market",
+                    "pacavanza.future_market_daemon",
+                    "pacavanza.future_market_daemon",
+                ):
+                    time.sleep(5)
+
+                # 3. Dashboard
                 if start_process(
                     "dashboard", "pacavanza.backend", "pacavanza.dashboard"
                 ):
-                    time.sleep(30)
+                    time.sleep(5)
 
-                # 3. Trading Monitor
+                # 4. Trading Monitor
                 start_process(
                     "monitor", "pacavanza.trading_monitor", "pacavanza.trading_monitor"
                 )

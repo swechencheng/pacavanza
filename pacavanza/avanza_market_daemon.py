@@ -1,22 +1,9 @@
-import asyncio
-import json
-import copy
 import logging
-import signal
 import sys
-import threading
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
-from functools import partial
-from typing import Optional
+from datetime import datetime, timezone
 
-# third-party
-import redis.asyncio as aioredis
-
-from avanza import Avanza
-from .modules.avanza_sse_client import AvanzaSSEClient as SSEClient
-from .modules.instrument_data import InstrumentData, INTERVAL_MAP
-from .utils.utils import save_json_atomic, flatten_instrument_list
+from .base_market_collector import BaseMarketCollector
+from .modules.instrument_data import INTERVAL_MAP
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("avanza_market_daemon").setLevel(logging.INFO)
@@ -25,183 +12,41 @@ LOGGER = logging.getLogger("avanza_market_daemon")
 INSTRUMENT_LIST_PATH = "./pacavanza/ava_mini_future_list.json"
 
 
-class AvanzaMarketCollector:
+class AvanzaMarketCollector(BaseMarketCollector):
     """
-    Run multiple SSE clients (one per instrument) while using a single Avanza instance.
-    Each instrument keeps its own InstrumentData, own file, and its own SSEClient.
+    SSE collector for Avanza mini-futures using the quote-web-push endpoint.
 
-    This variant publishes minimal updates to Redis pub/sub so other processes (web server)
-    can subscribe and broadcast to clients without blocking the collector.
+    Inherits all infrastructure from BaseMarketCollector and provides:
+      - quote-web-push specific SSE URL
+      - _callback_quote_web_push handling buyPrice/sellPrice/updated fields
     """
 
-    quote_base_url = "https://www.avanza.se/_push/quote-web-push/"
+    sse_base_url = "https://www.avanza.se/_push/quote-web-push/"
+    default_instrument_list_path = INSTRUMENT_LIST_PATH
+    default_redis_channel = "pacavanza:ticker_updates"
+    logger_name = "avanza_market_daemon"
 
-    def __init__(
-        self,
-        interval_seconds,
-        secret_path="./pacavanza/../secret.json",
-        instrument_list_path=INSTRUMENT_LIST_PATH,
-        instrument_datas: dict = None,
-        redis_url: str = "redis://localhost:6379/0",
-        redis_channel: str = "pacavanza:ticker_updates",
-        # how often to persist completed bars to disk (seconds). Default: max(30, interval_seconds)
-        completed_save_interval: Optional[float] = None,
-        # how often to persist current (in-progress) bars snapshot to disk (seconds).
-        current_snapshot_interval: float = 3.0,
-    ):
-        self.interval_seconds = interval_seconds
-        self.secret = json.load(open(secret_path))
-        loaded_list = json.load(open(instrument_list_path))
-        # Flatten the list so we have instrument_id -> metadata mapping
-        self.instrument_list = flatten_instrument_list(loaded_list)
-        self.instrument_ids = list(self.instrument_list.keys())
-
-        # per-instrument storage objects
-        # If caller provided existing InstrumentData instances, use them so the
-        # collector updates the same objects the chart reads from.
-        # Otherwise create new InstrumentData objects as before.
-        if instrument_datas is not None:
-            # only pick the instruments we were asked to collect
-            self.instrument_data = {
-                sid: instrument_datas[sid] for sid in self.instrument_ids
-            }
-        else:
-            self.instrument_data = {
-                sid: InstrumentData(interval_seconds, sid)
-                for sid in self.instrument_ids
-            }
-
-        # market open/close detection
-        self.last_market_check = {sid: False for sid in self.instrument_ids}
-
-        # per-instrument metadata
+    def _init_price_tracking(self):
         self.last_buy_price = {sid: None for sid in self.instrument_ids}
         self.last_sell_price = {sid: None for sid in self.instrument_ids}
-        self.anomaly_buffer = {sid: [] for sid in self.instrument_ids}
 
-        # validate product list (and resolve product ids)
-        self.orderbook_ids = {}
-        for sid in self.instrument_ids:
-            info = self.instrument_list.get(sid, {})
-            obid = info.get("orderbookId")
-            if not obid:
-                raise ValueError(f"orderbookId not found for {sid}")
-            self.orderbook_ids[sid] = obid
-
-        # track tasks & clients for graceful shutdown
-        self._tasks = []  # list of asyncio.Task objects we create
-        self._sse_clients = {}  # instrument_id -> SSEClient instance (if created)
-        self._avanza = None  # will hold the Avanza instance when created
-        self._shutting_down = False
-        self._loop = None
-
-        # Redis pub/sub config
-        self.redis_url = redis_url
-        self.redis_channel = redis_channel
-        self._redis = None  # will be aioredis.Redis when connected
-
-        # saver config
-        self.current_snapshot_interval = current_snapshot_interval
-        self.completed_save_interval = (
-            completed_save_interval
-            if completed_save_interval is not None
-            else max(30.0, float(self.interval_seconds))
-        )
-
-        # bookkeeping to limit snapshot IO
-        # dirty_current stores instrument ids whose current bar has changed since last snapshot
-        self._dirty_current = set()
-        self._last_current_snapshot = datetime.now(timezone.utc)
-
-    def _market_window_utc_for_local_date(self, instrument_id, local_date):
+    async def _sse_callback(self, instrument_id, _id, event, data):
         """
-        Returns (open_utc, close_utc) for the given instrument_id and local_date (a date object).
-        Handles case where close <= open (overnight session) by moving close to next day.
-        """
-        info = self.instrument_list[instrument_id]
-        tzname = info.get("timezone", "UTC")
-        zone = ZoneInfo(tzname)
+        Async callback for quote-web-push SSE events.
 
-        # parse market_open/market_close strings such as "09:30" or "17:30"
-        mo = info.get("market_open", "00:00")
-        mc = info.get("market_close", "23:59")
-        try:
-            oh, om = (int(x) for x in mo.split(":"))
-            ch, cm = (int(x) for x in mc.split(":"))
-        except Exception:
-            # fallback to full-day if parsing fails
-            oh, om = 0, 0
-            ch, cm = 23, 59
-
-        local_open = datetime(
-            year=local_date.year,
-            month=local_date.month,
-            day=local_date.day,
-            hour=oh,
-            minute=om,
-            second=0,
-            microsecond=0,
-            tzinfo=zone,
-        )
-        local_close = datetime(
-            year=local_date.year,
-            month=local_date.month,
-            day=local_date.day,
-            hour=ch,
-            minute=cm,
-            second=0,
-            microsecond=0,
-            tzinfo=zone,
-        )
-
-        # if close <= open, assume close is next calendar day (overnight session)
-        if local_close <= local_open:
-            local_close = local_close + timedelta(days=1)
-
-        open_utc = local_open.astimezone(timezone.utc)
-        close_utc = local_close.astimezone(timezone.utc)
-        return open_utc, close_utc
-
-    def is_market_open(self, instrument_id, dt_utc: datetime):
-        """
-        Check if market for instrument_id is open at dt_utc (aware, in UTC).
-        Returns True if within local open/close window and not weekend.
-        """
-        if dt_utc.tzinfo is None:
-            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-        else:
-            dt_utc = dt_utc.astimezone(timezone.utc)
-
-        info = self.instrument_list[instrument_id]
-        tzname = info.get("timezone", "UTC")
-        zone = ZoneInfo(tzname)
-        local_dt = dt_utc.astimezone(zone)
-
-        # Skip weekends (Saturday=5, Sunday=6)
-        if local_dt.weekday() >= 5:
-            return False
-
-        local_date = local_dt.date()
-        open_utc, close_utc = self._market_window_utc_for_local_date(
-            instrument_id, local_date
-        )
-
-        # Market considered open if dt is in [open_utc, close_utc]
-        return (open_utc <= dt_utc) and (dt_utc <= close_utc)
-
-    async def _callback_quote_web_push(self, instrument_id, _id, event, data):
-        """
-        instrument-specific async callback for SSE events.
-        Defensively handles parsing errors and ensures `dt` is always set.
-        Only updates OHLC while market is open for the instrument.
-        An example QUOTE event callback:
-        [RdvXmj1XLHFj_AEZKkiSmbcFx] [QUOTE] {'orderbookId': '2026354', 'buyPrice': 201.57, 'sellPrice': 201.63, 'closingPrice': 204.51, 'highestPrice': 201.98, 'lowestPrice': 200.25, 'lastPrice': 201.98, 'totalValueTraded': 21043.55, 'totalVolumeTraded': 105, 'change': -2.53, 'changePercent': -0.0124, 'spreadPercent': 0.0003, 'volumeWeightedAveragePrice': 200.41, 'updated': '2025-10-17T09:54:00.916Z', 'lastPriceUpdated': '2025-10-17T09:54:00.000Z'}
+        Example QUOTE event:
+        {'orderbookId': '2026354', 'buyPrice': 201.57, 'sellPrice': 201.63,
+         'closingPrice': 204.51, 'highestPrice': 201.98, 'lowestPrice': 200.25,
+         'lastPrice': 201.98, 'totalValueTraded': 21043.55, 'totalVolumeTraded': 105,
+         'change': -2.53, 'changePercent': -0.0124, 'spreadPercent': 0.0003,
+         'volumeWeightedAveragePrice': 200.41, 'updated': '2025-10-17T09:54:00.916Z',
+         'lastPriceUpdated': '2025-10-17T09:54:00.000Z'}
         """
         try:
             if event != "QUOTE" or not isinstance(data, dict):
                 return
 
-            LOGGER.debug(f"[{instrument_id}] [{event}] {data}")
+            self.logger.debug(f"[{instrument_id}] [{event}] {data}")
             ts = data.get("updated")
             dt = datetime.now(timezone.utc)
             readable_ts = "(no timestamp)"
@@ -217,31 +62,31 @@ class AvanzaMarketCollector:
             buy_price = data.get("buyPrice")
             sell_price = data.get("sellPrice")
             if buy_price is None or sell_price is None:
-                LOGGER.warning(
+                self.logger.warning(
                     f"[{instrument_id}] {readable_ts} - buy/sell missing (buy={buy_price}, sell={sell_price})"
                 )
                 return
 
-            LOGGER.debug(
+            self.logger.debug(
                 f"[{instrument_id}] {readable_ts} B: {buy_price:.2f}  S: {sell_price:.2f}"
             )
 
-            # Only proceed if market is open for this instrument at the event's timestamp
+            # Only proceed if market is open
             market_check = self.is_market_open(instrument_id, dt)
             if not market_check:
                 self.last_market_check[instrument_id] = market_check
-                LOGGER.debug(
+                self.logger.debug(
                     f"[{instrument_id}] Outside market hours ({readable_ts}), ignoring price update."
                 )
                 return
 
             if not self.last_market_check[instrument_id]:
-                # Accept market gap and skip anomaly detection
-                LOGGER.info(f"[{instrument_id}] Market just opened at {readable_ts}.")
+                # Market just opened
+                self.logger.info(f"[{instrument_id}] Market just opened at {readable_ts}.")
                 self.anomaly_buffer[instrument_id] = []
             else:
-                # Anomaly detection: ignore new prices that are beyond 3.0% of last stored prices
-                # Recovery mechanism: If 9 consecutive anomalous quotes are stable (<= 3% diff), accept them.
+                # Anomaly detection: ignore new prices beyond 3.0% of last stored prices
+                # Recovery: if 9 consecutive anomalous quotes are stable (<= 3% diff), accept.
                 last_buy = self.last_buy_price.get(instrument_id)
                 last_sell = self.last_sell_price.get(instrument_id)
                 is_anomalous = False
@@ -270,20 +115,20 @@ class AvanzaMarketCollector:
                     if consistent:
                         buffer.append((buy_price, sell_price))
                         if len(buffer) >= 9:
-                            LOGGER.info(
+                            self.logger.info(
                                 f"[{instrument_id}] Anomaly recovery: 9 consecutive stable quotes. "
                                 f"Accepting new level (B:{buy_price:.2f}, S:{sell_price:.2f})."
                             )
                             self.anomaly_buffer[instrument_id] = []
                             # Fall through to accept logic
                         else:
-                            LOGGER.warning(
+                            self.logger.warning(
                                 f"[{instrument_id}] Anomalous quote (B:{buy_price:.2f}, S:{sell_price:.2f}) "
                                 f"vs last (B:{last_buy}, S:{last_sell}). Stable count: {len(buffer)}/9. Ignoring."
                             )
                             return
                     else:
-                        LOGGER.warning(
+                        self.logger.warning(
                             f"[{instrument_id}] Erratic anomaly. Resetting recovery buffer."
                         )
                         self.anomaly_buffer[instrument_id] = [(buy_price, sell_price)]
@@ -296,646 +141,29 @@ class AvanzaMarketCollector:
             self.last_buy_price[instrument_id] = buy_price
             self.last_sell_price[instrument_id] = sell_price
 
-            # Update the correct InstrumentData instance (only during market open)
-            # This call updates internal current bar / completed ohlc lists.
+            # Update OHLC
             self.instrument_data[instrument_id].update_ohlc_bar(buy_price, dt)
 
-            # mark current bar as dirty for periodic snapshot
+            # Mark current bar as dirty for periodic snapshot
             self._dirty_current.add(instrument_id)
 
-            # Build a tiny message describing the current bar (the InstrumentData class should return bar dicts)
-            try:
-                # fetch current bar & last completed bar for the instrument in a thread-safe manner
-                with self.instrument_data[instrument_id].lock:
-                    curr = copy.deepcopy(
-                        self.instrument_data[instrument_id].current_bars.get(
-                            instrument_id
-                        )
-                    )
-                    latest_completed = (
-                        copy.deepcopy(
-                            self.instrument_data[instrument_id].completed_ohlc[
-                                instrument_id
-                            ][-1]
-                        )
-                        if (
-                            self.instrument_data[instrument_id].completed_ohlc.get(
-                                instrument_id
-                            )
-                            and len(
-                                self.instrument_data[instrument_id].completed_ohlc[
-                                    instrument_id
-                                ]
-                            )
-                            > 0
-                        )
-                        else None
-                    )
-
-                # prefer to send only the current bar (update) and indicate if it is a new completed bar
-                if curr:
-                    msg = {
-                        "type": "update",
-                        "instrument": instrument_id,
-                        "bar": {
-                            "start_time": curr["start_time"].isoformat(),
-                            "end_time": curr["end_time"].isoformat(),
-                            "open": curr["open"],
-                            "high": curr["high"],
-                            "low": curr["low"],
-                            "close": curr["close"],
-                            "volume": curr.get("volume", 0),
-                        },
-                        "completed": False,
-                        "meta": {
-                            "timezone": self.instrument_list[instrument_id].get(
-                                "timezone", "UTC"
-                            ),
-                            "market_open": self.instrument_list[instrument_id].get(
-                                "market_open", "00:00"
-                            ),
-                            "market_close": self.instrument_list[instrument_id].get(
-                                "market_close", "23:59"
-                            ),
-                            "last_buy": self.last_buy_price[instrument_id],
-                            "last_sell": self.last_sell_price[instrument_id],
-                        },
-                    }
-
-                    # Publish to Redis with error handling
-                    if self._redis is not None:
-                        try:
-                            # Use await instead of create_task to ensure message is sent
-                            await self._redis.publish(
-                                self.redis_channel, json.dumps(msg)
-                            )
-                            LOGGER.debug(f"[{instrument_id}] Published update to Redis")
-                        except Exception as e:
-                            LOGGER.error(
-                                f"[{instrument_id}] Failed to publish to Redis: {e}"
-                            )
-                    else:
-                        LOGGER.warning(
-                            f"[{instrument_id}] Redis not connected - skipping publish"
-                        )
-
-                # Publish completed bar if detected
-                if latest_completed and curr:
-                    try:
-                        # Compare latest_completed['end_time'] to current bar's start_time
-                        if latest_completed["end_time"] <= curr["start_time"]:
-                            msg_completed = {
-                                "type": "completed",
-                                "instrument": instrument_id,
-                                "bar": {
-                                    "start_time": latest_completed[
-                                        "start_time"
-                                    ].isoformat(),
-                                    "end_time": latest_completed[
-                                        "end_time"
-                                    ].isoformat(),
-                                    "open": latest_completed["open"],
-                                    "high": latest_completed["high"],
-                                    "low": latest_completed["low"],
-                                    "close": latest_completed["close"],
-                                    "volume": latest_completed.get("volume", 0),
-                                },
-                            }
-                            if self._redis is not None:
-                                try:
-                                    await self._redis.publish(
-                                        self.redis_channel, json.dumps(msg_completed)
-                                    )
-                                    LOGGER.debug(
-                                        f"[{instrument_id}] Published completed bar to Redis"
-                                    )
-                                except Exception as e:
-                                    LOGGER.error(
-                                        f"[{instrument_id}] Failed to publish completed bar to Redis: {e}"
-                                    )
-                    except Exception as e:
-                        LOGGER.exception(
-                            f"[{instrument_id}] Error detecting/publishing completed bar: {e}"
-                        )
-
-            except Exception as e:
-                LOGGER.exception(
-                    f"[{instrument_id}] Failed to build or publish update message: {e}"
-                )
-
-        except Exception as e:
-            LOGGER.exception(f"[{instrument_id}] Exception in callback: {e}")
-
-    async def periodic_saver(self):
-        """
-        Save all instrument OHLCs to disk periodically, but only for instruments that are currently in market hours.
-        Also save current (in-progress) bars every `current_snapshot_interval` seconds for durability.
-        """
-        last_completed_save = datetime.now(timezone.utc)
-        last_current_save = datetime.now(timezone.utc)
-        while True:
-            await asyncio.sleep(0.5)
-            now_utc = datetime.now(timezone.utc)
-
-            # save current bars periodically if any are dirty
-            if (
-                now_utc - last_current_save
-            ).total_seconds() >= self.current_snapshot_interval:
-                # snapshot dirty current bars
-                dirty = list(self._dirty_current)
-                for sid in dirty:
-                    try:
-                        sd = self.instrument_data[sid]
-                        with sd.lock:
-                            curr = sd.current_bars.get(sid)
-                        if not curr:
-                            # nothing to persist
-                            self._dirty_current.discard(sid)
-                            continue
-                        # write snapshot for current bar atomically
-                        snap_file = f"ohlc_current_{sid}.json"
-                        snap = {
-                            "start_time": curr["start_time"].isoformat(),
-                            "end_time": curr["end_time"].isoformat(),
-                            "open": curr["open"],
-                            "high": curr["high"],
-                            "low": curr["low"],
-                            "close": curr["close"],
-                            "volume": curr.get("volume", 0),
-                        }
-                        save_json_atomic(snap_file, snap)
-                        # mark as not dirty (we just persisted)
-                        try:
-                            self._dirty_current.discard(sid)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        LOGGER.error(f"[{sid}] Failed to snapshot current bar: {e}")
-                last_current_save = now_utc
-
-            # save completed bars less frequently (configurable)
-            if (
-                now_utc - last_completed_save
-            ).total_seconds() >= self.completed_save_interval:
-                for sid, sd in self.instrument_data.items():
-                    # only save if market is open right now for this instrument (or optionally always)
-                    try:
-                        # We choose to save regardless of market open to not lose completed bars.
-                        with sd.lock:
-                            bars = copy.deepcopy(sd.completed_ohlc[sid])
-                        data = []
-                        for b in bars:
-                            bar = b.copy()
-                            bar["start_time"] = bar["start_time"].isoformat()
-                            bar["end_time"] = bar["end_time"].isoformat()
-                            data.append(bar)
-                        data_file = f"ohlc_{sid}.json"
-                        save_json_atomic(data_file, data)
-                        LOGGER.debug(f"[{sid}] Saved {len(data)} bars to {data_file}")
-                    except Exception as e:
-                        LOGGER.error(f"[{sid}] Failed to save OHLC: {e}")
-                last_completed_save = now_utc
-
-    def load_all_ohlc_from_disk(self):
-        for sid, sd in self.instrument_data.items():
-            data_file = f"ohlc_{sid}.json"
-            try:
-                with open(data_file, "r") as f:
-                    data = json.load(f)
-                bars = []
-                for bar in data:
-                    start = datetime.fromisoformat(bar["start_time"])
-                    end = datetime.fromisoformat(bar["end_time"])
-                    if start.tzinfo is None:
-                        start = start.replace(tzinfo=timezone.utc)
-                    else:
-                        start = start.astimezone(timezone.utc)
-                    if end.tzinfo is None:
-                        end = end.replace(tzinfo=timezone.utc)
-                    else:
-                        end = end.astimezone(timezone.utc)
-                    bar["start_time"] = start
-                    bar["end_time"] = end
-                    bars.append(bar)
-                cutoff = datetime.now(timezone.utc) - timedelta(
-                    hours=sd.max_history_hours
-                )
-                sd.completed_ohlc[sid] = [b for b in bars if b["end_time"] >= cutoff]
-                LOGGER.info(f"[{sid}] Loaded {len(bars)} bars from {data_file}")
-            except FileNotFoundError:
-                LOGGER.warning(f"[{sid}] No previous data file {data_file}.")
-            except Exception as e:
-                LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
-
-        # attempt to load current bar snapshots (if any) to restore in-progress bars after crash
-        for sid, sd in self.instrument_data.items():
-            snap_file = f"ohlc_current_{sid}.json"
-            try:
-                with open(snap_file, "r") as f:
-                    snap = json.load(f)
-                start = datetime.fromisoformat(snap["start_time"])
-                end = datetime.fromisoformat(snap["end_time"])
-                if start.tzinfo is None:
-                    start = start.replace(tzinfo=timezone.utc)
-                else:
-                    start = start.astimezone(timezone.utc)
-                if end.tzinfo is None:
-                    end = end.replace(tzinfo=timezone.utc)
-                else:
-                    end = end.astimezone(timezone.utc)
-                curr = {
-                    "start_time": start,
-                    "end_time": end,
-                    "open": snap["open"],
-                    "high": snap["high"],
-                    "low": snap["low"],
-                    "close": snap["close"],
-                    "volume": snap.get("volume", 0),
-                }
-                # restore into current_bars to avoid losing current in-progress bar
-                with sd.lock:
-                    sd.current_bars[sid] = curr
-                LOGGER.info(f"[{sid}] Restored in-progress bar from {snap_file}")
-            except FileNotFoundError:
-                # ignore
-                pass
-            except Exception as e:
-                LOGGER.error(f"[{sid}] Failed to restore current snapshot: {e}")
-
-    async def _run_sse_client_loop(self, avanza, instrument_id, product_id):
-        while True:
-            # if shutdown requested, exit loop instead of creating new clients
-            if self._shutting_down:
-                LOGGER.info(
-                    f"[{instrument_id}] Shutdown requested — exiting _run_sse_client_loop."
-                )
-                break
-
-            client = None
-            try:
-                client = SSEClient(avanza, self.quote_base_url + product_id)
-                self._sse_clients[instrument_id] = client
-                client.add_listener(
-                    partial(self._callback_quote_web_push, instrument_id)
-                )
-                LOGGER.info(
-                    f"[{instrument_id}] Starting SSE client for product {product_id}"
-                )
-                await client.start()
-                LOGGER.info(
-                    f"[{instrument_id}] SSE client stopped cleanly (will reconnect)."
-                )
-
-                # after client.start() returns, check if shutdown was requested
-                if self._shutting_down:
-                    LOGGER.info(
-                        f"[{instrument_id}] Shutdown requested after client stopped — exiting loop."
-                    )
-                    # attempt to remove client reference and break
-                    self._sse_clients.pop(instrument_id, None)
-                    break
-
-            except asyncio.CancelledError:
-                LOGGER.info(
-                    f"[{instrument_id}] _run_sse_client_loop cancelled: attempting client stop."
-                )
-                try:
-                    if client is not None:
-                        stop_fn = getattr(client, "stop", None) or getattr(
-                            client, "close", None
-                        )
-                        if stop_fn:
-                            res = stop_fn()
-                            if asyncio.iscoroutine(res):
-                                await res
-                except Exception as e:
-                    LOGGER.debug(
-                        f"[{instrument_id}] Exception while stopping client on cancel: {e}"
-                    )
-                finally:
-                    self._sse_clients.pop(instrument_id, None)
-                    raise
-            except Exception as e:
-                LOGGER.error(
-                    f"[{instrument_id}] SSE client error: {e}. Reconnecting in 5s..."
-                )
-                try:
-                    if client is not None:
-                        stop_fn = getattr(client, "stop", None) or getattr(
-                            client, "close", None
-                        )
-                        if stop_fn:
-                            res = stop_fn()
-                            if asyncio.iscoroutine(res):
-                                await res
-                except Exception:
-                    pass
-                self._sse_clients.pop(instrument_id, None)
-                # if shutdown flag set, don't sleep & reconnect — break
-                if self._shutting_down:
-                    LOGGER.info(
-                        f"[{instrument_id}] Shutdown requested during error; exiting client loop."
-                    )
-                    break
-                await asyncio.sleep(5)
-
-    async def real_market_loop(self):
-        """
-        Create one Avanza instance and start an SSE client loop for every instrument.
-        If Avanza creation fails we retry (so the whole set reconnects together).
-        """
-        # create / connect redis client for publishing
-        try:
-            self._redis = aioredis.from_url(self.redis_url)
-            # test connection with PING
-            await self._redis.ping()
-            LOGGER.info("Redis connected for publishing.")
-        except Exception as e:
-            LOGGER.error(f"Failed to connect to Redis at {self.redis_url}: {e}")
-            self._redis = None
-
-        while True:
-            if self._shutting_down:
-                LOGGER.info("real_market_loop: shutting down flag set — exiting loop.")
-                break
-            avanza = None
-            try:
-                # create single Avanza instance (one login)
-                avanza = Avanza(self.secret)
-                self._avanza = avanza
-                LOGGER.info("Avanza login OK.")
-
-                # start per-instrument SSE loops (each loop handles its own reconnects)
-                self._tasks = []
-                for sid, obid in self.orderbook_ids.items():
-                    t = asyncio.create_task(
-                        self._run_sse_client_loop(avanza, sid, obid)
-                    )
-                    self._tasks.append(t)
-
-                # Wait for all tasks (they are infinite loops that only stop on unexpected error)
-                await asyncio.gather(*self._tasks)
-            except Exception as e:
-                LOGGER.error(
-                    f"Error in real_market_loop: {e}. Recreating Avanza in 5s..."
-                )
-                await asyncio.sleep(5)
-            finally:
-                try:
-                    if avanza and hasattr(avanza, "close"):
-                        await avanza.close()
-                except Exception:
-                    pass
-                finally:
-                    self._avanza = None
-
-    def force_save_instrument(self, instrument_id, timestamp: datetime = None):
-        """
-        Immediately save OHLC data for `instrument_id`.
-        If timestamp is provided (aware UTC), use it as the current-bar end_time;
-        otherwise use the current UTC time.
-        """
-        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
-        sd = self.instrument_data[instrument_id]
-        try:
-            with sd.lock:
-                # copy completed bars
-                bars = copy.deepcopy(sd.completed_ohlc[instrument_id])
-                # snapshot current bar if present
-                current = sd.current_bars.get(instrument_id)
-                if current:
-                    curr_copy = copy.deepcopy(current)
-                    # set end_time to provided timestamp (ensure tz-aware)
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    curr_copy["end_time"] = ts
-                    if curr_copy["start_time"].tzinfo is None:
-                        curr_copy["start_time"] = curr_copy["start_time"].replace(
-                            tzinfo=timezone.utc
-                        )
-                    bars.append(curr_copy)
-
-            # write to disk outside lock
-            data = []
-            for b in bars:
-                bar = b.copy()
-                bar["start_time"] = bar["start_time"].isoformat()
-                bar["end_time"] = bar["end_time"].isoformat()
-                data.append(bar)
-            data_file = f"ohlc_{instrument_id}.json"
-            save_json_atomic(data_file, data)
-            LOGGER.info(
-                f"[{instrument_id}] Force-saved {len(data)} bars at {ts.isoformat()}"
-            )
-            # also persist current snapshot for fast recovery
-            if current:
-                snap_file = f"ohlc_current_{instrument_id}.json"
-                snap = {
-                    "start_time": current["start_time"].isoformat(),
-                    "end_time": current["end_time"].isoformat(),
-                    "open": current["open"],
-                    "high": current["high"],
-                    "low": current["low"],
-                    "close": current["close"],
-                    "volume": current.get("volume", 0),
-                }
-                save_json_atomic(snap_file, snap)
-        except Exception as e:
-            LOGGER.error(f"[{instrument_id}] Failed force-save: {e}")
-
-    def force_save_all(self, timestamp: datetime = None):
-        """
-        Force-save OHLC for all instruments immediately.
-        If timestamp is provided it's used as the end_time for in-progress bars;
-        otherwise current UTC time is used.
-        """
-        ts = timestamp if timestamp is not None else datetime.now(timezone.utc)
-        LOGGER.info(f"Force-saving all instruments at {ts.isoformat()}")
-        for sid in list(self.instrument_data.keys()):
-            try:
-                self.force_save_instrument(sid, ts)
-            except Exception as e:
-                LOGGER.error(f"[{sid}] Exception during force_save_all: {e}")
-
-    async def _shutdown(self, loop, signum):
-        """
-        Coroutine called from signal handlers. Force-saves, stops clients, closes Avanza,
-        cancels tasks and waits for them to finish before stopping the loop.
-        """
-        LOGGER.info(
-            f"Received signal {signum}. Initiating graceful shutdown: forcing save and cancelling tasks..."
-        )
-        # set the flag so loops stop creating new clients
-        self._shutting_down = True
-        # 1) Force-save synchronously (quick)
-        try:
-            self.force_save_all()
-        except Exception as e:
-            LOGGER.error(f"Error during force_save_all in shutdown: {e}")
-
-        # 2) Stop SSE clients (await if they provide async stop)
-        for sid, client in list(self._sse_clients.items()):
-            try:
-                LOGGER.info(f"[{sid}] Stopping SSE client...")
-                stop_fn = getattr(client, "stop", None) or getattr(
-                    client, "close", None
-                )
-                if stop_fn:
-                    res = stop_fn()
-                    if asyncio.iscoroutine(res):
-                        await res
-            except Exception as e:
-                LOGGER.debug(f"[{sid}] Exception while stopping SSE client: {e}")
-            finally:
-                self._sse_clients.pop(sid, None)
-
-        # 3) Close Avanza session if exists (await if coroutine)
-        if self._avanza is not None:
-            try:
-                close_fn = getattr(self._avanza, "close", None)
-                if close_fn:
-                    res = close_fn()
-                    if asyncio.iscoroutine(res):
-                        await res
-                self._avanza = None
-            except Exception as e:
-                LOGGER.debug(f"Exception while closing Avanza: {e}")
-
-        # 4) Cancel outstanding tasks we created and await them
-        # include self._tasks (per-instrument loops), plus other tasks except current
-        to_cancel = list(self._tasks) if self._tasks else []
-        # gather other tasks (exclude current task)
-        for t in asyncio.all_tasks(loop):
-            if t is asyncio.current_task(loop):
-                continue
-            if t not in to_cancel:
-                to_cancel.append(t)
-
-        if to_cancel:
-            for t in to_cancel:
-                try:
-                    t.cancel()
-                except Exception:
-                    pass
-
-            # Wait for tasks to finish, but don't hang forever
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*to_cancel, return_exceptions=True), timeout=10.0
-                )
-            except asyncio.TimeoutError:
-                LOGGER.warning(
-                    "Timeout while waiting for tasks to finish during shutdown."
-                )
-
-        # 5) stop the loop (will cause run_until_complete to return)
-        try:
-            loop.stop()
-        except Exception:
-            pass
-
-        # close redis
-        if self._redis is not None:
-            try:
-                await self._redis.aclose()
-            except Exception:
-                pass
-
-    def run(self):
-        """
-        Entry point: load disk data and start the asyncio loop.
-        Registers signal handlers to force-save on SIGINT/SIGTERM only if running in main thread.
-        """
-        self.load_all_ohlc_from_disk()
-        loop = asyncio.new_event_loop()
-        self._loop = loop  # save reference for external stop()
-        asyncio.set_event_loop(loop)
-
-        # create the main tasks
-        main_tasks = [
-            loop.create_task(self.real_market_loop()),
-            loop.create_task(self.periodic_saver()),
-        ]
-        # keep reference so shutdown can cancel them
-        self._tasks = main_tasks.copy()
-
-        # install signal handlers only if we're running in main thread.
-        if threading.current_thread() is threading.main_thread():
-
-            def _schedule_shutdown(s):
-                try:
-                    asyncio.create_task(self._shutdown(loop, s))
-                except Exception:
-                    try:
-                        asyncio.run_coroutine_threadsafe(self._shutdown(loop, s), loop)
-                    except Exception:
-                        pass
-
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                try:
-                    loop.add_signal_handler(sig, lambda s=sig: _schedule_shutdown(s))
-                except Exception:
-                    # if add_signal_handler fails for some reason, skip it.
-                    LOGGER.debug(
-                        "run(): loop.add_signal_handler failed; skipping signal handler registration."
-                    )
-        else:
-            LOGGER.debug(
-                "run(): not running in main thread — skipping signal handler registration (caller should call stop())."
+            # Publish bar update to Redis
+            await self._publish_bar_update(
+                instrument_id,
+                extra_meta={
+                    "last_buy": self.last_buy_price[instrument_id],
+                    "last_sell": self.last_sell_price[instrument_id],
+                },
             )
 
-        try:
-            loop.run_forever()
-        except KeyboardInterrupt:
-            LOGGER.info("KeyboardInterrupt received in run()")
-        finally:
-            # final cleanup: ensure tasks stopped
-            try:
-                LOGGER.info("Final force-save for all instruments (final cleanup)")
-                self.force_save_all()
-            except Exception as e:
-                LOGGER.error(f"Final force-save failed: {e}")
-            try:
-                loop.run_until_complete(asyncio.sleep(0.1))
-            except Exception:
-                pass
-            try:
-                loop.close()
-            except Exception:
-                pass
-
-    def stop(self, timeout: float = 15.0):
-        """
-        Synchronous method to request graceful shutdown from another thread (e.g. main thread).
-        Sets shutdown flag and schedules the async _shutdown coroutine onto the collector's loop.
-        Waits up to `timeout` seconds for the shutdown coroutine to complete.
-        """
-        LOGGER.info(
-            "Stop requested (external). Setting shutting_down flag and scheduling shutdown."
-        )
-        self._shutting_down = True
-
-        if not getattr(self, "_loop", None):
-            LOGGER.debug("stop(): no event loop reference; nothing to schedule.")
-            return
-
-        try:
-            # schedule the coroutine on the collector's loop and wait for result (best-effort)
-            fut = asyncio.run_coroutine_threadsafe(
-                self._shutdown(self._loop, "external"), self._loop
-            )
-            try:
-                fut.result(timeout=timeout)
-            except Exception as e:
-                LOGGER.debug(f"stop(): shutdown coroutine finished/failed/timeout: {e}")
         except Exception as e:
-            LOGGER.error(f"stop(): failed to schedule shutdown on collector loop: {e}")
+            self.logger.exception(f"[{instrument_id}] Exception in callback: {e}")
 
 
 def parse_args():
     """
     Usage:
-      python -m pacavanza.data_sources.avanza_market_daemon [-i interval]
+      python -m pacavanza.avanza_market_daemon [-i interval]
     """
     args = sys.argv[1:]
     interval_str = "5m"
@@ -949,7 +177,6 @@ def parse_args():
             interval_str = val
             i += 2
         else:
-            # ignore other positional args — instrument ids come from ava_mini_future_list.json
             LOGGER.debug(
                 f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from ava_mini_future_list.json)"
             )
@@ -961,6 +188,5 @@ def parse_args():
 if __name__ == "__main__":
     interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
-    # Default redis URL and channel; adjust with env vars or CLI wrapper if you want
     collector = AvanzaMarketCollector(interval_seconds)
     collector.run()
