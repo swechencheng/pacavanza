@@ -15,84 +15,86 @@ FUTURE_LIST_PATH = "./pacavanza/future_list.json"
 class FutureMarketCollector(BaseMarketCollector):
     """
     SSE collector for classic futures (e.g. OMXS306D) using Avanza's
-    trade-web-push endpoint.
+    quote-web-push endpoint.
 
     Inherits all infrastructure from BaseMarketCollector and provides:
-      - trade-web-push specific SSE URL
-      - _callback_trade_web_push handling price/volume/dealTime fields
+      - quote-web-push specific SSE URL
+      - _sse_callback handling buyPrice/sellPrice/lastPrice/updated fields
 
-    Trade event example payload:
+    Quote event example payload:
     {
-        "tradeId": "8207612_59746",
         "orderbookId": "2279188",
-        "buyer": "",
-        "seller": "",
-        "dealTime": 1774024058949,
-        "price": 2834.25,
-        "volume": 658,
-        "matchedOnMarket": true,
-        "cancelled": false,
-        "initialSubscription": false
+        "buyPrice": 2863.00,
+        "sellPrice": 2863.50,
+        "closingPrice": 2856.00,
+        "highestPrice": 2876.50,
+        "lowestPrice": 2837.50,
+        "lastPrice": 2863.25,
+        "totalValueTraded": 69291945,
+        "totalVolumeTraded": 24248,
+        "change": 7.25,
+        "changePercent": 0.0025,
+        "spreadPercent": 0.0002,
+        "volumeWeightedAveragePrice": null,
+        "updated": "2026-03-30T10:02:31.024Z",
+        "lastPriceUpdated": "2026-03-30T10:02:30.000Z"
     }
     """
 
-    sse_base_url = "https://www.avanza.se/_push/trade-web-push/"
+    sse_base_url = "https://www.avanza.se/_push/quote-web-push/"
     default_instrument_list_path = FUTURE_LIST_PATH
     default_redis_channel = "pacavanza:future_updates"
     logger_name = "future_market_daemon"
 
     def _init_price_tracking(self):
+        self.last_buy_price = {sid: None for sid in self.instrument_ids}
+        self.last_sell_price = {sid: None for sid in self.instrument_ids}
         self.last_price = {sid: None for sid in self.instrument_ids}
 
     async def _sse_callback(self, instrument_id, _id, event, data):
         """
-        Async callback for trade-web-push SSE events.
-        Handles trade data with price, volume, and dealTime (epoch ms).
+        Async callback for quote-web-push SSE events.
+        Handles quote data with buyPrice, sellPrice, lastPrice, and updated.
         """
         try:
-            if not isinstance(data, dict):
-                return
-
-            # Skip cancelled trades
-            if data.get("cancelled", False):
-                return
-
-            # Skip initial subscription data (historical backfill)
-            if data.get("initialSubscription", False):
+            if event != "QUOTE" or not isinstance(data, dict):
                 return
 
             self.logger.debug(f"[{instrument_id}] [{event}] {data}")
 
-            price = data.get("price")
-            volume = data.get("volume", 0)
-            deal_time_ms = data.get("dealTime")
-
-            if price is None:
-                self.logger.warning(
-                    f"[{instrument_id}] Trade event missing 'price': {data}"
-                )
-                return
-
-            # Parse dealTime (epoch milliseconds) into UTC datetime
+            ts = data.get("updated")
             dt = datetime.now(timezone.utc)
             readable_ts = "(no timestamp)"
-            if deal_time_ms is not None:
+            if ts:
                 try:
-                    dt = datetime.fromtimestamp(deal_time_ms / 1000.0, tz=timezone.utc)
+                    parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    dt = parsed.astimezone(timezone.utc)
                     milli = dt.microsecond // 1000
                     readable_ts = f"{dt.strftime('%Y-%m-%d %H:%M:%S')}.{milli:03d} {dt.strftime('%Z')}"
                 except Exception:
-                    readable_ts = str(deal_time_ms)
+                    readable_ts = str(ts)
+
+            buy_price = data.get("buyPrice")
+            sell_price = data.get("sellPrice")
+            last_price = data.get("lastPrice")
+
+            if last_price is None:
+                self.logger.warning(
+                    f"[{instrument_id}] {readable_ts} - lastPrice missing: {data}"
+                )
+                return
 
             self.logger.debug(
-                f"[{instrument_id}] {readable_ts} P: {price:.2f}  V: {volume}"
+                f"[{instrument_id}] {readable_ts} B: {buy_price}  S: {sell_price}  L: {last_price:.2f}"
             )
 
-            # Store last price
-            self.last_price[instrument_id] = price
+            # Store last prices
+            self.last_buy_price[instrument_id] = buy_price
+            self.last_sell_price[instrument_id] = sell_price
+            self.last_price[instrument_id] = last_price
 
-            # Update OHLC bar
-            self.instrument_data[instrument_id].update_ohlc_bar(price, dt)
+            # Update OHLC bar using lastPrice
+            self.instrument_data[instrument_id].update_ohlc_bar(last_price, dt)
 
             # Mark current bar as dirty for periodic snapshot
             self._dirty_current.add(instrument_id)
@@ -101,13 +103,14 @@ class FutureMarketCollector(BaseMarketCollector):
             await self._publish_bar_update(
                 instrument_id,
                 extra_meta={
+                    "last_buy": self.last_buy_price[instrument_id],
+                    "last_sell": self.last_sell_price[instrument_id],
                     "last_price": self.last_price[instrument_id],
-                    "last_volume": volume,
                 },
             )
 
         except Exception as e:
-            self.logger.exception(f"[{instrument_id}] Exception in trade callback: {e}")
+            self.logger.exception(f"[{instrument_id}] Exception in quote callback: {e}")
 
 
 def parse_args():
