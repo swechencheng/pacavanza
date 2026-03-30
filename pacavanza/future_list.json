@@ -7,13 +7,15 @@
             "name": "OMX30 April 2026",
             "URL": "https://www.avanza.se/borshandlade-produkter/optioner-terminer/om-terminen.html/2279188/omxs306d",
             "orderbookId": "2279188",
-            "tick_size": 0.25
+            "tick_size": 0.25,
+            "tick_coefficient": 1.0
         },
         "omxs306e": {
             "name": "OMX30 May 2026",
             "URL": "https://www.avanza.se/borshandlade-produkter/optioner-terminer/om-terminen.html/2327635/omxs306e",
             "orderbookId": "2327635",
-            "tick_size": 0.25
+            "tick_size": 0.25,
+            "tick_coefficient": 1.0
         }
     }
 }
