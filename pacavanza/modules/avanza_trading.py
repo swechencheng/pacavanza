@@ -25,34 +25,6 @@ class AvanzaTrading(BaseAvanzaTrading):
     # Subclass hook implementations
     # --------------------------------------------------------------------------
 
-    async def _get_market_buy_price(self, instrument_id: str) -> Optional[float]:
-        """For mini-futures, use the last sell (ask) price."""
-        meta = await self._get_metadata_snapshot(instrument_id)
-        for key in ("last_sell", "lastAsk", "ask", "last_ask"):
-            if meta.get(key) is not None:
-                try:
-                    return float(meta[key])
-                except Exception:
-                    pass
-        lst = await self._get_snapshot(instrument_id)
-        if lst:
-            return float(lst[-1]["close"])
-        return None
-
-    async def _get_market_sell_price(self, instrument_id: str) -> Optional[float]:
-        """For mini-futures, use the last buy (bid) price."""
-        meta = await self._get_metadata_snapshot(instrument_id)
-        for key in ("last_buy", "lastBid", "bid", "last_bid"):
-            if meta.get(key) is not None:
-                try:
-                    return float(meta[key])
-                except Exception:
-                    pass
-        lst = await self._get_snapshot(instrument_id)
-        if lst:
-            return float(lst[-1]["close"])
-        return None
-
     def _compute_buy_stop_trigger_and_limit(
         self,
         high_last: float,
@@ -99,14 +71,3 @@ class AvanzaTrading(BaseAvanzaTrading):
         """
         limit_price = round(take_profit - 0.01, 2)
         return limit_price, True
-
-    async def _get_edit_order_follow_market_price(
-        self, side: str, instrument_id: str
-    ) -> Optional[float]:
-        """For mini-futures, SELL orders follow last buy, BUY orders follow last sell."""
-        if side == "SELL":
-            return await self._get_market_sell_price(instrument_id)
-        elif side == "BUY":
-            return await self._get_market_buy_price(instrument_id)
-        else:
-            raise Exception(f"Unknown side {side}")

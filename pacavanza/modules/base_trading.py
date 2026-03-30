@@ -148,6 +148,34 @@ class BaseAvanzaTrading:
             raise ValueError(f"Order size too small for {instrument_id}")
         return vol
 
+    async def _get_market_buy_price(self, instrument_id: str) -> Optional[float]:
+        """For mini-futures, use the last sell (ask) price."""
+        meta = await self._get_metadata_snapshot(instrument_id)
+        for key in ("last_sell", "lastAsk", "ask", "last_ask"):
+            if meta.get(key) is not None:
+                try:
+                    return float(meta[key])
+                except Exception:
+                    pass
+        lst = await self._get_snapshot(instrument_id)
+        if lst:
+            return float(lst[-1]["close"])
+        return None
+
+    async def _get_market_sell_price(self, instrument_id: str) -> Optional[float]:
+        """For mini-futures, use the last buy (bid) price."""
+        meta = await self._get_metadata_snapshot(instrument_id)
+        for key in ("last_buy", "lastBid", "bid", "last_bid"):
+            if meta.get(key) is not None:
+                try:
+                    return float(meta[key])
+                except Exception:
+                    pass
+        lst = await self._get_snapshot(instrument_id)
+        if lst:
+            return float(lst[-1]["close"])
+        return None
+
     # helper: delete stop-losses
     def delete_stop_losses(self, instrument_id: str) -> None:
         info = self._get_instrument_info(instrument_id)
@@ -404,14 +432,6 @@ class BaseAvanzaTrading:
     # Methods that subclasses MUST override (order-type specific logic)
     # --------------------------------------------------------------------------
 
-    async def _get_market_buy_price(self, instrument_id: str) -> Optional[float]:
-        """Return the price to use for a market buy order."""
-        raise NotImplementedError
-
-    async def _get_market_sell_price(self, instrument_id: str) -> Optional[float]:
-        """Return the price to use for a market sell order."""
-        raise NotImplementedError
-
     def _compute_buy_stop_trigger_and_limit(
         self,
         high_last: float,
@@ -445,12 +465,6 @@ class BaseAvanzaTrading:
         Compute (limit_price, trigger_on_market_maker_quote) for a take-profit sell.
         Returns a tuple of (limit, trigger_on_mm).
         """
-        raise NotImplementedError
-
-    async def _get_edit_order_follow_market_price(
-        self, side: str, instrument_id: str
-    ) -> Optional[float]:
-        """Return the updated price for an edit_order_follow_market based on side."""
         raise NotImplementedError
 
     # --------------------------------------------------------------------------
@@ -576,7 +590,9 @@ class BaseAvanzaTrading:
 
                 # Delegate trigger/limit calculation to subclass
                 stop_price, limit_price, trigger_on_mm = (
-                    self._compute_buy_stop_trigger_and_limit(high_last, tick, tick_coeff)
+                    self._compute_buy_stop_trigger_and_limit(
+                        high_last, tick, tick_coeff
+                    )
                 )
 
                 # swing leg low (consecutive bull bars ending at last_completed_idx)
@@ -836,9 +852,7 @@ class BaseAvanzaTrading:
         self._log_order(sell_stop_order)
 
         # Take-profit
-        tp_limit, tp_trigger_on_mm = self._compute_take_profit_limit(
-            take_profit, tick
-        )
+        tp_limit, tp_trigger_on_mm = self._compute_take_profit_limit(take_profit, tick)
         tp_sell_trig = StopLossTrigger(
             type=StopLossTriggerType.MORE_OR_EQUAL,
             value=take_profit,
@@ -1044,6 +1058,17 @@ class BaseAvanzaTrading:
     async def cancel_sell_stop(self, instrument_id: str) -> Dict[str, Any]:
         cancelled = await self._cancel_scheduled(instrument_id, "sell_stop")
         return {"cancelled": cancelled}
+
+    async def _get_edit_order_follow_market_price(
+        self, side: str, instrument_id: str
+    ) -> Optional[float]:
+        """For mini-futures, SELL orders follow last buy, BUY orders follow last sell."""
+        if side == "SELL":
+            return await self._get_market_sell_price(instrument_id)
+        elif side == "BUY":
+            return await self._get_market_buy_price(instrument_id)
+        else:
+            raise Exception(f"Unknown side {side}")
 
     # Order API helpers
     def edit_order(

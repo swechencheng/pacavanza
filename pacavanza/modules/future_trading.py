@@ -40,14 +40,6 @@ class FutureTrading(BaseAvanzaTrading):
             return float(lst[-1]["close"])
         return None
 
-    async def _get_market_buy_price(self, instrument_id: str) -> Optional[float]:
-        """For futures, use the last completed trade price."""
-        return await self._get_last_trade_price(instrument_id)
-
-    async def _get_market_sell_price(self, instrument_id: str) -> Optional[float]:
-        """For futures, use the last completed trade price."""
-        return await self._get_last_trade_price(instrument_id)
-
     def _compute_buy_stop_trigger_and_limit(
         self,
         high_last: float,
@@ -91,12 +83,3 @@ class FutureTrading(BaseAvanzaTrading):
         """
         limit_price = take_profit
         return limit_price, False
-
-    async def _get_edit_order_follow_market_price(
-        self, side: str, instrument_id: str
-    ) -> Optional[float]:
-        """For futures, both BUY and SELL follow the last trade price."""
-        if side in ("SELL", "BUY"):
-            return await self._get_last_trade_price(instrument_id)
-        else:
-            raise Exception(f"Unknown side {side}")
