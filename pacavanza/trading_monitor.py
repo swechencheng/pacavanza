@@ -11,11 +11,11 @@ from pacavanza.modules.avanza_trading import AVANZA
 from pacavanza.utils.utils import flatten_instrument_list
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("trading_monitor").setLevel(logging.INFO)
-LOGGER = logging.getLogger("trading_monitor")
+logging.getLogger("avanza_trading_monitor").setLevel(logging.INFO)
+LOGGER = logging.getLogger("avanza_trading_monitor")
 
 
-class TradingMonitor:
+class AvanzaTradingMonitor:
     """
     Implementation requirements:
     - When it is an ORDER event, we need to check if the list "orders" from orders = self._avanza.get_orders() is empty or not;
@@ -614,7 +614,7 @@ class TradingMonitor:
     def stop(self, timeout: float = 15.0):
         """
         Synchronous method to request graceful shutdown from another thread (e.g. main thread).
-        Sets shutdown flag and schedules the async _shutdown coroutine onto the trading_monitor's loop.
+        Sets shutdown flag and schedules the async _shutdown coroutine onto the avanza_trading_monitor's loop.
         Waits up to `timeout` seconds for the shutdown coroutine to complete.
         """
         LOGGER.info(
@@ -627,7 +627,7 @@ class TradingMonitor:
             return
 
         try:
-            # schedule the coroutine on the trading_monitor's loop and wait for result (best-effort)
+            # schedule the coroutine on the avanza_trading_monitor's loop and wait for result (best-effort)
             fut = asyncio.run_coroutine_threadsafe(
                 self._shutdown(self._loop, "external"), self._loop
             )
@@ -637,10 +637,10 @@ class TradingMonitor:
                 LOGGER.debug(f"stop(): shutdown coroutine finished/failed/timeout: {e}")
         except Exception as e:
             LOGGER.error(
-                f"stop(): failed to schedule shutdown on trading_monitor loop: {e}"
+                f"stop(): failed to schedule shutdown on avanza_trading_monitor loop: {e}"
             )
 
 
 if __name__ == "__main__":
-    trading_monitor = TradingMonitor()
-    trading_monitor.run()
+    avanza_trading_monitor = AvanzaTradingMonitor()
+    avanza_trading_monitor.run()

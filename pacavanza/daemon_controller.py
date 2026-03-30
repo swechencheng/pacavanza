@@ -127,7 +127,9 @@ def main():
 
                 # 4. Trading Monitor
                 start_process(
-                    "monitor", "pacavanza.trading_monitor", "pacavanza.trading_monitor"
+                    "monitor",
+                    "pacavanza.avanza_trading_monitor",
+                    "pacavanza.avanza_trading_monitor",
                 )
 
             else:
