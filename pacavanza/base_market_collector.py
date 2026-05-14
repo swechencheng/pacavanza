@@ -55,6 +55,7 @@ class BaseMarketCollector:
         secret_path="./pacavanza/../secret.json",
         instrument_list_path=None,
         instrument_datas: dict = None,
+        instrument_list: dict = None,
         redis_url: str = "redis://localhost:6379/0",
         redis_channel: str = None,
         completed_save_interval: Optional[float] = None,
@@ -65,9 +66,12 @@ class BaseMarketCollector:
         self.interval_seconds = interval_seconds
         self.secret = json.load(open(secret_path))
 
-        instrument_list_path = instrument_list_path or self.default_instrument_list_path
-        loaded_list = json.load(open(instrument_list_path))
-        self.instrument_list = flatten_instrument_list(loaded_list)
+        if instrument_list is not None:
+            self.instrument_list = flatten_instrument_list(instrument_list)
+        else:
+            instrument_list_path = instrument_list_path or self.default_instrument_list_path
+            loaded_list = json.load(open(instrument_list_path))
+            self.instrument_list = flatten_instrument_list(loaded_list)
         self.instrument_ids = list(self.instrument_list.keys())
 
         # per-instrument storage objects

@@ -12,7 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
-from .utils.utils import flatten_instrument_list
+from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
 
 # compute pacavanza package root (pacavanza/)
 ROOT = Path(__file__).resolve().parent  # pacavanza/
@@ -64,7 +64,7 @@ class WebSocketManager:
 
 def create_app(
     redis_url="redis://localhost:6379/0",
-    redis_channel="pacavanza:ticker_updates",
+    redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     static_html_path: str | Path = STATIC_HTML,
 ):
     """
@@ -92,14 +92,21 @@ def create_app(
     # ema_state[instrument][length] = last EMA value
     ema_state: Dict[str, Dict[int, float]] = defaultdict(dict)
 
-    # NEW: load ava_mini_future_list.json into memory for quick access
+    # NEW: load ava_mini_future_list.json and dynamically fetch active future into memory
     instrument_list: Dict[str, Any] = {}
     try:
         with open(ROOT / "ava_mini_future_list.json", "r", encoding="utf-8") as f:
             raw_list = json.load(f)
-            instrument_list = flatten_instrument_list(raw_list)
+            instrument_list.update(flatten_instrument_list(raw_list))
     except Exception as e:
         LOGGER.warning("Could not load ava_mini_future_list.json: %s", e)
+        
+    try:
+        active_future = fetch_active_omxs30_future()
+        instrument_list.update(flatten_instrument_list(active_future))
+        LOGGER.info(f"Loaded active future: {list(flatten_instrument_list(active_future).keys())}")
+    except Exception as e:
+        LOGGER.warning("Could not fetch active future: %s", e)
 
     recent_bars = {sid: [] for sid in instrument_list.keys()}
 
@@ -145,12 +152,13 @@ def create_app(
         LOGGER.info("Starting Redis subscriber task")
         try:
             pubsub = redis_client.pubsub()
-            await pubsub.subscribe(redis_channel)
-            LOGGER.info(f"Subscribed to Redis channel: {redis_channel}")
+            await pubsub.subscribe(*redis_channels)
+            LOGGER.info(f"Subscribed to Redis channels: {redis_channels}")
 
             # Test message to verify Redis is working
             test_msg = {"type": "test", "message": "Redis connection established"}
-            await redis_client.publish(redis_channel, json.dumps(test_msg))
+            for channel in redis_channels:
+                await redis_client.publish(channel, json.dumps(test_msg))
 
             async for msg in pubsub.listen():
                 if msg and msg["type"] == "message":
@@ -202,7 +210,7 @@ def create_app(
             asyncio.create_task(_redis_subscriber_task())
         finally:
             try:
-                await pubsub.unsubscribe(redis_channel)
+                await pubsub.unsubscribe(*redis_channels)
             except Exception:
                 pass
             try:
@@ -399,12 +407,11 @@ def create_app(
 
     # Expose ava_mini_future_list.json
     @app.get("/ava_mini_future_list.json")
-    async def get_bar_json():
-        return FileResponse(
-            ROOT / "ava_mini_future_list.json",
-            media_type="application/json",
-            headers={"Cache-Control": "public, max-age=3600"},
-        )
+    async def get_future_list():
+        try:
+            return instrument_list
+        except Exception:
+            raise HTTPException(status_code=404, detail="File not found")
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools
     @app.get("/.well-known/appspecific/com.chrome.devtools.json")
@@ -786,7 +793,7 @@ def create_app(
 def main():
     # run as: python -m pacavanza.backend.main
     app = create_app(
-        redis_url="redis://localhost:6379/0", redis_channel="pacavanza:ticker_updates"
+        redis_url="redis://localhost:6379/0", redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"]
     )
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
 

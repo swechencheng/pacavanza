@@ -14,6 +14,9 @@ setuptools.setup(
         "fastapi",
         "uvicorn",
         "aiohttp",
+        "ib-async",
     ],
-    entry_points={"console_scripts": ["run-pacavanza = pacavanza.daemon_controller:main"]},
+    entry_points={
+        "console_scripts": ["run-pacavanza = pacavanza.daemon_controller:main"]
+    },
 )

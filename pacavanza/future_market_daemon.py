@@ -9,8 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logging.getLogger("future_market_daemon").setLevel(logging.INFO)
 LOGGER = logging.getLogger("future_market_daemon")
 
-FUTURE_LIST_PATH = "./pacavanza/future_list.json"
-
+from .utils.utils import fetch_active_omxs30_future
 
 class FutureMarketCollector(BaseMarketCollector):
     """
@@ -42,9 +41,12 @@ class FutureMarketCollector(BaseMarketCollector):
     """
 
     sse_base_url = "https://www.avanza.se/_push/quote-web-push/"
-    default_instrument_list_path = FUTURE_LIST_PATH
     default_redis_channel = "pacavanza:future_updates"
     logger_name = "future_market_daemon"
+
+    def __init__(self, interval_seconds, **kwargs):
+        active_future = fetch_active_omxs30_future()
+        super().__init__(interval_seconds, instrument_list=active_future, **kwargs)
 
     def _init_price_tracking(self):
         self.last_buy_price = {sid: None for sid in self.instrument_ids}
@@ -112,6 +114,92 @@ class FutureMarketCollector(BaseMarketCollector):
         except Exception as e:
             self.logger.exception(f"[{instrument_id}] Exception in quote callback: {e}")
 
+    def load_all_ohlc_from_disk(self):
+        super().load_all_ohlc_from_disk()
+        self._sync_ibkr_history()
+
+    def _sync_ibkr_history(self):
+        try:
+            from ib_async import IB, ContFuture, util
+            import pandas as pd
+            from datetime import timedelta
+        except ImportError:
+            self.logger.warning("ib_async or pandas not installed, skipping IBKR sync")
+            return
+            
+        for sid, sd in self.instrument_data.items():
+            try:
+                ib = IB()
+                # 7497 is default for TWS paper trading. We use a random client ID to avoid conflicts.
+                ib.connect('127.0.0.1', 7497, clientId=999)
+                contract = ContFuture('OMXS30', 'OMS')
+                ib.qualifyContracts(contract)
+                
+                # Determine barSizeSetting based on interval_seconds
+                interval_map = {60: '1 min', 300: '5 mins', 900: '15 mins', 3600: '1 hour'}
+                bar_size = interval_map.get(self.interval_seconds, '5 mins')
+                
+                bars = ib.reqHistoricalData(
+                    contract,
+                    endDateTime='',
+                    durationStr='1 M',
+                    barSizeSetting=bar_size,
+                    whatToShow='TRADES',
+                    useRTH=False,
+                    formatDate=2 # Return UTC timestamps
+                )
+                df = util.df(bars)
+                ib.disconnect()
+                
+                if df is None or df.empty:
+                    self.logger.warning(f"[{sid}] No IBKR data for ContFuture OMXS30")
+                    continue
+
+                new_bars = []
+                for idx, row in df.iterrows():
+                    # idx is not the index here if we didn't set it, date is a column
+                    start_time = row['date']
+                    if start_time.tzinfo is None:
+                        start_time = start_time.replace(tzinfo=timezone.utc)
+                    else:
+                        start_time = start_time.astimezone(timezone.utc)
+                    
+                    end_time = start_time + timedelta(seconds=self.interval_seconds)
+                    
+                    bar = {
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": float(row["volume"])
+                    }
+                    new_bars.append(bar)
+                
+                with sd.lock:
+                    local_bars = sd.completed_ohlc.get(sid, [])
+                    merged_bars_dict = {b["start_time"]: b for b in local_bars}
+                    
+                    for b in new_bars:
+                        merged_bars_dict[b["start_time"]] = b
+                        
+                    if new_bars:
+                        last_ib_start = new_bars[-1]["start_time"]
+                        for b in local_bars:
+                            if b["start_time"] > last_ib_start:
+                                merged_bars_dict[b["start_time"]] = b
+                                
+                    sorted_bars = sorted(merged_bars_dict.values(), key=lambda x: x["start_time"])
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=sd.max_history_hours)
+                    sd.completed_ohlc[sid] = [b for b in sorted_bars if b["end_time"] >= cutoff]
+                    
+                self.logger.info(f"[{sid}] Synced {len(new_bars)} bars from IBKR ContFuture. Total bars: {len(sd.completed_ohlc[sid])}")
+                self.force_save_instrument(sid)
+
+            except Exception as e:
+                self.logger.exception(f"[{sid}] Failed to sync IBKR history: {e}")
+
 
 def parse_args():
     """
@@ -131,7 +219,7 @@ def parse_args():
             i += 2
         else:
             LOGGER.debug(
-                f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from future_list.json)"
+                f"Ignoring CLI arg '{args[i]}' (instrument ids loaded from dynamically fetched future list)"
             )
             i += 1
 

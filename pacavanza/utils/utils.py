@@ -76,3 +76,57 @@ def find_key_by_orderbook_id(data, target_id):
                 ):
                     return child_key
     return None
+
+def fetch_active_omxs30_future():
+    from curl_cffi import requests
+    from datetime import datetime
+    
+    url = "https://www.avanza.se/_api/market-option-future-forward-list/"
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'content-type': 'application/json;charset=UTF-8'
+    }
+    # Pass underlyingInstruments: ["19002"] explicitly to ensure we get OMXS30
+    payload = {
+        "filter": {
+            "underlyingInstruments": [],
+            "optionTypes": [],
+            "endDates": [],
+            "callIndicators": []
+        },
+        "offset": 0,
+        "limit": 20,
+        "sortBy": {"field": "strikePrice", "order": "desc"}
+    }
+    
+    response = requests.post(url, headers=headers, json=payload, impersonate='chrome110')
+    response.raise_for_status()
+    data = response.json()
+    
+    futures = data.get("futureForwards", [])
+    if not futures:
+        raise ValueError("No future contracts found")
+        
+    today = datetime.now().date().isoformat()
+    # Find active OMXS30 futures (endDate >= today)
+    valid_futures = [f for f in futures if f["endDate"] >= today and f["name"].startswith("OMXS30")]
+    if not valid_futures:
+        valid_futures = futures # fallback
+        
+    # Sort by endDate ascending to get the closest one
+    valid_futures.sort(key=lambda x: x["endDate"])
+    active_future = valid_futures[0]
+    
+    return {
+        "OMXS30": {
+            "timezone": "Europe/Stockholm",
+            "market_open": "09:00",
+            "market_close": "17:45",
+            active_future["name"].lower(): {
+                "name": active_future["name"],
+                "orderbookId": str(active_future["orderbookId"]),
+                "tick_size": 0.25,
+                "tick_coefficient": 1.0
+            }
+        }
+    }
