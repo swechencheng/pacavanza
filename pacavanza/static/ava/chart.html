@@ -1,340 +1,340 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PACavanza Realtime Chart</title>
-    <style>
-      html,
-      body {
-        height: 100%;
-        margin: 0;
-        padding: 0;
-        background: #000000;
-        color: #ddd;
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto,
-          "Helvetica Neue", Arial;
-      }
 
-      .buy {
-        color: #4caf50;
-        font-weight: 600;
-      }
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PACavanza Realtime Chart</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000000;
+      color: #ddd;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial;
+    }
 
-      .sell {
-        color: #f44336;
-        font-weight: 600;
-      }
-      .volume-input {
-        width: 60px;
-        background: #0f172a; /* deep dark tone */
-        border: 1px solid #333;
-        color: #ddd;
-        padding: 4px 6px;
-        border-radius: 6px;
-        font-size: 14px;
-        font-family: monospace;
-        outline: none;
-        transition: border 0.2s, box-shadow 0.2s;
-      }
+    .buy {
+      color: #4caf50;
+      font-weight: 600;
+    }
 
-      .volume-input:hover {
-        border-color: #444;
-      }
+    .sell {
+      color: #f44336;
+      font-weight: 600;
+    }
 
-      .volume-input:focus {
-        border-color: #4caf50; /* match buy color */
-        box-shadow: 0 0 4px #4caf50;
-      }
+    .volume-input {
+      width: 60px;
+      background: #0f172a;
+      /* deep dark tone */
+      border: 1px solid #333;
+      color: #ddd;
+      padding: 4px 6px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: monospace;
+      outline: none;
+      transition: border 0.2s, box-shadow 0.2s;
+    }
 
-      #split-container {
-        display: flex;
-        flex-direction: row;
-        gap: 12px;
-        width: 100%;
-        height: calc(100vh - 80px); /* Adjust based on header/footer */
-        padding: 0 10px;
-        box-sizing: border-box;
-      }
+    .volume-input:hover {
+      border-color: #444;
+    }
 
-      .instrument-panel {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid #333;
-        border-radius: 4px;
-        background: #0f1014;
-        min-width: 0; /* Important for chart resizing */
-      }
+    .volume-input:focus {
+      border-color: #4caf50;
+      /* match buy color */
+      box-shadow: 0 0 4px #4caf50;
+    }
 
-      .panel-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 4px 8px;
-        background: #1a243d;
-        border-bottom: 1px solid #333;
-      }
+    #split-container {
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      width: 100%;
+      height: calc(100vh - 80px);
+      /* Adjust based on header/footer */
+      padding: 0 10px;
+      box-sizing: border-box;
+    }
 
-      .panel-header h3 {
-        margin: 0;
-        font-size: 14px;
-      }
+    .instrument-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: #0f1014;
+      min-width: 0;
+      /* Important for chart resizing */
+    }
 
-      .chart-container {
-        flex: 1;
-        position: relative;
-        width: 100%;
-        /* height handled by flex */
-      }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #1a243d;
+      border-bottom: 1px solid #333;
+    }
 
-      .trading-controls {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        padding: 6px 8px;
-        background: #151b2e;
-        border-bottom: 1px solid #333;
-        align-items: center;
-      }
+    .panel-header h3 {
+      margin: 0;
+      font-size: 14px;
+    }
 
-      .spacer {
-        flex: 1;
-      }
+    .chart-container {
+      flex: 1;
+      position: relative;
+      width: 100%;
+      /* height handled by flex */
+    }
 
-      button {
-        background: #2a3455;
-        border: 1px solid #444;
-        color: #ddd;
-        padding: 3px 6px;
-        border-radius: 4px;
-        font-size: 11px;
-        cursor: pointer;
-      }
-      button:hover {
-        background: #3b476b;
-      }
-      /* Center the asset control */
-      #controls {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        padding: 10px 0;
-        background: #000;
-      }
+    .trading-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #151b2e;
+      border-bottom: 1px solid #333;
+      align-items: center;
+    }
 
-      /* Stylish Asset Dropdown */
-      #asset {
-        appearance: none;
-        -webkit-appearance: none;
-        -moz-appearance: none;
-        background-color: #1a243d;
-        color: #ffffff;
-        font-size: 16px; /* readable on mobile */
-        font-weight: 500;
-        padding: 8px 32px 8px 16px; /* extra right padding for arrow */
-        border: 1px solid #333;
-        border-radius: 20px; /* rounded pill shape */
-        outline: none;
-        cursor: pointer;
-        text-align: center;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-        background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ddd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-        background-repeat: no-repeat;
-        background-position: right 10px center;
-        background-size: 16px;
-        min-width: 150px;
-        transition: background-color 0.2s, border-color 0.2s;
-      }
+    .spacer {
+      flex: 1;
+    }
 
-      #asset:hover {
-        background-color: #253350;
-        border-color: #555;
-      }
+    button {
+      background: #2a3455;
+      border: 1px solid #444;
+      color: #ddd;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
 
-      #asset:focus {
-        border-color: #4caf50;
-        box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
-      }
+    button:hover {
+      background: #3b476b;
+    }
 
-      /* Hide the label text "Asset:" to keep it clean, or style it? User asked for "asset input list" to result in "stylist and friendly". 
+    /* Center the asset control */
+    #controls {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 10px 0;
+      background: #000;
+    }
+
+    /* Stylish Asset Dropdown */
+    #asset {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-color: #1a243d;
+      color: #ffffff;
+      font-size: 16px;
+      /* readable on mobile */
+      font-weight: 500;
+      padding: 8px 32px 8px 16px;
+      /* extra right padding for arrow */
+      border: 1px solid #333;
+      border-radius: 20px;
+      /* rounded pill shape */
+      outline: none;
+      cursor: pointer;
+      text-align: center;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ddd' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      background-size: 16px;
+      min-width: 150px;
+      transition: background-color 0.2s, border-color 0.2s;
+    }
+
+    #asset:hover {
+      background-color: #253350;
+      border-color: #555;
+    }
+
+    #asset:focus {
+      border-color: #4caf50;
+      box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+    }
+
+    /* Hide the label text "Asset:" to keep it clean, or style it? User asked for "asset input list" to result in "stylist and friendly". 
          I will hide the explicit "Asset:" label text as the dropdown itself is self-explanatory or I can style the label to be subtle. 
          Let's keep the label wrapper but hide the text "Asset:" visually or just rely on the design.
          Actually, strictly centering the select alone usually looks best.
       */
-      #controls label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #888;
-        font-size: 14px;
-        font-weight: 500;
+    #controls label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #888;
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    /* Status & Timer Overlays */
+    #market-timer {
+      position: fixed;
+      top: 15px;
+      right: 15px;
+      z-index: 1000;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+      color: #ddd;
+      border: 1px solid #333;
+      pointer-events: none;
+    }
+
+    #status {
+      color: #ff9900;
+      font-weight: bold;
+    }
+
+    #trade-status-container {
+      position: fixed;
+      top: 15px;
+      left: 15px;
+      z-index: 1000;
+      background: rgba(0, 0, 0, 0.6);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #ddd;
+      border: 1px solid #333;
+      pointer-events: none;
+      max-width: 300px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    @media (max-width: 800px) {
+      #split-container {
+        flex-direction: column;
       }
+    }
+  </style>
 
-      /* Status & Timer Overlays */
-      #market-timer {
-        position: fixed;
-        top: 15px;
-        right: 15px;
-        z-index: 1000;
-        background: rgba(0, 0, 0, 0.6);
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 14px;
-        color: #ddd;
-        border: 1px solid #333;
-        pointer-events: none;
-      }
+  <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+</head>
 
-      #status {
-        color: #ff9900;
-        font-weight: bold;
-      }
+<body>
+  <div id="controls">
+    <label>
+      <select id="asset"></select>
+    </label>
+  </div>
 
-      #trade-status-container {
-        position: fixed;
-        top: 15px;
-        left: 15px;
-        z-index: 1000;
-        background: rgba(0, 0, 0, 0.6);
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 13px;
-        color: #ddd;
-        border: 1px solid #333;
-        pointer-events: none;
-        max-width: 300px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      @media (max-width: 800px) {
-        #split-container {
-          flex-direction: column;
-        }
-      }
-    </style>
-
-    <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
-  </head>
-  <body>
-    <div id="controls">
-      <label>
-        <select id="asset"></select>
-      </label>
-    </div>
-
-    <div id="split-container">
-      <!-- LONG SIDE (Left/Top) -->
-      <div id="panel-long" class="instrument-panel">
-        <div class="panel-header">
-          <h3 class="buy">LONG <span id="label-long"></span></h3>
-          <span id="chart-ohlc-info-long"></span>
-        </div>
-
-        <div class="trading-controls" data-side="long">
-          <label>
-            💰
-            <input
-              type="number"
-              id="order-percentage-long"
-              value="15.00"
-              min="0.01"
-              step="0.01"
-              class="volume-input"
-            />
-            %
-          </label>
-          <button id="btn-buy-stop-long">
-            <span class="buy">B</span> Stop
-          </button>
-          <button id="btn-cancel-buy-stop-long">❌</button>
-          <button id="btn-sell-stop-long">
-            <span class="sell">S</span> Stop
-          </button>
-          <button id="btn-cancel-sell-stop-long">❌</button>
-          <!-- Late stops -->
-          <button id="btn-late-buy-stop-long">
-            <span class="buy">B</span> Late
-          </button>
-          <button id="btn-late-sell-stop-long">
-            <span class="sell">S</span> Late
-          </button>
-
-          <button id="btn-delete-stop-losses-long">❌ SL</button>
-          <div class="spacer"></div>
-          <button id="btn-market-buy-long">
-            <span class="buy">B</span> Market
-          </button>
-          <button id="btn-market-sell-long">
-            <span class="sell">S</span> Market
-          </button>
-        </div>
-
-        <div id="chart-long" class="chart-container"></div>
+  <div id="split-container">
+    <!-- LONG SIDE (Left/Top) -->
+    <div id="panel-long" class="instrument-panel">
+      <div class="panel-header">
+        <h3 class="buy">LONG <span id="label-long"></span></h3>
+        <span id="chart-ohlc-info-long"></span>
       </div>
 
-      <!-- SHORT SIDE (Right/Bottom) -->
-      <div id="panel-short" class="instrument-panel">
-        <div class="panel-header">
-          <h3 class="sell">SHORT <span id="label-short"></span></h3>
-          <span id="chart-ohlc-info-short"></span>
-        </div>
+      <div class="trading-controls" data-side="long">
+        <label>
+          💰
+          <input type="number" id="order-percentage-long" value="15.00" min="0.01" step="0.01" class="volume-input" />
+          %
+        </label>
+        <button id="btn-buy-stop-long">
+          <span class="buy">B</span> Stop
+        </button>
+        <button id="btn-cancel-buy-stop-long">❌</button>
+        <button id="btn-sell-stop-long">
+          <span class="sell">S</span> Stop
+        </button>
+        <button id="btn-cancel-sell-stop-long">❌</button>
+        <!-- Late stops -->
+        <button id="btn-late-buy-stop-long">
+          <span class="buy">B</span> Late
+        </button>
+        <button id="btn-late-sell-stop-long">
+          <span class="sell">S</span> Late
+        </button>
 
-        <div class="trading-controls" data-side="short">
-          <label>
-            💰
-            <input
-              type="number"
-              id="order-percentage-short"
-              value="15.00"
-              min="0.01"
-              step="0.01"
-              class="volume-input"
-            />
-            %
-          </label>
-          <button id="btn-buy-stop-short">
-            <span class="buy">B</span> Stop
-          </button>
-          <button id="btn-cancel-buy-stop-short">❌</button>
-          <button id="btn-sell-stop-short">
-            <span class="sell">S</span> Stop
-          </button>
-          <button id="btn-cancel-sell-stop-short">❌</button>
-          <!-- Late stops -->
-          <button id="btn-late-buy-stop-short">
-            <span class="buy">B</span> Late
-          </button>
-          <button id="btn-late-sell-stop-short">
-            <span class="sell">S</span> Late
-          </button>
-
-          <button id="btn-delete-stop-losses-short">❌ SL</button>
-          <div class="spacer"></div>
-          <button id="btn-market-buy-short">
-            <span class="buy">B</span> Market
-          </button>
-          <button id="btn-market-sell-short">
-            <span class="sell">S</span> Market
-          </button>
-        </div>
-
-        <div id="chart-short" class="chart-container"></div>
+        <button id="btn-delete-stop-losses-long">❌ SL</button>
+        <div class="spacer"></div>
+        <button id="btn-market-buy-long">
+          <span class="buy">B</span> Market
+        </button>
+        <button id="btn-market-sell-long">
+          <span class="sell">S</span> Market
+        </button>
       </div>
+
+      <div id="chart-long" class="chart-container"></div>
     </div>
 
-    <!-- Global Status/Info -->
-    <div id="market-timer">
-      <span id="status">Disconnected</span>
-    </div>
-    <div id="trade-status-container">
-      <span id="trade-info">...</span>
-    </div>
+    <!-- SHORT SIDE (Right/Bottom) -->
+    <div id="panel-short" class="instrument-panel">
+      <div class="panel-header">
+        <h3 class="sell">SHORT <span id="label-short"></span></h3>
+        <span id="chart-ohlc-info-short"></span>
+      </div>
 
-    <script src="/static/chart.js"></script>
-    <script src="/static/trading.js"></script>
-  </body>
+      <div class="trading-controls" data-side="short">
+        <label>
+          💰
+          <input type="number" id="order-percentage-short" value="15.00" min="0.01" step="0.01" class="volume-input" />
+          %
+        </label>
+        <button id="btn-buy-stop-short">
+          <span class="buy">B</span> Stop
+        </button>
+        <button id="btn-cancel-buy-stop-short">❌</button>
+        <button id="btn-sell-stop-short">
+          <span class="sell">S</span> Stop
+        </button>
+        <button id="btn-cancel-sell-stop-short">❌</button>
+        <!-- Late stops -->
+        <button id="btn-late-buy-stop-short">
+          <span class="buy">B</span> Late
+        </button>
+        <button id="btn-late-sell-stop-short">
+          <span class="sell">S</span> Late
+        </button>
+
+        <button id="btn-delete-stop-losses-short">❌ SL</button>
+        <div class="spacer"></div>
+        <button id="btn-market-buy-short">
+          <span class="buy">B</span> Market
+        </button>
+        <button id="btn-market-sell-short">
+          <span class="sell">S</span> Market
+        </button>
+      </div>
+
+      <div id="chart-short" class="chart-container"></div>
+    </div>
+  </div>
+
+  <!-- Global Status/Info -->
+  <div id="market-timer">
+    <span id="status">Disconnected</span>
+  </div>
+  <div id="trade-status-container">
+    <span id="trade-info">...</span>
+  </div>
+
+  <script src="/static/chart_core.js"></script>
+  <script src="/static/chart.js"></script>
+  <script src="/static/trading.js"></script>
+</body>
+
 </html>

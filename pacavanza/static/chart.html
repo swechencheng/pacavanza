@@ -1,136 +1,181 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PACavanza Active Future Chart</title>
-    <style>
-      html,
-      body {
-        height: 100%;
-        margin: 0;
-        padding: 0;
-        background: #000000;
-        color: #ddd;
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto,
-          "Helvetica Neue", Arial;
-      }
 
-      .buy {
-        color: #4caf50;
-        font-weight: 600;
-      }
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PACavanza Future Chart</title>
+  <style>
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000000;
+      color: #ddd;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial;
+    }
 
-      .sell {
-        color: #f44336;
-        font-weight: 600;
-      }
+    .buy {
+      color: #4caf50;
+      font-weight: 600;
+    }
 
-      #split-container {
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        height: 100vh;
-        padding: 10px;
-        box-sizing: border-box;
-      }
+    .sell {
+      color: #f44336;
+      font-weight: 600;
+    }
 
-      .instrument-panel {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid #333;
-        border-radius: 4px;
-        background: #0f1014;
-        min-height: 0;
-      }
+    #split-container {
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      width: 100%;
+      height: calc(100vh - 0px);
+      padding: 0 10px;
+      box-sizing: border-box;
+    }
 
-      .panel-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 4px 8px;
-        background: #1a243d;
-        border-bottom: 1px solid #333;
-      }
+    .instrument-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: #0f1014;
+      min-width: 0;
+    }
 
-      .panel-header h3 {
-        margin: 0;
-        font-size: 14px;
-      }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #1a243d;
+      border-bottom: 1px solid #333;
+    }
 
-      .chart-container {
-        flex: 1;
-        position: relative;
-        width: 100%;
-      }
+    .panel-header h3 {
+      margin: 0;
+      font-size: 14px;
+    }
 
-      #market-timer {
-        position: fixed;
-        top: 15px;
-        right: 15px;
-        z-index: 1000;
-        background: rgba(0, 0, 0, 0.6);
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 14px;
-        color: #ddd;
-        border: 1px solid #333;
-        pointer-events: none;
-      }
+    .chart-container {
+      flex: 1;
+      position: relative;
+      width: 100%;
+    }
 
-      #status {
-        color: #ff9900;
-        font-weight: bold;
-      }
-      
-      .nav-links {
-        position: fixed;
-        bottom: 15px;
-        right: 15px;
-        z-index: 1000;
-        background: rgba(0, 0, 0, 0.6);
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 13px;
-        border: 1px solid #333;
-      }
-      
-      .nav-links a {
-        color: #6bebff;
-        text-decoration: none;
-      }
-      
-      .nav-links a:hover {
-        text-decoration: underline;
-      }
-    </style>
+    .trading-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #151b2e;
+      border-bottom: 1px solid #333;
+      align-items: center;
+    }
 
-    <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
-  </head>
-  <body>
-    <div id="split-container">
-      <div id="panel-future" class="instrument-panel">
-        <div class="panel-header">
-          <h3 style="color: #6bebff;">FUTURE <span id="label-future">Loading...</span></h3>
-          <span id="chart-ohlc-info-future"></span>
-        </div>
-        
-        <div id="chart-future" class="chart-container"></div>
+    .spacer {
+      flex: 1;
+    }
+
+    .volume-input {
+      width: 60px;
+      background: #0f172a;
+      border: 1px solid #333;
+      color: #ddd;
+      padding: 4px 6px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: monospace;
+      outline: none;
+      transition: border 0.2s, box-shadow 0.2s;
+    }
+
+    .volume-input:hover {
+      border-color: #444;
+    }
+
+    .volume-input:focus {
+      border-color: #4caf50;
+      box-shadow: 0 0 4px #4caf50;
+    }
+
+    button {
+      background: #2a3455;
+      border: 1px solid #444;
+      color: #ddd;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #3b476b;
+    }
+
+    /* Status timer — inline in panel header */
+    #status {
+      color: #ff9900;
+      font-weight: bold;
+      font-family: monospace;
+      font-size: 13px;
+      text-align: center;
+      flex: 1;
+      /* push OHLC info to the right */
+    }
+
+    .nav-links a {
+      color: #6bebff;
+      text-decoration: none;
+    }
+
+    .nav-links a:hover {
+      text-decoration: underline;
+    }
+  </style>
+
+  <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+
+<body>
+  <div id="split-container">
+    <div id="panel-future" class="instrument-panel">
+      <div class="panel-header">
+        <h3 style="color: #6bebff; margin:0; white-space:nowrap;">
+          <a href="/ava" style="color:#6bebff; text-decoration:none;" title="Go to Trading Minis"><span
+              id="label-future"></span></a>
+        </h3>
+        <span id="status">Disconnected</span>
+        <span id="chart-ohlc-info-future"></span>
       </div>
+      <div class="trading-controls" data-side="future">
+        <label>
+          💰
+          <input type="number" id="order-percentage-future" value="15.00" min="0.01" step="0.01" class="volume-input" />
+          %
+        </label>
+        <button id="btn-buy-stop-future"><span class="buy">B</span> Stop</button>
+        <button id="btn-cancel-buy-stop-future">❌</button>
+        <button id="btn-sell-stop-future"><span class="sell">S</span> Stop</button>
+        <button id="btn-cancel-sell-stop-future">❌</button>
+        <button id="btn-late-buy-stop-future"><span class="buy">B</span> Late</button>
+        <button id="btn-late-sell-stop-future"><span class="sell">S</span> Late</button>
+        <button id="btn-delete-stop-losses-future">❌ SL</button>
+        <div class="spacer"></div>
+        <button id="btn-market-buy-future"><span class="buy">B</span> Market</button>
+        <button id="btn-market-sell-future"><span class="sell">S</span> Market</button>
+      </div>
+      <div id="chart-future" class="chart-container"></div>
     </div>
+  </div>
 
-    <!-- Global Status/Info -->
-    <div id="market-timer">
-      <span id="status">Connecting...</span>
-    </div>
-    
-    <!-- Link to the old mini trading UI -->
-    <div class="nav-links">
-      <a href="/ava">Go to Trading Minis</a>
-    </div>
 
-    <script src="/static/future_chart.js"></script>
-  </body>
+  <script src="/static/chart_core.js"></script>
+  <script src="/static/future_chart.js"></script>
+</body>
+
 </html>
