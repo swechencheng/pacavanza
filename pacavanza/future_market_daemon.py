@@ -1,6 +1,7 @@
 import logging
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from .base_market_collector import BaseMarketCollector
 from .modules.instrument_data import INTERVAL_MAP
@@ -10,6 +11,7 @@ logging.getLogger("future_market_daemon").setLevel(logging.INFO)
 LOGGER = logging.getLogger("future_market_daemon")
 
 from .utils.utils import fetch_active_omxs30_future
+
 
 class FutureMarketCollector(BaseMarketCollector):
     """
@@ -114,8 +116,50 @@ class FutureMarketCollector(BaseMarketCollector):
         except Exception as e:
             self.logger.exception(f"[{instrument_id}] Exception in quote callback: {e}")
 
+    # ── Market hours helper ──────────────────────────────────────────
+
+    def _get_market_hours(self):
+        """Return (ZoneInfo, open_hour, open_minute, close_hour, close_minute) from instrument_list."""
+        for sid, info in self.instrument_list.items():
+            tz_name = info.get("timezone", "Europe/Stockholm")
+            market_open_str = info.get("market_open", "09:00")
+            market_close_str = info.get("market_close", "17:45")
+            break
+        else:
+            tz_name, market_open_str, market_close_str = (
+                "Europe/Stockholm",
+                "09:00",
+                "17:45",
+            )
+        zone = ZoneInfo(tz_name)
+        oh, om = (int(x) for x in market_open_str.split(":"))
+        ch, cm = (int(x) for x in market_close_str.split(":"))
+        return zone, oh, om, ch, cm
+
+    def _is_outside_market_hours(self, start_time: datetime) -> bool:
+        """Return True if start_time (UTC) falls before market open or at/after market close."""
+        zone, oh, om, ch, cm = self._get_market_hours()
+        local = start_time.astimezone(zone)
+        t = (local.hour, local.minute)
+        return t < (oh, om) or t >= (ch, cm)
+
+    # ── Disk loading with market-hours filter ─────────────────────────
+
     def load_all_ohlc_from_disk(self):
         super().load_all_ohlc_from_disk()
+        # Strip pre-market and post-market bars that may have been persisted
+        for sid, sd in self.instrument_data.items():
+            before = len(sd.completed_ohlc.get(sid, []))
+            sd.completed_ohlc[sid] = [
+                b
+                for b in sd.completed_ohlc.get(sid, [])
+                if not self._is_outside_market_hours(b["start_time"])
+            ]
+            after = len(sd.completed_ohlc.get(sid, []))
+            if before != after:
+                self.logger.info(
+                    f"[{sid}] Filtered {before - after} out-of-hours bars from disk data."
+                )
         self._sync_ibkr_history()
 
     def _sync_ibkr_history(self):
@@ -126,46 +170,57 @@ class FutureMarketCollector(BaseMarketCollector):
         except ImportError:
             self.logger.warning("ib_async or pandas not installed, skipping IBKR sync")
             return
-            
+
         for sid, sd in self.instrument_data.items():
             try:
                 ib = IB()
                 # 7497 is default for TWS paper trading. We use a random client ID to avoid conflicts.
-                ib.connect('127.0.0.1', 7497, clientId=999)
-                contract = ContFuture('OMXS30', 'OMS')
+                ib.connect("127.0.0.1", 7497, clientId=999)
+                contract = ContFuture("OMXS30", "OMS")
                 ib.qualifyContracts(contract)
-                
+
                 # Determine barSizeSetting based on interval_seconds
-                interval_map = {60: '1 min', 300: '5 mins', 900: '15 mins', 3600: '1 hour'}
-                bar_size = interval_map.get(self.interval_seconds, '5 mins')
-                
+                interval_map = {
+                    60: "1 min",
+                    300: "5 mins",
+                    900: "15 mins",
+                    3600: "1 hour",
+                }
+                bar_size = interval_map.get(self.interval_seconds, "5 mins")
+
                 bars = ib.reqHistoricalData(
                     contract,
-                    endDateTime='',
-                    durationStr='1 M',
+                    endDateTime="",
+                    durationStr="1 M",
                     barSizeSetting=bar_size,
-                    whatToShow='TRADES',
+                    whatToShow="TRADES",
                     useRTH=False,
-                    formatDate=2 # Return UTC timestamps
+                    formatDate=2,  # Return UTC timestamps
                 )
                 df = util.df(bars)
                 ib.disconnect()
-                
+
                 if df is None or df.empty:
                     self.logger.warning(f"[{sid}] No IBKR data for ContFuture OMXS30")
                     continue
 
                 new_bars = []
+                skipped_pre_market = 0
                 for idx, row in df.iterrows():
                     # idx is not the index here if we didn't set it, date is a column
-                    start_time = row['date']
+                    start_time = row["date"]
                     if start_time.tzinfo is None:
                         start_time = start_time.replace(tzinfo=timezone.utc)
                     else:
                         start_time = start_time.astimezone(timezone.utc)
-                    
+
+                    # Skip out-of-hours bars (pre-market or post-market)
+                    if self._is_outside_market_hours(start_time):
+                        skipped_pre_market += 1
+                        continue
+
                     end_time = start_time + timedelta(seconds=self.interval_seconds)
-                    
+
                     bar = {
                         "start_time": start_time,
                         "end_time": end_time,
@@ -173,28 +228,40 @@ class FutureMarketCollector(BaseMarketCollector):
                         "high": float(row["high"]),
                         "low": float(row["low"]),
                         "close": float(row["close"]),
-                        "volume": float(row["volume"])
+                        "volume": float(row["volume"]),
                     }
                     new_bars.append(bar)
-                
+                if skipped_pre_market:
+                    self.logger.info(
+                        f"[{sid}] Skipped {skipped_pre_market} out-of-hours bars from IBKR."
+                    )
+
                 with sd.lock:
                     local_bars = sd.completed_ohlc.get(sid, [])
                     merged_bars_dict = {b["start_time"]: b for b in local_bars}
-                    
+
                     for b in new_bars:
                         merged_bars_dict[b["start_time"]] = b
-                        
+
                     if new_bars:
                         last_ib_start = new_bars[-1]["start_time"]
                         for b in local_bars:
                             if b["start_time"] > last_ib_start:
                                 merged_bars_dict[b["start_time"]] = b
-                                
-                    sorted_bars = sorted(merged_bars_dict.values(), key=lambda x: x["start_time"])
-                    cutoff = datetime.now(timezone.utc) - timedelta(hours=sd.max_history_hours)
-                    sd.completed_ohlc[sid] = [b for b in sorted_bars if b["end_time"] >= cutoff]
-                    
-                self.logger.info(f"[{sid}] Synced {len(new_bars)} bars from IBKR ContFuture. Total bars: {len(sd.completed_ohlc[sid])}")
+
+                    sorted_bars = sorted(
+                        merged_bars_dict.values(), key=lambda x: x["start_time"]
+                    )
+                    cutoff = datetime.now(timezone.utc) - timedelta(
+                        hours=sd.max_history_hours
+                    )
+                    sd.completed_ohlc[sid] = [
+                        b for b in sorted_bars if b["end_time"] >= cutoff
+                    ]
+
+                self.logger.info(
+                    f"[{sid}] Synced {len(new_bars)} bars from IBKR ContFuture. Total bars: {len(sd.completed_ohlc[sid])}"
+                )
                 self.force_save_instrument(sid)
 
             except Exception as e:
@@ -224,7 +291,6 @@ def parse_args():
             i += 1
 
     return interval_str
-
 
 
 def main():
