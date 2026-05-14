@@ -226,8 +226,13 @@ def parse_args():
     return interval_str
 
 
-if __name__ == "__main__":
+
+def main():
     interval_str = parse_args()
     interval_seconds = INTERVAL_MAP[interval_str]
     collector = FutureMarketCollector(interval_seconds)
     collector.run()
+
+
+if __name__ == "__main__":
+    main()

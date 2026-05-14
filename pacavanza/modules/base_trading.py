@@ -15,9 +15,10 @@ from avanza.entities import (
 from avanza.constants import OrderType
 from pacavanza.utils.utils import find_key_by_orderbook_id
 
-SECRETS = json.load(open("./pacavanza/../secret.json"))
-AVANZA = Avanza(SECRETS)
-ACCOUNT_ID = SECRETS["accountId"]
+from pacavanza.modules.avanza_instance import get_avanza, get_account_id
+
+AVANZA = get_avanza()
+ACCOUNT_ID = get_account_id()
 PROFIT_LOSS_RATIO = 2
 
 logging.basicConfig(level=logging.INFO)
@@ -56,7 +57,10 @@ class BaseAvanzaTrading:
         self.instrument_list = instrument_list
         self.metadata = metadata
         self.logger = logger
-        self.loop = loop or asyncio.get_event_loop()
+        try:
+            self.loop = loop or asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = loop
         # per-instrument lock maps
         self._bars_locks_map: Dict[str, asyncio.Lock] = bars_locks_map or {}
         self._metadata_locks_map: Dict[str, asyncio.Lock] = metadata_locks_map or {}

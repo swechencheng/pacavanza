@@ -7,7 +7,7 @@ import threading
 from functools import partial
 from typing import Dict, Any
 from pacavanza.modules.avanza_sse_client import AvanzaSSEClient as SSEClient
-from pacavanza.modules.avanza_trading import AVANZA
+from pacavanza.modules.avanza_instance import get_avanza
 from pacavanza.utils.utils import flatten_instrument_list
 
 logging.basicConfig(level=logging.INFO)
@@ -420,7 +420,7 @@ class AvanzaTradingMonitor:
                 break
             try:
                 # create single Avanza instance (one login)
-                self._avanza = AVANZA
+                self._avanza = get_avanza()
                 LOGGER.info("Avanza login OK.")
 
                 # Create a single http session for this Avanza instance
@@ -641,6 +641,10 @@ class AvanzaTradingMonitor:
             )
 
 
-if __name__ == "__main__":
+def main():
     avanza_trading_monitor = AvanzaTradingMonitor()
     avanza_trading_monitor.run()
+
+
+if __name__ == "__main__":
+    main()

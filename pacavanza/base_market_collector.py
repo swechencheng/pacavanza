@@ -23,7 +23,7 @@ from typing import Optional
 
 import redis.asyncio as aioredis
 
-from avanza import Avanza
+from .modules.avanza_instance import get_avanza
 from .modules.avanza_sse_client import AvanzaSSEClient as SSEClient
 from .modules.instrument_data import InstrumentData
 from .utils.utils import save_json_atomic, flatten_instrument_list
@@ -52,7 +52,6 @@ class BaseMarketCollector:
     def __init__(
         self,
         interval_seconds,
-        secret_path="./pacavanza/../secret.json",
         instrument_list_path=None,
         instrument_datas: dict = None,
         instrument_list: dict = None,
@@ -64,12 +63,13 @@ class BaseMarketCollector:
         self.logger = logging.getLogger(self.logger_name)
 
         self.interval_seconds = interval_seconds
-        self.secret = json.load(open(secret_path))
 
         if instrument_list is not None:
             self.instrument_list = flatten_instrument_list(instrument_list)
         else:
-            instrument_list_path = instrument_list_path or self.default_instrument_list_path
+            instrument_list_path = (
+                instrument_list_path or self.default_instrument_list_path
+            )
             loaded_list = json.load(open(instrument_list_path))
             self.instrument_list = flatten_instrument_list(loaded_list)
         self.instrument_ids = list(self.instrument_list.keys())
@@ -155,12 +155,24 @@ class BaseMarketCollector:
             ch, cm = 23, 59
 
         local_open = datetime(
-            year=local_date.year, month=local_date.month, day=local_date.day,
-            hour=oh, minute=om, second=0, microsecond=0, tzinfo=zone,
+            year=local_date.year,
+            month=local_date.month,
+            day=local_date.day,
+            hour=oh,
+            minute=om,
+            second=0,
+            microsecond=0,
+            tzinfo=zone,
         )
         local_close = datetime(
-            year=local_date.year, month=local_date.month, day=local_date.day,
-            hour=ch, minute=cm, second=0, microsecond=0, tzinfo=zone,
+            year=local_date.year,
+            month=local_date.month,
+            day=local_date.day,
+            hour=ch,
+            minute=cm,
+            second=0,
+            microsecond=0,
+            tzinfo=zone,
         )
 
         if local_close <= local_open:
@@ -199,9 +211,7 @@ class BaseMarketCollector:
         try:
             with self.instrument_data[instrument_id].lock:
                 curr = copy.deepcopy(
-                    self.instrument_data[instrument_id].current_bars.get(
-                        instrument_id
-                    )
+                    self.instrument_data[instrument_id].current_bars.get(instrument_id)
                 )
                 latest_completed = (
                     copy.deepcopy(
@@ -256,10 +266,10 @@ class BaseMarketCollector:
 
                 if self._redis is not None:
                     try:
-                        await self._redis.publish(
-                            self.redis_channel, json.dumps(msg)
+                        await self._redis.publish(self.redis_channel, json.dumps(msg))
+                        self.logger.debug(
+                            f"[{instrument_id}] Published update to Redis"
                         )
-                        self.logger.debug(f"[{instrument_id}] Published update to Redis")
                     except Exception as e:
                         self.logger.error(
                             f"[{instrument_id}] Failed to publish to Redis: {e}"
@@ -280,9 +290,7 @@ class BaseMarketCollector:
                                 "start_time": latest_completed[
                                     "start_time"
                                 ].isoformat(),
-                                "end_time": latest_completed[
-                                    "end_time"
-                                ].isoformat(),
+                                "end_time": latest_completed["end_time"].isoformat(),
                                 "open": latest_completed["open"],
                                 "high": latest_completed["high"],
                                 "low": latest_completed["low"],
@@ -354,7 +362,9 @@ class BaseMarketCollector:
                         except Exception:
                             pass
                     except Exception as e:
-                        self.logger.error(f"[{sid}] Failed to snapshot current bar: {e}")
+                        self.logger.error(
+                            f"[{sid}] Failed to snapshot current bar: {e}"
+                        )
                 last_current_save = now_utc
 
             # save completed bars less frequently
@@ -373,7 +383,9 @@ class BaseMarketCollector:
                             data.append(bar)
                         data_file = f"ohlc_{sid}.json"
                         save_json_atomic(data_file, data)
-                        self.logger.debug(f"[{sid}] Saved {len(data)} bars to {data_file}")
+                        self.logger.debug(
+                            f"[{sid}] Saved {len(data)} bars to {data_file}"
+                        )
                     except Exception as e:
                         self.logger.error(f"[{sid}] Failed to save OHLC: {e}")
                 last_completed_save = now_utc
@@ -458,9 +470,7 @@ class BaseMarketCollector:
             try:
                 client = SSEClient(avanza, self.sse_base_url + product_id)
                 self._sse_clients[instrument_id] = client
-                client.add_listener(
-                    partial(self._sse_callback, instrument_id)
-                )
+                client.add_listener(partial(self._sse_callback, instrument_id))
                 self.logger.info(
                     f"[{instrument_id}] Starting SSE client for product {product_id}"
                 )
@@ -535,11 +545,13 @@ class BaseMarketCollector:
 
         while True:
             if self._shutting_down:
-                self.logger.info("real_market_loop: shutting down flag set — exiting loop.")
+                self.logger.info(
+                    "real_market_loop: shutting down flag set — exiting loop."
+                )
                 break
             avanza = None
             try:
-                avanza = Avanza(self.secret)
+                avanza = get_avanza()
                 self._avanza = avanza
                 self.logger.info("Avanza login OK.")
 
@@ -784,6 +796,10 @@ class BaseMarketCollector:
             try:
                 fut.result(timeout=timeout)
             except Exception as e:
-                self.logger.debug(f"stop(): shutdown coroutine finished/failed/timeout: {e}")
+                self.logger.debug(
+                    f"stop(): shutdown coroutine finished/failed/timeout: {e}"
+                )
         except Exception as e:
-            self.logger.error(f"stop(): failed to schedule shutdown on collector loop: {e}")
+            self.logger.error(
+                f"stop(): failed to schedule shutdown on collector loop: {e}"
+            )

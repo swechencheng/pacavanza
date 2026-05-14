@@ -1,11 +1,23 @@
 import time
-import subprocess
 import sys
 import os
 import signal
 import logging
+import importlib
+import multiprocessing as mp
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# Set start method to fork so AVANZA is shared
+try:
+    mp.set_start_method("fork")
+except RuntimeError:
+    pass
+
+# Initialize AVANZA once in the parent process!
+from pacavanza.modules.avanza_instance import get_avanza
+
+get_avanza()
 
 # Configure logging
 logging.basicConfig(
@@ -21,8 +33,15 @@ logger = logging.getLogger("controller")
 PROCESS_MAP = {}
 
 
-def get_python_executable():
-    return sys.executable
+def _run_module(module_name, log_prefix):
+    # Reset signal handlers to defaults in child — don't inherit parent's stop_all() handler
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    # Redirect output to log files
+    sys.stdout = open(f"/tmp/{log_prefix}.stdout.log", "a")
+    sys.stderr = open(f"/tmp/{log_prefix}.stderr.log", "a")
+    mod = importlib.import_module(module_name)
+    mod.main()
 
 
 def start_process(name, module_name, log_prefix):
@@ -32,28 +51,19 @@ def start_process(name, module_name, log_prefix):
     """
     # Check if already running
     if name in PROCESS_MAP:
-        if PROCESS_MAP[name].poll() is None:
+        if PROCESS_MAP[name].is_alive():
             return False  # Still running
         else:
             logger.warning(
-                f"{name} died (exit code {PROCESS_MAP[name].returncode}). Restarting..."
+                f"{name} died (exit code {PROCESS_MAP[name].exitcode}). Restarting..."
             )
-            # Cleanup dead process info
             del PROCESS_MAP[name]
 
     logger.info(f"Starting {name}...")
 
-    # Logs
-    stdout_log = open(f"/tmp/{log_prefix}.stdout.log", "a")
-    stderr_log = open(f"/tmp/{log_prefix}.stderr.log", "a")
-
-    # Run from the root directory of the repository (parent of the package)
-    cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    cmd = [get_python_executable(), "-m", module_name]
-
     try:
-        proc = subprocess.Popen(cmd, stdout=stdout_log, stderr=stderr_log, cwd=cwd)
+        proc = mp.Process(target=_run_module, args=(module_name, log_prefix), name=name)
+        proc.start()
         PROCESS_MAP[name] = proc
         logger.info(f"{name} started with PID {proc.pid}")
         return True
@@ -65,14 +75,14 @@ def start_process(name, module_name, log_prefix):
 def stop_process(name):
     proc = PROCESS_MAP.get(name)
     if proc:
-        if proc.poll() is None:
+        if proc.is_alive():
             logger.info(f"Stopping {name} (PID {proc.pid})...")
             proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+            proc.join(timeout=5)
+            if proc.is_alive():
                 logger.warning(f"{name} did not terminate, killing...")
                 proc.kill()
+                proc.join()
         PROCESS_MAP.pop(name, None)
 
 
