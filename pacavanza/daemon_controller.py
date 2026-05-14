@@ -5,6 +5,7 @@ import os
 import signal
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # Configure logging
 logging.basicConfig(
@@ -95,7 +96,7 @@ def main():
 
     while True:
         try:
-            now = datetime.now()
+            now = datetime.now(ZoneInfo("Europe/Stockholm"))
             # Operating hours: 08:00:00 to 23:00:00
             start_time_limit = now.replace(hour=8, minute=0, second=0, microsecond=0)
             stop_time_limit = now.replace(hour=23, minute=0, second=0, microsecond=0)
