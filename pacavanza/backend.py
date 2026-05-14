@@ -18,6 +18,7 @@ from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
 ROOT = Path(__file__).resolve().parent  # pacavanza/
 STATIC_DIR = ROOT / "static"
 STATIC_HTML = STATIC_DIR / "chart.html"
+STATIC_AVA_HTML = STATIC_DIR / "ava/chart.html"
 
 from .indicators.indicators import (
     incremental_ema_update,
@@ -483,6 +484,15 @@ def create_app(
                 return HTMLResponse(f.read())
         except Exception:
             return JSONResponse({"status": "ok", "note": "Static file not available"})
+
+    @app.get("/ava")
+    async def ava_index():
+        try:
+            # Serve the mini trading UI (ava)
+            with open(str(STATIC_AVA_HTML), "r", encoding="utf-8") as f:
+                return HTMLResponse(f.read())
+        except Exception:
+            return JSONResponse({"status": "error", "note": "Ava static file not available"})
 
     # --------------------
     # Trading endpoints (used by trading.js)
