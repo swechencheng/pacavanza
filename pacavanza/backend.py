@@ -93,19 +93,32 @@ def create_app(
     # ema_state[instrument][length] = last EMA value
     ema_state: Dict[str, Dict[int, float]] = defaultdict(dict)
 
-    # NEW: load ava_mini_future_list.json and dynamically fetch active future into memory
+    # ── Ava mini futures (used by /ava chart) ────────────────────────────────
+    # raw_ava_mini_list: hierarchical JSON served to /ava frontend for asset selector
+    # instrument_list: flattened dict used internally for trading/history lookups
+    raw_ava_mini_list: Dict[str, Any] = {}
     instrument_list: Dict[str, Any] = {}
     try:
         with open(ROOT / "ava_mini_future_list.json", "r", encoding="utf-8") as f:
             raw_list = json.load(f)
+            raw_ava_mini_list.update(raw_list)
             instrument_list.update(flatten_instrument_list(raw_list))
     except Exception as e:
         LOGGER.warning("Could not load ava_mini_future_list.json: %s", e)
-        
+
+    # ── Active OMXS30 future (used by / chart only) ───────────────────────────
+    # Completely independent of ava_mini_future_list.json.
+    # active_future_info: { key, name, orderbookId, timezone, market_open, market_close }
+    active_future_info: Dict[str, Any] = {}
     try:
-        active_future = fetch_active_omxs30_future()
-        instrument_list.update(flatten_instrument_list(active_future))
-        LOGGER.info(f"Loaded active future: {list(flatten_instrument_list(active_future).keys())}")
+        raw_active = fetch_active_omxs30_future()
+        flat_active = flatten_instrument_list(raw_active)
+        if flat_active:
+            key, meta = next(iter(flat_active.items()))
+            active_future_info = {"key": key, **meta}
+            # also register in instrument_list so /history and trading endpoints can serve it
+            instrument_list.update(flat_active)
+            LOGGER.info(f"Loaded active future: {key} ({meta.get('name', '')}")
     except Exception as e:
         LOGGER.warning("Could not fetch active future: %s", e)
 
@@ -406,13 +419,23 @@ def create_app(
     # MOUNT STATIC FILES - ADD THIS LINE
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-    # Expose ava_mini_future_list.json
+    # Expose ava_mini_future_list.json — return the hierarchical JSON so the
+    # frontend asset selector shows OMXS30, DAX, NDX … (not the flat instrument keys)
     @app.get("/ava_mini_future_list.json")
     async def get_future_list():
-        try:
-            return instrument_list
-        except Exception:
+        if not raw_ava_mini_list:
             raise HTTPException(status_code=404, detail="File not found")
+        return raw_ava_mini_list
+
+    # Returns the single active OMXS30 future — completely independent of ava_mini_future_list.
+    # Response: { "key": "omxs30 jun-2025", "name": "OMXS30 JUN-2025",
+    #             "orderbookId": "...", "timezone": "...",
+    #             "market_open": "09:00", "market_close": "17:45" }
+    @app.get("/active_future")
+    async def get_active_future():
+        if not active_future_info:
+            raise HTTPException(status_code=404, detail="No active future loaded")
+        return active_future_info
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools
     @app.get("/.well-known/appspecific/com.chrome.devtools.json")
@@ -492,7 +515,9 @@ def create_app(
             with open(str(STATIC_AVA_HTML), "r", encoding="utf-8") as f:
                 return HTMLResponse(f.read())
         except Exception:
-            return JSONResponse({"status": "error", "note": "Ava static file not available"})
+            return JSONResponse(
+                {"status": "error", "note": "Ava static file not available"}
+            )
 
     # --------------------
     # Trading endpoints (used by trading.js)
@@ -514,7 +539,8 @@ def create_app(
         # instrumentId should be inside ava_mini_future_list.json.
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             order = await trading.place_market_buy(instrument_id, percentage)
@@ -534,7 +560,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             order = await trading.place_market_sell(instrument_id)
@@ -563,7 +590,8 @@ def create_app(
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.schedule_buy_stop(instrument_id, percentage)
@@ -592,7 +620,8 @@ def create_app(
             )
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.late_buy_stop(instrument_id, percentage)
@@ -614,7 +643,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.schedule_sell_stop(instrument_id)
@@ -636,7 +666,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.late_sell_stop(instrument_id)
@@ -658,7 +689,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.cancel_buy_stop(instrument_id)
@@ -677,7 +709,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             res = await trading.cancel_sell_stop(instrument_id)
@@ -778,7 +811,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="instrumentId required")
         if instrument_id not in instrument_list:
             raise HTTPException(
-                status_code=400, detail="instrumentId not found in ava_mini_future_list.json"
+                status_code=400,
+                detail="instrumentId not found in ava_mini_future_list.json",
             )
         try:
             trading.delete_stop_losses(instrument_id)
@@ -803,7 +837,8 @@ def create_app(
 def main():
     # run as: python -m pacavanza.backend.main
     app = create_app(
-        redis_url="redis://localhost:6379/0", redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"]
+        redis_url="redis://localhost:6379/0",
+        redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     )
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
 

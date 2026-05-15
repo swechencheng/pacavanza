@@ -14,32 +14,32 @@ class FutureChartApp extends PACChartApp {
 
   // ── Initialization ────────────────────────────────────────────────
   async initialize() {
-    // Backend serves a flat dict: { sid: { name, orderbookId, timezone, market_open, market_close } }
-    const res = await fetch("/ava_mini_future_list.json");
-    this.instrumentMapFlat = await res.json();
+    // Backend is the single source of truth for the active OMXS30 future.
+    // /active_future returns: { key, name, orderbookId, timezone, market_open, market_close }
+    const res = await fetch("/active_future");
+    if (!res.ok) throw new Error("active_future fetch failed: " + res.status);
+    const info = await res.json();
 
-    // Find OMXS30 future: name starts with "OMXS30" and not a mini
-    let futureKey = null;
-    for (const k in this.instrumentMapFlat) {
-      const name = (this.instrumentMapFlat[k].name || "").toUpperCase();
-      if (name.startsWith("OMXS30") && !name.includes("MINI")) { futureKey = k; break; }
-    }
-    // Fallback: any key without "mini"
+    const futureKey = info.key;
     if (!futureKey) {
-      for (const k in this.instrumentMapFlat) {
-        if (!k.toLowerCase().includes("mini")) { futureKey = k; break; }
-      }
-    }
-
-    if (!futureKey) {
-      this._error("No active future found in instrument list!");
+      this._error("No active future returned from backend!");
       document.getElementById("status").textContent = "No future found";
       return;
     }
 
+    // Build a minimal flat map so chart_core's setSessionConfig / loadHistoryForInstrument work
+    this.instrumentMapFlat = {
+      [futureKey]: {
+        name: info.name,
+        orderbookId: info.orderbookId,
+        timezone: info.timezone,
+        market_open: info.market_open,
+        market_close: info.market_close,
+      },
+    };
+
     window.PAC_TRADING_STATE.futureInstrument = futureKey;
-    document.getElementById("label-future").textContent =
-      this.instrumentMapFlat[futureKey].name || futureKey;
+    document.getElementById("label-future").textContent = info.name || futureKey;
 
     await this.loadHistoryForInstrument(this.chartFuture, futureKey, this.instrumentMapFlat);
     this.ensureMarketCountdown(this.chartFuture.groupingState);
