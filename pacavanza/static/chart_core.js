@@ -225,7 +225,7 @@ class PACChartApp {
     const id = `auto-ray-${key}`;
     const anchors = [{ time, price }];
     const style = { lineColor: color, lineWidth: 1, lineStyle };
-    const opts = {};
+    const opts = { showPrice: false };
 
     const drawing = cm.toolRegistry.createDrawing('horizontal-ray', id, anchors, style, opts);
     if (drawing) {
