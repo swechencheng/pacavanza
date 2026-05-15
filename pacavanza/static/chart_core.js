@@ -34,24 +34,24 @@ class PACChartApp {
       wickDownColor: "#f44336", wickUpColor: "#4caf50",
     });
     const ema20Series = chart.addSeries(LightweightCharts.LineSeries, { color: "#6bebffff", lineWidth: 1 });
-    const yesterdayHighSeries = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#8929ffff", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: "Y-H",
-    });
-    const yesterdayLowSeries = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#8929ffff", lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: "Y-L",
-    });
-    const todayHighSeries = chart.addSeries(LightweightCharts.LineSeries, { color: "#c04d00ff", lineWidth: 1, title: "T-H" });
-    const todayLowSeries  = chart.addSeries(LightweightCharts.LineSeries, { color: "#c04d00ff", lineWidth: 1, title: "T-L" });
-
     const state = {
       chart,
-      series: { candle: candleSeries, ema20: ema20Series, yh: yesterdayHighSeries, yl: yesterdayLowSeries, th: todayHighSeries, tl: todayLowSeries },
+      series: { candle: candleSeries, ema20: ema20Series },
+      drawingManager: null,
+      toolRegistry: null,
+      autoRays: { yh: null, yl: null, th: null, tl: null },
       data: new Map(),
       ema20Data: new Map(),
       lastBarTime: null,
       lastEMAValue: null,
       lastEMATime: null,
-      highLowState: { currentDay: null, currentHigh: -Infinity, currentLow: Infinity, yesterdayHigh: null, yesterdayLow: null },
+      highLowState: {
+        currentDay: null,
+        currentHigh: -Infinity, currentHighTime: null,
+        currentLow: Infinity, currentLowTime: null,
+        yesterdayHigh: null, yesterdayHighTime: null,
+        yesterdayLow: null, yesterdayLowTime: null
+      },
       groupingState: { sessionTZ: null, sessionOpenMinutes: null, sessionCloseMinutes: null, count: 0, bar_group_count: 0, currentDay: null },
       barGroupMap: new Map(),
       currentInstrument: null,
@@ -62,8 +62,8 @@ class PACChartApp {
       const tt = state.toolTipElement;
       if (!tt) return;
       const empty = [`<span style="color:#ddd">O:-</span>`, `<span style="color:#4caf50">H:-</span>`,
-                     `<span style="color:#f44336">L:-</span>`, `<span style="color:#ddd">C:-</span>`,
-                     `<span style="color:#ff9900">Bar -</span>`].join(" ");
+        `<span style="color:#f44336">L:-</span>`, `<span style="color:#ddd">C:-</span>`,
+        `<span style="color:#ff9900">Bar -</span>`].join(" ");
       if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) { tt.innerHTML = empty; return; }
       const cData = param.seriesData.get(candleSeries);
       if (!cData || cData.open === undefined) { tt.innerHTML = empty; return; }
@@ -81,6 +81,12 @@ class PACChartApp {
     new ResizeObserver(() => {
       if (container) chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
     }).observe(container);
+
+    if (window.LightweightChartsDrawing) {
+      state.drawingManager = new window.LightweightChartsDrawing.DrawingManager();
+      state.drawingManager.attach(chart, candleSeries, container);
+      state.toolRegistry = window.LightweightChartsDrawing.getToolRegistry();
+    }
 
     return state;
   }
@@ -206,48 +212,130 @@ class PACChartApp {
     cm.series.ema20.update({ time: newTime, value: newEMA });
   }
 
-  // ── High/Low ──────────────────────────────────────────────────────
+  // ── High/Low (Drawing Rays) ──────────────────────────────────────
+  _setRay(cm, key, time, price, color, lineStyle) {
+    if (!cm.drawingManager || !cm.toolRegistry) return;
+
+    if (cm.autoRays[key]) {
+      cm.drawingManager.removeDrawing(cm.autoRays[key]);
+      cm.autoRays[key] = null;
+    }
+    if (price === null || price === -Infinity || price === Infinity || time === null) return;
+
+    const id = `auto-ray-${key}`;
+    const anchors = [{ time, price }];
+    const style = { lineColor: color, lineWidth: 1, lineStyle };
+    const opts = {};
+
+    const drawing = cm.toolRegistry.createDrawing('horizontal-ray', id, anchors, style, opts);
+    if (drawing) {
+      // Patch renderer to suppress the anchor dot and direction arrow.
+      // The library renderer calls ctx.fill() twice after the line:
+      //   1) filled circle at anchor (arc + fill)
+      //   2) filled arrowhead triangle (moveTo/lineTo + closePath + fill)
+      // We intercept by wrapping paneViews so our custom renderer skips those.
+      const origPaneViews = drawing.paneViews.bind(drawing);
+      drawing.paneViews = () => {
+        const views = origPaneViews();
+        return views.map(v => {
+          const origRenderer = v.renderer.bind(v);
+          return {
+            zOrder: v.zOrder.bind(v),
+            renderer: () => {
+              const r = origRenderer();
+              if (!r || !r.draw) return r;
+              const origDraw = r.draw.bind(r);
+              return {
+                draw: (target) => {
+                  target.useBitmapCoordinateSpace((scope) => {
+                    const ctx = scope.context;
+                    // Suppress all fill() calls (dot + arrow) while keeping stroke (the line)
+                    const realFill = ctx.fill.bind(ctx);
+                    ctx.fill = () => { }; // no-op: skip dot and arrowhead fills
+                    // Call original drawImpl via the scope
+                    if (r.drawImpl) {
+                      r.drawImpl(scope);
+                    }
+                    ctx.fill = realFill;
+                  });
+                }
+              };
+            }
+          };
+        });
+      };
+      cm.drawingManager.addDrawing(drawing);
+      cm.autoRays[key] = id;
+    }
+  }
+
+  _syncHighLowRays(cm) {
+    const hl = cm.highLowState;
+    // Yesterday high/low — dotted, purple
+    this._setRay(cm, 'yh', hl.yesterdayHighTime, hl.yesterdayHigh, '#8929ffff', LightweightCharts.LineStyle.Dotted);
+    this._setRay(cm, 'yl', hl.yesterdayLowTime, hl.yesterdayLow, '#8929ffff', LightweightCharts.LineStyle.Dotted);
+    // Today high/low — dashed, orange
+    this._setRay(cm, 'th', hl.currentHighTime, hl.currentHigh, '#c04d00ff', LightweightCharts.LineStyle.Dashed);
+    this._setRay(cm, 'tl', hl.currentLowTime, hl.currentLow, '#c04d00ff', LightweightCharts.LineStyle.Dashed);
+  }
+
   calculateHistoryHighLow(cm, bars) {
     if (!bars || bars.length === 0 || !cm.groupingState.sessionTZ) return;
-    const yhData = [], ylData = [], thData = [], tlData = [];
     let scanDay = null, scanHigh = -Infinity, scanLow = Infinity, prevH = null, prevL = null;
+    let scanHighTime = null, scanLowTime = null, prevHTime = null, prevLTime = null;
     for (const bar of bars) {
       const { ymd } = this.getLocalParts(bar.time, cm.groupingState.sessionTZ);
       if (ymd !== scanDay) {
-        if (scanDay !== null) { prevH = scanHigh; prevL = scanLow; }
-        scanDay = ymd; scanHigh = -Infinity; scanLow = Infinity;
+        if (scanDay !== null) {
+          prevH = scanHigh; prevL = scanLow;
+          prevHTime = scanHighTime; prevLTime = scanLowTime;
+        }
+        scanDay = ymd;
+        scanHigh = -Infinity; scanLow = Infinity;
+        scanHighTime = null; scanLowTime = null;
       }
-      if (bar.high > scanHigh) scanHigh = bar.high;
-      if (bar.low  < scanLow)  scanLow  = bar.low;
-      if (prevH !== null) { yhData.push({ time: bar.time, value: prevH }); ylData.push({ time: bar.time, value: prevL }); }
-      thData.push({ time: bar.time, value: scanHigh });
-      tlData.push({ time: bar.time, value: scanLow });
+      if (bar.high > scanHigh) { scanHigh = bar.high; scanHighTime = bar.time; }
+      if (bar.low < scanLow) { scanLow = bar.low; scanLowTime = bar.time; }
     }
-    cm.series.yh.setData(yhData); cm.series.yl.setData(ylData);
-    cm.series.th.setData(thData); cm.series.tl.setData(tlData);
-    cm.highLowState = { currentDay: scanDay, currentHigh: scanHigh, currentLow: scanLow, yesterdayHigh: prevH, yesterdayLow: prevL };
+    cm.highLowState = {
+      currentDay: scanDay,
+      currentHigh: scanHigh, currentHighTime: scanHighTime,
+      currentLow: scanLow, currentLowTime: scanLowTime,
+      yesterdayHigh: prevH, yesterdayHighTime: prevHTime,
+      yesterdayLow: prevL, yesterdayLowTime: prevLTime
+    };
+    this._syncHighLowRays(cm);
   }
 
   updateHighLowIncremental(cm, bar) {
     if (!cm.groupingState.sessionTZ) return;
     const { ymd } = this.getLocalParts(bar.time, cm.groupingState.sessionTZ);
+    let changed = false;
     if (ymd !== cm.highLowState.currentDay) {
       if (cm.highLowState.currentDay !== null) {
         cm.highLowState.yesterdayHigh = cm.highLowState.currentHigh;
-        cm.highLowState.yesterdayLow  = cm.highLowState.currentLow;
+        cm.highLowState.yesterdayHighTime = cm.highLowState.currentHighTime;
+        cm.highLowState.yesterdayLow = cm.highLowState.currentLow;
+        cm.highLowState.yesterdayLowTime = cm.highLowState.currentLowTime;
       }
       cm.highLowState.currentDay = ymd;
       cm.highLowState.currentHigh = -Infinity;
-      cm.highLowState.currentLow  = Infinity;
+      cm.highLowState.currentHighTime = null;
+      cm.highLowState.currentLow = Infinity;
+      cm.highLowState.currentLowTime = null;
+      changed = true;
     }
-    if (bar.high > cm.highLowState.currentHigh) cm.highLowState.currentHigh = bar.high;
-    if (bar.low  < cm.highLowState.currentLow)  cm.highLowState.currentLow  = bar.low;
-    if (cm.highLowState.yesterdayHigh !== null) {
-      cm.series.yh.update({ time: bar.time, value: cm.highLowState.yesterdayHigh });
-      cm.series.yl.update({ time: bar.time, value: cm.highLowState.yesterdayLow });
+    if (bar.high > cm.highLowState.currentHigh) {
+      cm.highLowState.currentHigh = bar.high;
+      cm.highLowState.currentHighTime = bar.time;
+      changed = true;
     }
-    cm.series.th.update({ time: bar.time, value: cm.highLowState.currentHigh });
-    cm.series.tl.update({ time: bar.time, value: cm.highLowState.currentLow });
+    if (bar.low < cm.highLowState.currentLow) {
+      cm.highLowState.currentLow = bar.low;
+      cm.highLowState.currentLowTime = bar.time;
+      changed = true;
+    }
+    if (changed) this._syncHighLowRays(cm);
   }
 
   // ── Grouping ──────────────────────────────────────────────────────
@@ -280,9 +368,21 @@ class PACChartApp {
     cm.data.clear(); cm.lastBarTime = null;
     cm.ema20Data.clear(); cm.lastEMAValue = null; cm.lastEMATime = null;
     cm.series.candle.setData([]); cm.series.ema20.setData([]);
-    cm.series.yh.setData([]); cm.series.yl.setData([]);
-    cm.series.th.setData([]); cm.series.tl.setData([]);
-    cm.highLowState = { currentDay: null, currentHigh: -Infinity, currentLow: Infinity, yesterdayHigh: null, yesterdayLow: null };
+    if (cm.drawingManager) {
+      for (const key of ['yh', 'yl', 'th', 'tl']) {
+        if (cm.autoRays[key]) {
+          cm.drawingManager.removeDrawing(cm.autoRays[key]);
+          cm.autoRays[key] = null;
+        }
+      }
+    }
+    cm.highLowState = {
+      currentDay: null,
+      currentHigh: -Infinity, currentHighTime: null,
+      currentLow: Infinity, currentLowTime: null,
+      yesterdayHigh: null, yesterdayHighTime: null,
+      yesterdayLow: null, yesterdayLowTime: null
+    };
     cm.barGroupMap.clear();
     cm.groupingState.count = cm.groupingState.bar_group_count = 0;
     cm.groupingState.currentDay = null;
@@ -292,7 +392,7 @@ class PACChartApp {
     const conf = map[instrumentId];
     if (!conf) { cm.groupingState.sessionTZ = null; return; }
     cm.groupingState.sessionTZ = conf.timezone || null;
-    cm.groupingState.sessionOpenMinutes  = this.hhmmToMinutes(conf.market_open);
+    cm.groupingState.sessionOpenMinutes = this.hhmmToMinutes(conf.market_open);
     cm.groupingState.sessionCloseMinutes = this.hhmmToMinutes(conf.market_close);
   }
 
@@ -330,8 +430,8 @@ class PACChartApp {
     for (const assetKey in data) {
       const assetData = data[assetKey];
       const common = {};
-      if (assetData.timezone)     common.timezone     = assetData.timezone;
-      if (assetData.market_open)  common.market_open  = assetData.market_open;
+      if (assetData.timezone) common.timezone = assetData.timezone;
+      if (assetData.market_open) common.market_open = assetData.market_open;
       if (assetData.market_close) common.market_close = assetData.market_close;
       for (const childKey in assetData) {
         const val = assetData[childKey];
@@ -382,7 +482,7 @@ class PACChartApp {
   // ── WebSocket ─────────────────────────────────────────────────────
   setupWS() {
     const ws = new WebSocket(`ws://${window.location.host}/ws`);
-    ws.onopen  = () => { this._log("WS connected"); this.ensureMarketCountdown(this.getStatusChartManager().groupingState); };
+    ws.onopen = () => { this._log("WS connected"); this.ensureMarketCountdown(this.getStatusChartManager().groupingState); };
     ws.onclose = () => setTimeout(() => this.setupWS(), 1000);
     ws.onmessage = (evt) => {
       try { this.handleWsMessage(JSON.parse(evt.data)); }
@@ -392,8 +492,8 @@ class PACChartApp {
 
   // ── Abstract (must override) ──────────────────────────────────────
   getStatusChartManager() { throw new Error("getStatusChartManager() not implemented"); }
-  async initialize()       { throw new Error("initialize() not implemented"); }
-  handleWsMessage(msg)     { throw new Error("handleWsMessage() not implemented"); }
+  async initialize() { throw new Error("initialize() not implemented"); }
+  handleWsMessage(msg) { throw new Error("handleWsMessage() not implemented"); }
 
   // ── Entry Point ───────────────────────────────────────────────────
   async run() {

@@ -40,9 +40,14 @@ class DrawingToolbar {
     this._container = containerEl;
     const LCD = window.LightweightChartsDrawing;
 
-    this._manager = new LCD.DrawingManager();
-    this._manager.attach(this._chart, this._series, containerEl);
-    this._registry = LCD.getToolRegistry();
+    if (this._cm.drawingManager && this._cm.toolRegistry) {
+      this._manager = this._cm.drawingManager;
+      this._registry = this._cm.toolRegistry;
+    } else {
+      this._manager = new LCD.DrawingManager();
+      this._manager.attach(this._chart, this._series, containerEl);
+      this._registry = LCD.getToolRegistry();
+    }
 
     this._buildToolbar();
     this._wireChartInteraction();
