@@ -136,9 +136,73 @@
     .nav-links a:hover {
       text-decoration: underline;
     }
+
+    /* ── Drawing Toolbar ──────────────────────────────────── */
+    .pac-drawing-toolbar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      padding: 4px 2px;
+      background: #1e222d;
+      border-right: 1px solid #2a2e39;
+      border-bottom-right-radius: 6px;
+      box-shadow: 2px 0 8px rgba(0, 0, 0, .45);
+      max-height: 100%;
+      overflow-y: auto;
+      scrollbar-width: none;
+    }
+
+    .pac-drawing-toolbar::-webkit-scrollbar {
+      width: 0;
+    }
+
+    .pac-dt-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 28px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #787b86;
+      cursor: pointer;
+      transition: background .15s, color .15s;
+      flex-shrink: 0;
+    }
+
+    .pac-dt-btn:hover {
+      background: #2a2e39;
+      color: #d1d4dc;
+    }
+
+    .pac-dt-btn.active {
+      background: #2962ff;
+      color: #fff;
+    }
+
+    .pac-dt-btn-danger:hover {
+      background: #5b1a1a;
+      color: #f44336;
+    }
+
+    .pac-dt-sep {
+      width: 20px;
+      height: 1px;
+      background: #363a45;
+      margin: 3px 0;
+      flex-shrink: 0;
+    }
   </style>
 
   <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts-drawing@0.1.1/dist/lightweight-charts-drawing.umd.js"></script>
 </head>
 
 <body>
@@ -175,6 +239,7 @@
 
 
   <script src="/static/chart_core.js"></script>
+  <script src="/static/drawing_tools.js"></script>
   <script src="/static/future_chart.js"></script>
 </body>
 

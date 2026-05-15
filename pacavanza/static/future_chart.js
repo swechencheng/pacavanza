@@ -90,4 +90,11 @@ class FutureChartApp extends PACChartApp {
 }
 
 const _futureApp = new FutureChartApp();
-_futureApp.run().then(() => _futureApp._initTradingControls());
+_futureApp.run().then(() => {
+  _futureApp._initTradingControls();
+  // Mount drawing toolbar onto the future chart container
+  if (typeof DrawingToolbar !== 'undefined') {
+    const dt = new DrawingToolbar(_futureApp.chartFuture);
+    dt.mount(document.getElementById('chart-future'));
+  }
+});
