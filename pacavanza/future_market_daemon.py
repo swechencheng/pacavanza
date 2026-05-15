@@ -92,6 +92,13 @@ class FutureMarketCollector(BaseMarketCollector):
                 f"[{instrument_id}] {readable_ts} B: {buy_price}  S: {sell_price}  L: {last_price:.2f}"
             )
 
+            # Only proceed if market is open
+            if not self.is_market_open(instrument_id, dt):
+                self.logger.debug(
+                    f"[{instrument_id}] Outside market hours ({readable_ts}), ignoring price update."
+                )
+                return
+
             # Store last prices
             self.last_buy_price[instrument_id] = buy_price
             self.last_sell_price[instrument_id] = sell_price
