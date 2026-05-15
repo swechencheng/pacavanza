@@ -33,7 +33,7 @@ class PACChartApp {
       borderDownColor: "#f44336", borderUpColor: "#4caf50",
       wickDownColor: "#f44336", wickUpColor: "#4caf50",
     });
-    const ema20Series = chart.addSeries(LightweightCharts.LineSeries, { color: "#6bebffff", lineWidth: 1 });
+    const ema20Series = chart.addSeries(LightweightCharts.LineSeries, { color: "#6bebffff", lineWidth: 1, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
     const state = {
       chart,
       series: { candle: candleSeries, ema20: ema20Series },
