@@ -356,6 +356,50 @@ class DrawingToolbar {
 
     const drawing = this._registry.createDrawing(toolType, id, anchors, style, opts);
     if (drawing) {
+      // Patch fib-retracement to remove the dashed projection line
+      if (toolType === 'fib-retracement') {
+        const origPV = drawing.paneViews.bind(drawing);
+        drawing.paneViews = () => {
+          const views = origPV();
+          return views.map(v => {
+            const origR = v.renderer.bind(v);
+            return {
+              zOrder: v.zOrder.bind(v),
+              renderer: () => {
+                const r = origR();
+                if (!r || !r.drawImpl) return r;
+                const origDrawImpl = r.drawImpl.bind(r);
+                return {
+                  draw: (target) => {
+                    target.useBitmapCoordinateSpace((scope) => {
+                      const ctx = scope.context;
+                      // The projection line is drawn via: setLineDash([5,5]), drawLine, setLineDash([])
+                      // Block any drawing while a dash pattern is active
+                      const realSetLineDash = ctx.setLineDash.bind(ctx);
+                      const realMoveTo = ctx.moveTo.bind(ctx);
+                      const realLineTo = ctx.lineTo.bind(ctx);
+                      const realStroke = ctx.stroke.bind(ctx);
+                      let dashing = false;
+                      ctx.setLineDash = (pattern) => {
+                        dashing = pattern && pattern.length > 0;
+                        realSetLineDash(pattern);
+                      };
+                      ctx.moveTo = (...a) => { if (!dashing) realMoveTo(...a); };
+                      ctx.lineTo = (...a) => { if (!dashing) realLineTo(...a); };
+                      ctx.stroke = (...a) => { if (!dashing) realStroke(...a); };
+                      origDrawImpl(scope);
+                      ctx.setLineDash = realSetLineDash;
+                      ctx.moveTo = realMoveTo;
+                      ctx.lineTo = realLineTo;
+                      ctx.stroke = realStroke;
+                    });
+                  }
+                };
+              }
+            };
+          });
+        };
+      }
       this._manager.addDrawing(drawing);
       this._manager.selectDrawing(drawing.id);
     }
