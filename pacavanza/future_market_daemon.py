@@ -201,7 +201,7 @@ class FutureMarketCollector(BaseMarketCollector):
                     durationStr="1 M",
                     barSizeSetting=bar_size,
                     whatToShow="TRADES",
-                    useRTH=False,
+                    useRTH=True,
                     formatDate=2,  # Return UTC timestamps
                 )
                 df = util.df(bars)
