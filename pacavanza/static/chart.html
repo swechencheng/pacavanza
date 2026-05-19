@@ -137,6 +137,16 @@
       text-decoration: underline;
     }
 
+    .header-link {
+      color: #6bebff;
+      text-decoration: none;
+      transition: color 0.2s ease-in-out;
+    }
+
+    .header-link:hover {
+      color: #ffffff;
+    }
+
     /* ── Drawing Toolbar ──────────────────────────────────── */
     .pac-drawing-toolbar {
       position: absolute;
@@ -341,8 +351,7 @@
     <div id="panel-future" class="instrument-panel">
       <div class="panel-header">
         <h3 style="color: #6bebff; margin:0; white-space:nowrap;">
-          <a href="/ava" style="color:#6bebff; text-decoration:none;" title="Go to Trading Minis"><span
-              id="label-future"></span></a>
+          <a href="/ava" class="header-link" title="Go to AVA Mini's"><span id="label-future"></span></a>
         </h3>
         <span id="status">Disconnected</span>
         <span id="chart-ohlc-info-future"></span>

@@ -39,7 +39,26 @@ class FutureChartApp extends PACChartApp {
     };
 
     window.PAC_TRADING_STATE.futureInstrument = futureKey;
-    document.getElementById("label-future").textContent = info.name || futureKey;
+    const labelEl = document.getElementById("label-future");
+    const originalText = info.name || futureKey;
+    labelEl.textContent = originalText;
+
+    const linkEl = labelEl.closest("a");
+    if (linkEl) {
+      linkEl.addEventListener("mouseenter", () => {
+        labelEl.textContent = "Go to AVA Mini's";
+      });
+      linkEl.addEventListener("mouseleave", () => {
+        labelEl.textContent = originalText;
+      });
+    } else {
+      labelEl.addEventListener("mouseenter", () => {
+        labelEl.textContent = "Go to AVA Mini's";
+      });
+      labelEl.addEventListener("mouseleave", () => {
+        labelEl.textContent = originalText;
+      });
+    }
 
     await this.loadHistoryForInstrument(this.chartFuture, futureKey, this.instrumentMapFlat);
     this.ensureMarketCountdown(this.chartFuture.groupingState);
@@ -84,7 +103,7 @@ class FutureChartApp extends PACChartApp {
           if (parsed && parsed.detail) {
             errMsg = parsed.detail;
           }
-        } catch (_) {}
+        } catch (_) { }
         if (alertOnError) {
           alert(`Error: ${errMsg}`);
         }
