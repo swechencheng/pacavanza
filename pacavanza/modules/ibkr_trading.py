@@ -791,15 +791,21 @@ class IbkrTrading(BaseAvanzaTrading):
         # Check active position
         pos_size = self._get_instrument_position_size("")
         if pos_size == 0:
-            raise Exception("No active position found. OCA bracket is not allowed when flat.")
+            raise Exception(
+                "No active position found. OCA bracket is not allowed when flat."
+            )
 
         # Check TP/SL relationship and action
         if limit_price == stop_price:
             raise Exception("Limit (TP) and Stop (SL) prices cannot be equal.")
         if limit_price > stop_price and action != "SELL":
-            raise Exception("TP is greater than SL: Action must be SELL (closing a long position).")
+            raise Exception(
+                "TP is greater than SL: Action must be SELL (closing a long position)."
+            )
         if limit_price < stop_price and action != "BUY":
-            raise Exception("TP is smaller than SL: Action must be BUY (closing a short position).")
+            raise Exception(
+                "TP is smaller than SL: Action must be BUY (closing a short position)."
+            )
 
         tp_order = LimitOrder(action, volume, limit_price)
         sl_order = StopOrder(action, volume, stop_price)
@@ -844,6 +850,8 @@ class IbkrTrading(BaseAvanzaTrading):
 
         self.ib.orderStatusEvent += self._on_order_status
         self.ib.newOrderEvent += self._on_new_order
+        self.ib.errorEvent += self._on_error
+        self.ib.execDetailsEvent += self._on_exec_details
         LOGGER.info("Subscribed to IBKR trade events")
 
     def _teardown_trade_subscription(self):
@@ -851,6 +859,8 @@ class IbkrTrading(BaseAvanzaTrading):
         try:
             self.ib.orderStatusEvent -= self._on_order_status
             self.ib.newOrderEvent -= self._on_new_order
+            self.ib.errorEvent -= self._on_error
+            self.ib.execDetailsEvent -= self._on_exec_details
         except Exception:
             pass
 
@@ -862,49 +872,10 @@ class IbkrTrading(BaseAvanzaTrading):
             f"Order status event: orderId={trade.order.orderId}, "
             f"status={trade.orderStatus.status}"
         )
-        # If parent order is cancelled, ensure all its child/bracket orders are also cancelled
-        if trade.orderStatus.status == "Cancelled":
-            # 1. If it was a parent order, cancel its children
-            for t in list(self.ib.openTrades()):
-                if t.contract.conId == self.contract.conId and t.order.parentId == trade.order.orderId:
-                    LOGGER.info(
-                        f"Auto-cancelling child order {t.order.orderId} "
-                        f"because parent {trade.order.orderId} was cancelled"
-                    )
-                    self.ib.cancelOrder(t.order)
-                    t.orderStatus.status = "Cancelled"
-
-            # 2. If it was a child order, cancel sibling orders sharing the same parentId
-            parent_id = trade.order.parentId
-            if parent_id:
-                for t in list(self.ib.openTrades()):
-                    if (
-                        t.contract.conId == self.contract.conId
-                        and t.order.orderId != trade.order.orderId
-                        and t.order.parentId == parent_id
-                    ):
-                        LOGGER.info(
-                            f"Auto-cancelling sibling child order {t.order.orderId} "
-                            f"because child {trade.order.orderId} was cancelled"
-                        )
-                        self.ib.cancelOrder(t.order)
-                        t.orderStatus.status = "Cancelled"
-
-            # 3. If it had an ocaGroup, cancel sibling orders in the same OCA group
-            oca_group = trade.order.ocaGroup
-            if oca_group:
-                for t in list(self.ib.openTrades()):
-                    if (
-                        t.contract.conId == self.contract.conId
-                        and t.order.orderId != trade.order.orderId
-                        and t.order.ocaGroup == oca_group
-                    ):
-                        LOGGER.info(
-                            f"Auto-cancelling OCA sibling order {t.order.orderId} "
-                            f"because order {trade.order.orderId} was cancelled"
-                        )
-                        self.ib.cancelOrder(t.order)
-                        t.orderStatus.status = "Cancelled"
+        # We do not perform reactive auto-cancellations here, as IBKR TWS handles
+        # parent-child bracket cancellations natively, and transient 'Cancelled' states
+        # triggered by warnings (like TIFDAY preset error 10349) would cause premature
+        # cancellation of child orders. Explicit cancellations are handled in cancel_order().
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
@@ -917,12 +888,28 @@ class IbkrTrading(BaseAvanzaTrading):
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
+    def _on_exec_details(self, trade: Trade, fill: Any):
+        """Handle execution details (fills)."""
+        if trade.contract.conId != self.contract.conId:
+            return
+        if self._on_change_callback:
+            self._on_change_callback(self.get_open_orders())
+
+    def _on_error(self, reqId: int, errorCode: int, errorString: str, contract: Any):
+        """Handle errors, which could be order rejections/cancellations."""
+        if reqId != -1 and self._on_change_callback:
+            # Rejections often cause the order status to change to Cancelled/Inactive,
+            # so we trigger an update.
+            self._on_change_callback(self.get_open_orders())
+
     def get_open_orders(self) -> List[Dict[str, Any]]:
         """
         Return active and related done orders for this contract as a list of dicts.
         Used by frontend to render the order lifecycle panel.
         """
-        contract_trades = [t for t in self.ib.trades() if t.contract.conId == self.contract.conId]
+        contract_trades = [
+            t for t in self.ib.trades() if t.contract.conId == self.contract.conId
+        ]
 
         # Step 1: Find all parent IDs
         parent_ids = set()
@@ -989,43 +976,6 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.cancelOrder(trade.order)
         trade.orderStatus.status = "Cancelled"
         LOGGER.info(f"Cancelled order {order_id}")
-
-        # 1. Explicitly cancel any child orders of this parent
-        for t in list(self.ib.openTrades()):
-            if t.contract.conId == self.contract.conId and t.order.parentId == order_id:
-                LOGGER.info(f"Cancelling child order {t.order.orderId} of parent {order_id}")
-                self.ib.cancelOrder(t.order)
-                t.orderStatus.status = "Cancelled"
-
-        # 2. If this order is a child, explicitly cancel any siblings (sharing same parentId)
-        parent_id = trade.order.parentId
-        if parent_id:
-            for t in list(self.ib.openTrades()):
-                if (
-                    t.contract.conId == self.contract.conId
-                    and t.order.orderId != order_id
-                    and t.order.parentId == parent_id
-                ):
-                    LOGGER.info(
-                        f"Cancelling sibling child order {t.order.orderId} sharing parent {parent_id}"
-                    )
-                    self.ib.cancelOrder(t.order)
-                    t.orderStatus.status = "Cancelled"
-
-        # 3. If this order has an ocaGroup, explicitly cancel any other orders in the same OCA group
-        oca_group = trade.order.ocaGroup
-        if oca_group:
-            for t in list(self.ib.openTrades()):
-                if (
-                    t.contract.conId == self.contract.conId
-                    and t.order.orderId != order_id
-                    and t.order.ocaGroup == oca_group
-                ):
-                    LOGGER.info(
-                        f"Cancelling OCA sibling order {t.order.orderId} in group {oca_group}"
-                    )
-                    self.ib.cancelOrder(t.order)
-                    t.orderStatus.status = "Cancelled"
 
         return {"orderId": order_id, "status": "cancel_requested"}
 

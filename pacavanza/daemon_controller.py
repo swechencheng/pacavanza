@@ -17,7 +17,13 @@ except RuntimeError:
 # Initialize AVANZA once in the parent process!
 from pacavanza.modules.avanza_instance import get_avanza
 
-get_avanza()
+while True:
+    try:
+        get_avanza()
+        break
+    except Exception as e:
+        print(f"Failed to initialize Avanza: {e}. Retrying in 10s...")
+        time.sleep(30)
 
 # Configure logging
 logging.basicConfig(

@@ -49,15 +49,18 @@ class InstrumentData:
             current_bar = self.current_bars.get(self.instrument_id)
             if current_bar is None or timestamp >= current_bar["end_time"]:
                 if current_bar is not None:
-                    self.completed_ohlc[self.instrument_id].append(current_bar.copy())
-                    cutoff = datetime.now(timezone.utc) - timedelta(
-                        hours=self.max_history_hours
-                    )
-                    self.completed_ohlc[self.instrument_id] = [
-                        bar
-                        for bar in self.completed_ohlc[self.instrument_id]
-                        if bar["end_time"] >= cutoff
-                    ]
+                    # Only append if current_bar is chronologically newer than the last completed bar
+                    lst = self.completed_ohlc[self.instrument_id]
+                    if not lst or current_bar["start_time"] > lst[-1]["start_time"]:
+                        self.completed_ohlc[self.instrument_id].append(current_bar.copy())
+                        cutoff = datetime.now(timezone.utc) - timedelta(
+                            hours=self.max_history_hours
+                        )
+                        self.completed_ohlc[self.instrument_id] = [
+                            bar
+                            for bar in self.completed_ohlc[self.instrument_id]
+                            if bar["end_time"] >= cutoff
+                        ]
                 self.initialize_new_bar(timestamp, price)
             else:
                 current_bar["high"] = max(current_bar["high"], price)

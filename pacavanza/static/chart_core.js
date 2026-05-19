@@ -459,11 +459,14 @@ class PACChartApp {
   }
 
   _applyBarCompleted(cm, candleData) {
-    cm.data.set(candleData.time, candleData);
-    cm.series.candle.update(candleData);
-    this.updateEMA20Incremental(cm, candleData.close, candleData.time);
-    this.updateHighLowIncremental(cm, candleData);
-    if (cm.lastBarTime === null || candleData.time > cm.lastBarTime) cm.lastBarTime = candleData.time;
+    const t = candleData.time;
+    if (cm.lastBarTime === null || t >= cm.lastBarTime) {
+      cm.data.set(t, candleData);
+      cm.series.candle.update(candleData);
+      this.updateEMA20Incremental(cm, candleData.close, t);
+      this.updateHighLowIncremental(cm, candleData);
+      if (t > cm.lastBarTime) cm.lastBarTime = t;
+    }
   }
 
   _applyEMAFromMsg(cm, msg) {

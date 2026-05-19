@@ -154,16 +154,20 @@ def create_app(
             LOGGER.error(f"[{sid}] Failed to load OHLC data: {e}")
 
     # instantiate AvanzaTrading with references to in-memory state and the lock maps
-    trading = AvanzaTrading(
-        recent_bars,
-        instrument_list,
-        metadata,
-        LOGGER,
-        bars_locks_map=recent_bars_locks,
-        metadata_locks_map=metadata_locks,
-        bars_map_lock=recent_bars_locks_map_lock,
-        metadata_map_lock=metadata_locks_map_lock,
-    )
+    try:
+        trading = AvanzaTrading(
+            recent_bars,
+            instrument_list,
+            metadata,
+            LOGGER,
+            bars_locks_map=recent_bars_locks,
+            metadata_locks_map=metadata_locks,
+            bars_map_lock=recent_bars_locks_map_lock,
+            metadata_map_lock=metadata_locks_map_lock,
+        )
+    except Exception as e:
+        LOGGER.warning(f"Failed to initialize AvanzaTrading: {e}")
+        trading = None
 
     # instantiate IbkrTrading (if IBKR connection is available)
     # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
@@ -241,22 +245,10 @@ def create_app(
             ibkr_metadata_locks: Dict[str, asyncio.Lock] = {}
             ibkr_metadata_locks_map_lock = asyncio.Lock()
 
-            ibkr_trading = IbkrTrading(
-                ib=ib,
-                contract=contract,
-                recent_bars=ibkr_recent_bars,
-                instrument_list=instrument_list,
-                metadata=ibkr_metadata,
-                logger=LOGGER,
-                bars_locks_map=ibkr_bars_locks,
-                metadata_locks_map=ibkr_metadata_locks,
-                bars_map_lock=ibkr_bars_locks_map_lock,
-                metadata_map_lock=ibkr_metadata_locks_map_lock,
-            )
-            LOGGER.info("IbkrTrading instance created successfully")
+            # We will initialize IbkrTrading inside the lifespan context manager
+            # so it binds to the correct Uvicorn asyncio event loop.
         except Exception as e:
-            LOGGER.warning(f"Failed to create IbkrTrading: {e}")
-            ibkr_trading = None
+            LOGGER.warning(f"Failed to setup IBKR dependencies: {e}")
 
     # Background task: subscribe to redis channel and forward events
     async def _redis_subscriber_task():
@@ -566,6 +558,35 @@ def create_app(
     # Lifespan context manager: start subscriber on startup and close on shutdown
     @asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
+        nonlocal ibkr_trading
+        
+        # Connect IBKR async inside the correct event loop
+        if ibkr_conn is not None:
+            ib, contract = ibkr_conn
+            try:
+                await ib.connectAsync("127.0.0.1", 7497, clientId=51)
+                await ib.qualifyContractsAsync(contract)
+                LOGGER.info("IBKR async connected inside lifespan.")
+                
+                ibkr_trading = IbkrTrading(
+                    ib=ib,
+                    contract=contract,
+                    recent_bars=ibkr_recent_bars,
+                    instrument_list=instrument_list,
+                    metadata=ibkr_metadata,
+                    logger=LOGGER,
+                    bars_locks_map=ibkr_bars_locks,
+                    metadata_locks_map=ibkr_metadata_locks,
+                    bars_map_lock=ibkr_bars_locks_map_lock,
+                    metadata_map_lock=ibkr_metadata_locks_map_lock,
+                )
+                if hasattr(ibkr_trading, "_setup_trade_subscription"):
+                    ibkr_trading._setup_trade_subscription(
+                        on_change_callback=_on_order_change
+                    )
+            except Exception as e:
+                LOGGER.error(f"Failed to connect IBKR async: {e}")
+
         # start subscriber task in background
         app.state._redis_task = asyncio.create_task(_redis_subscriber_task())
         # start IBKR event pump if connected
@@ -1301,15 +1322,6 @@ def create_app(
         except RuntimeError:
             pass
 
-    if ibkr_trading is not None and hasattr(ibkr_trading, "_setup_trade_subscription"):
-        try:
-            ibkr_trading._setup_trade_subscription(
-                on_change_callback=_on_order_change
-            )
-        except Exception:
-            LOGGER.warning(
-                "Could not setup IBKR trade subscription"
-            )
 
     return app
 
@@ -1324,13 +1336,10 @@ def main():
         from pacavanza.modules.ibkr_trading import IbkrTrading
 
         ib = IB()
-        ib.connect("127.0.0.1", 7497, clientId=50)
-
+        # Do NOT connect or qualify here, wait for lifespan context manager!
         contract = ContFuture("OMXS30", "OMS")
-        ib.qualifyContracts(contract)
         LOGGER.info(
-            f"IBKR connected: conId={contract.conId}, "
-            f"localSymbol={contract.localSymbol}"
+            f"IBKR instance created for {contract.symbol}. Will connect in lifespan."
         )
 
         # IbkrTrading shares recent_bars/instrument_list with AvanzaTrading
