@@ -54,53 +54,69 @@ class DrawingToolbar {
     this._wireKeyboard();
   }
 
+  static _formatKey(keyStr) {
+    if (!keyStr) return '';
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0 || navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+    const altLabel = isMac ? '⌥' : 'Alt+';
+    const shiftLabel = isMac ? '⇧' : 'Shift+';
+
+    return keyStr
+      .split('+')
+      .map(part => {
+        if (part === 'alt') return altLabel;
+        if (part === 'shift') return shiftLabel;
+        return part.toUpperCase();
+      })
+      .join('');
+  }
+
   // ── Tool Definitions (ordered, grouped) with keyboard shortcuts ──
   static _toolDefs() {
     return [
       {
         group: 'Lines', tools: [
-          { id: 'trend-line', label: 'Trend Line', key: '1' },
-          { id: 'ray', label: 'Ray', key: '2' },
-          { id: 'horizontal-line', label: 'Horizontal Line', key: '3' },
-          { id: 'horizontal-ray', label: 'Horizontal Ray', key: '4' },
+          { id: 'trend-line', label: 'Trend Line', key: 'alt+t' },
+          { id: 'ray', label: 'Ray', key: 'alt+y' },
+          { id: 'horizontal-line', label: 'Horizontal Line', key: 'alt+h' },
+          { id: 'horizontal-ray', label: 'Horizontal Ray', key: 'alt+j' },
         ]
       },
       {
         group: 'Channels', tools: [
-          { id: 'parallel-channel', label: 'Parallel Channel', key: '5' },
+          { id: 'parallel-channel', label: 'Parallel Channel', key: 'alt+p' },
         ]
       },
       {
         group: 'Fibonacci', tools: [
-          { id: 'fib-retracement', label: 'Fib Retracement', key: '6' },
+          { id: 'fib-retracement', label: 'Fib Retracement', key: 'alt+f' },
         ]
       },
       {
         group: 'Positions', tools: [
-          { id: 'long-position', label: 'Long Position', key: '7' },
-          { id: 'short-position', label: 'Short Position', key: '8' },
-          { id: 'date-price-range', label: 'Date & Price Range', key: '9' },
+          { id: 'long-position', label: 'Long Position', key: 'alt+l' },
+          { id: 'short-position', label: 'Short Position', key: 'alt+s' },
+          { id: 'date-price-range', label: 'Date & Price Range', key: 'alt+d' },
         ]
       },
       {
         group: 'Arrows', tools: [
-          { id: 'arrow', label: 'Arrow', key: '0' },
-          { id: 'arrow-mark-up', label: 'Arrow Up', key: 'q' },
-          { id: 'arrow-mark-down', label: 'Arrow Down', key: 'w' },
+          { id: 'arrow', label: 'Arrow', key: 'alt+a' },
+          { id: 'arrow-mark-up', label: 'Arrow Up', key: 'alt+u' },
+          { id: 'arrow-mark-down', label: 'Arrow Down', key: 'alt+v' },
         ]
       },
       {
         group: 'Shapes', tools: [
-          { id: 'rectangle', label: 'Rectangle', key: 'e' },
-          { id: 'rotated-rectangle', label: 'Rotated Rectangle', key: 'r' },
-          { id: 'ellipse', label: 'Ellipse', key: 't' },
+          { id: 'rectangle', label: 'Rectangle', key: 'alt+shift+r' },
+          { id: 'rotated-rectangle', label: 'Rotated Rectangle', key: 'alt+shift+o' },
+          { id: 'ellipse', label: 'Ellipse', key: 'alt+e' },
         ]
       },
       {
         group: 'Text', tools: [
-          { id: 'text-annotation', label: 'Text', key: 'y' },
-          { id: 'anchored-text', label: 'Anchored Text', key: 'u' },
-          { id: 'price-label', label: 'Price Label', key: 'i' },
+          { id: 'text-annotation', label: 'Text', key: 'alt+x' },
+          { id: 'anchored-text', label: 'Anchored Text', key: 'alt+shift+x' },
+          { id: 'price-label', label: 'Price Label', key: 'alt+c' },
         ]
       },
     ];
@@ -161,7 +177,7 @@ class DrawingToolbar {
         const btn = document.createElement('button');
         btn.className = 'pac-dt-btn';
         btn.dataset.tool = t.id;
-        btn.title = t.label + (t.key ? ` [${t.key.toUpperCase()}]` : '');
+        btn.title = t.label + (t.key ? ` [${DrawingToolbar._formatKey(t.key)}]` : '');
         btn.innerHTML = this._icons[t.id] || `<span style="font-size:10px">${t.label.substring(0, 3)}</span>`;
         btn.addEventListener('click', () => this._selectTool(t.id));
         bar.appendChild(btn);
@@ -297,9 +313,26 @@ class DrawingToolbar {
         if (sel) { this._manager.removeDrawing(sel.id); return; }
       }
 
-      // Tool shortcuts (no modifiers except allow Shift for magnet)
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const toolId = shortcuts[e.key.toLowerCase()];
+      if (e.ctrlKey || e.metaKey) return;
+
+      let baseKey = '';
+      if (e.code && e.code.startsWith('Key')) {
+        baseKey = e.code.slice(3).toLowerCase();
+      } else if (e.code && e.code.startsWith('Digit')) {
+        baseKey = e.code.slice(5);
+      } else {
+        baseKey = e.key.toLowerCase();
+      }
+
+      if (['alt', 'shift', 'control', 'meta'].includes(baseKey)) return;
+
+      const parts = [];
+      if (e.altKey) parts.push('alt');
+      if (e.shiftKey) parts.push('shift');
+      parts.push(baseKey);
+      const combo = parts.join('+');
+
+      const toolId = shortcuts[combo];
       if (toolId) {
         e.preventDefault();
         this._selectTool(toolId);
