@@ -198,18 +198,23 @@ class FutureChartApp extends PACChartApp {
       const parentInfo = o.parentId ? `<span style="color:#555;">P:${o.parentId}</span>` : "";
       const ocaInfo = o.ocaGroup ? `<span style="color:#555;">OCA</span>` : "";
 
-      return `<div class="order-row" data-order-id="${o.orderId}">
+      const isFulfilled = !!o.fulfilled;
+      const isDone = !!o.isDone;
+      const fulfilledCls = isFulfilled ? "order-row-fulfilled" : "";
+      const purpleStyle = isFulfilled ? 'style="color: #b388ff !important;"' : "";
+
+      return `<div class="order-row ${fulfilledCls}" data-order-id="${o.orderId}" ${purpleStyle}>
         <span class="tag ${actionCls}">${o.action}</span>
         <span class="tag tag-type">${o.orderType}</span>
         <span style="color:#888;">×${o.totalQuantity}</span>
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
-          `<input type="number" class="order-price-input" value="${priceVal}" step="0.25" data-oid="${o.orderId}" />`}
-        <span style="color:#555;">${o.status}</span>
+          `<input type="number" class="order-price-input" value="${priceVal}" step="0.25" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
+        <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
         ${parentInfo}${ocaInfo}
         <span style="flex:1;"></span>
-        ${!isMkt ? `<button class="order-btn" onclick="_futureApp._editOrderPrice(${o.orderId}, this)">✏️</button>` : ""}
-        ${!isMkt ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
-        <button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>
+        ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrderPrice(${o.orderId}, this)">✏️</button>` : ""}
+        ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
+        ${!isDone ? `<button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>` : ""}
       </div>`;
     }).join("");
   }
