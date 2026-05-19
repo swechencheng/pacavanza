@@ -167,6 +167,46 @@ class FutureChartApp extends PACChartApp {
       });
     }
 
+    // Buy Limit button
+    const buyLimitBtn = document.getElementById("btn-buy-limit-future");
+    if (buyLimitBtn) {
+      buyLimitBtn.addEventListener("click", async () => {
+        const volume = contracts();
+        const price = parseFloat(document.getElementById("limit-order-price").value);
+        if (isNaN(price)) {
+          alert("Limit Order: Price is required.");
+          return;
+        }
+        const res = await this._callApi("/ibkr/limit_buy", {
+          volume, price
+        }, "POST", true);
+        if (res) {
+          console.log("[ibkr] Limit Buy placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
+    // Sell Limit button
+    const sellLimitBtn = document.getElementById("btn-sell-limit-future");
+    if (sellLimitBtn) {
+      sellLimitBtn.addEventListener("click", async () => {
+        const volume = contracts();
+        const price = parseFloat(document.getElementById("limit-order-price").value);
+        if (isNaN(price)) {
+          alert("Limit Order: Price is required.");
+          return;
+        }
+        const res = await this._callApi("/ibkr/limit_sell", {
+          volume, price
+        }, "POST", true);
+        if (res) {
+          console.log("[ibkr] Limit Sell placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
     // Refresh orders button
     const refreshBtn = document.getElementById("btn-refresh-orders");
     if (refreshBtn) refreshBtn.addEventListener("click", () => this._refreshOrders());

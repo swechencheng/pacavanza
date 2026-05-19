@@ -313,14 +313,17 @@
       background: rgba(106, 27, 154, 0.1) !important;
       border-color: rgba(179, 136, 255, 0.2) !important;
     }
+
     .order-row-fulfilled:hover {
       background: rgba(106, 27, 154, 0.18) !important;
     }
+
     .order-row-fulfilled .order-price-input {
       color: #b388ff !important;
       border-color: rgba(179, 136, 255, 0.3) !important;
       background: rgba(106, 27, 154, 0.05) !important;
     }
+
     .order-empty {
       padding: 8px;
       color: #484f58;
@@ -378,6 +381,16 @@
           <option value="BUY"><span class="buy">B</span></option>
         </select>
         <button id="btn-place-oca">📎</button>
+
+        <div class="spacer"></div>
+
+        <label style="font-size:11px;">
+          LMT:
+          <input type="number" id="limit-order-price" value="" step="0.25" class="volume-input" style="width:80px;"
+            placeholder="Price" />
+        </label>
+        <button id="btn-buy-limit-future"><span class="buy">B</span> Limit</button>
+        <button id="btn-sell-limit-future"><span class="sell">S</span> Limit</button>
       </div>
       <div id="chart-future" class="chart-container"></div>
       <!-- Order Lifecycle Panel -->

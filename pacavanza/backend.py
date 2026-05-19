@@ -1276,6 +1276,40 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
 
+    @app.post("/ibkr/limit_buy")
+    async def ibkr_limit_buy(req: Request):
+        """Place a limit buy order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        volume = body.get("volume")
+        price = body.get("price")
+        if volume is None or price is None:
+            raise HTTPException(
+                status_code=400, detail="volume and price required"
+            )
+        try:
+            order = ibkr_trading.place_limit_buy(int(volume), float(price))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
+    @app.post("/ibkr/limit_sell")
+    async def ibkr_limit_sell(req: Request):
+        """Place a limit sell order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        volume = body.get("volume")
+        price = body.get("price")
+        if volume is None or price is None:
+            raise HTTPException(
+                status_code=400, detail="volume and price required"
+            )
+        try:
+            order = ibkr_trading.place_limit_sell(int(volume), float(price))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
     @app.get("/ibkr/open_orders")
     async def ibkr_open_orders():
         """Return all active orders for the IBKR contract."""

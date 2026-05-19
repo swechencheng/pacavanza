@@ -837,6 +837,40 @@ class IbkrTrading(BaseAvanzaTrading):
             "status": "placed",
         }
 
+    def place_limit_buy(self, volume: int, price: float) -> Dict[str, Any]:
+        """Place a limit buy order via IBKR."""
+        order = LimitOrder("BUY", volume, price)
+        trade = self.ib.placeOrder(self.contract, order)
+        LOGGER.info(
+            f"Placed limit BUY order via IBKR: "
+            f"orderId={trade.order.orderId}, price={price}, volume={volume}"
+        )
+        return {
+            "orderId": trade.order.orderId,
+            "action": "BUY",
+            "orderType": "LMT",
+            "totalQuantity": volume,
+            "price": price,
+            "status": trade.orderStatus.status,
+        }
+
+    def place_limit_sell(self, volume: int, price: float) -> Dict[str, Any]:
+        """Place a limit sell order via IBKR."""
+        order = LimitOrder("SELL", volume, price)
+        trade = self.ib.placeOrder(self.contract, order)
+        LOGGER.info(
+            f"Placed limit SELL order via IBKR: "
+            f"orderId={trade.order.orderId}, price={price}, volume={volume}"
+        )
+        return {
+            "orderId": trade.order.orderId,
+            "action": "SELL",
+            "orderType": "LMT",
+            "totalQuantity": volume,
+            "price": price,
+            "status": trade.orderStatus.status,
+        }
+
     # --------------------------------------------------------------------------
     # Trade event subscription & order lifecycle tracking
     # --------------------------------------------------------------------------
