@@ -272,23 +272,23 @@ class IbkrTrading(BaseAvanzaTrading):
         """
         opposite = "SELL" if action == "BUY" else "BUY"
 
-        # Pre-assign order IDs so we can set parentId before transmitting
+        # Pre-assign order IDs in the same sequence as placement: parent → TP → SL
         parent_id = self.ib.client.getReqId()
-        sl_id = self.ib.client.getReqId()
         tp_id = self.ib.client.getReqId()
+        sl_id = self.ib.client.getReqId()
 
         # Parent entry: stop order, don't transmit yet
         parent = StopOrder(action, volume, stop_price)
         parent.orderId = parent_id
         parent.transmit = False
 
-        # Take-profit child: limit order
+        # Take-profit child: limit order (placed second, don't transmit yet)
         tp_order = LimitOrder(opposite, volume, tp_price)
         tp_order.orderId = tp_id
         tp_order.parentId = parent_id
         tp_order.transmit = False
 
-        # Stop-loss child: stop order (transmit=True triggers the whole group)
+        # Stop-loss child: stop order (placed last, transmit=True triggers the whole group)
         sl_order = StopOrder(opposite, volume, sl_price)
         sl_order.orderId = sl_id
         sl_order.parentId = parent_id
@@ -691,18 +691,293 @@ class IbkrTrading(BaseAvanzaTrading):
         return cancelled
 
     # --------------------------------------------------------------------------
-    # Override: edit_order and edit_order_follow_market are Avanza-specific
+    # Order editing: IBKR implementations
     # --------------------------------------------------------------------------
 
-    def edit_order(self, *args, **kwargs) -> Dict[str, Any]:
-        raise NotImplementedError(
-            "edit_order is Avanza-specific, not supported on IBKR"
+    def _find_trade_by_order_id(self, order_id: int) -> Optional[Trade]:
+        """Find an active Trade object by its orderId."""
+        for t in self.ib.openTrades():
+            if t.order.orderId == order_id and t.isActive():
+                return t
+        return None
+
+    def edit_order(self, order_id: int, price: float) -> Dict[str, Any]:
+        """
+        Change the price of an existing non-market order.
+        For STP orders, updates auxPrice. For LMT orders, updates lmtPrice.
+        """
+        trade = self._find_trade_by_order_id(order_id)
+        if not trade:
+            raise Exception(f"No active order found with orderId={order_id}")
+
+        order = trade.order
+        if order.orderType == "MKT":
+            raise Exception("Cannot edit price of a market order")
+
+        if order.orderType == "STP":
+            order.auxPrice = price
+        elif order.orderType == "LMT":
+            order.lmtPrice = price
+        elif order.orderType == "STP LMT":
+            order.auxPrice = price
+        else:
+            raise Exception(f"Unsupported order type for edit: {order.orderType}")
+
+        self.ib.placeOrder(self.contract, order)
+        LOGGER.info(
+            f"Edited order {order_id}: type={order.orderType}, newPrice={price}"
+        )
+        return {
+            "orderId": order_id,
+            "orderType": order.orderType,
+            "newPrice": price,
+            "status": "modified",
+        }
+
+    def edit_order_follow_market(self, order_id: int) -> Dict[str, Any]:
+        """
+        Convert an existing order to a market order.
+        Cancels the existing order and places a new MarketOrder with the same
+        action and volume.
+        """
+        trade = self._find_trade_by_order_id(order_id)
+        if not trade:
+            raise Exception(f"No active order found with orderId={order_id}")
+
+        action = trade.order.action
+        volume = int(trade.order.totalQuantity)
+
+        self.ib.cancelOrder(trade.order)
+        LOGGER.info(f"Cancelled order {order_id} to replace with market order")
+
+        mkt_order = MarketOrder(action, volume)
+        new_trade = self.ib.placeOrder(self.contract, mkt_order)
+        LOGGER.info(
+            f"Placed market {action} order: orderId={new_trade.order.orderId}, "
+            f"volume={volume}"
+        )
+        return {
+            "oldOrderId": order_id,
+            "newOrderId": new_trade.order.orderId,
+            "action": action,
+            "volume": volume,
+            "status": "converted_to_market",
+        }
+
+    # --------------------------------------------------------------------------
+    # OCA bracket: place SL + TP given explicit prices
+    # --------------------------------------------------------------------------
+
+    def place_oca_bracket(
+        self,
+        action: str,
+        volume: int,
+        limit_price: float,
+        stop_price: float,
+    ) -> Dict[str, Any]:
+        """
+        Place an OCA group with a take-profit (limit) and stop-loss (stop)
+        given explicit prices. Both orders are immediately active.
+
+        Args:
+            action: 'SELL' or 'BUY' — the exit direction (opposite of position).
+            volume: number of contracts.
+            limit_price: take-profit limit price.
+            stop_price: stop-loss stop price.
+
+        Returns:
+            Dict with order IDs and OCA group name.
+        """
+        tp_order = LimitOrder(action, volume, limit_price)
+        sl_order = StopOrder(action, volume, stop_price)
+
+        oca_group = f"ibkr_oca_manual_{int(datetime.now(tz=timezone.utc).timestamp())}"
+        IB.oneCancelsAll(
+            orders=[tp_order, sl_order],
+            ocaGroup=oca_group,
+            ocaType=1,
         )
 
-    async def edit_order_follow_market(self, *args, **kwargs) -> Dict[str, Any]:
-        raise NotImplementedError(
-            "edit_order_follow_market is Avanza-specific, not supported on IBKR"
+        tp_trade = self.ib.placeOrder(self.contract, tp_order)
+        sl_trade = self.ib.placeOrder(self.contract, sl_order)
+
+        LOGGER.info(
+            f"OCA bracket placed: action={action}, volume={volume}, "
+            f"TP orderId={tp_trade.order.orderId} @ {limit_price}, "
+            f"SL orderId={sl_trade.order.orderId} @ {stop_price}, "
+            f"ocaGroup={oca_group}"
         )
+        return {
+            "ocaGroup": oca_group,
+            "tpOrderId": tp_trade.order.orderId,
+            "tpPrice": limit_price,
+            "slOrderId": sl_trade.order.orderId,
+            "slPrice": stop_price,
+            "action": action,
+            "volume": volume,
+            "status": "placed",
+        }
+
+    # --------------------------------------------------------------------------
+    # Trade event subscription & order lifecycle tracking
+    # --------------------------------------------------------------------------
+
+    def _setup_trade_subscription(self, on_change_callback=None):
+        """
+        Subscribe to IBKR trade events for order lifecycle tracking.
+        Calls on_change_callback(orders_snapshot) whenever an order changes.
+        """
+        self._on_change_callback = on_change_callback
+
+        self.ib.orderStatusEvent += self._on_order_status
+        self.ib.newOrderEvent += self._on_new_order
+        LOGGER.info("Subscribed to IBKR trade events")
+
+    def _teardown_trade_subscription(self):
+        """Unsubscribe from IBKR trade events."""
+        try:
+            self.ib.orderStatusEvent -= self._on_order_status
+            self.ib.newOrderEvent -= self._on_new_order
+        except Exception:
+            pass
+
+    def _on_order_status(self, trade: Trade):
+        """Handle order status change events."""
+        if trade.contract.conId != self.contract.conId:
+            return
+        LOGGER.debug(
+            f"Order status event: orderId={trade.order.orderId}, "
+            f"status={trade.orderStatus.status}"
+        )
+        # If parent order is cancelled, ensure all its child/bracket orders are also cancelled
+        if trade.orderStatus.status == "Cancelled":
+            # 1. If it was a parent order, cancel its children
+            for t in list(self.ib.openTrades()):
+                if t.contract.conId == self.contract.conId and t.order.parentId == trade.order.orderId:
+                    LOGGER.info(
+                        f"Auto-cancelling child order {t.order.orderId} "
+                        f"because parent {trade.order.orderId} was cancelled"
+                    )
+                    self.ib.cancelOrder(t.order)
+
+            # 2. If it was a child order, cancel sibling orders sharing the same parentId
+            parent_id = trade.order.parentId
+            if parent_id:
+                for t in list(self.ib.openTrades()):
+                    if (
+                        t.contract.conId == self.contract.conId
+                        and t.order.orderId != trade.order.orderId
+                        and t.order.parentId == parent_id
+                    ):
+                        LOGGER.info(
+                            f"Auto-cancelling sibling child order {t.order.orderId} "
+                            f"because child {trade.order.orderId} was cancelled"
+                        )
+                        self.ib.cancelOrder(t.order)
+
+            # 3. If it had an ocaGroup, cancel sibling orders in the same OCA group
+            oca_group = trade.order.ocaGroup
+            if oca_group:
+                for t in list(self.ib.openTrades()):
+                    if (
+                        t.contract.conId == self.contract.conId
+                        and t.order.orderId != trade.order.orderId
+                        and t.order.ocaGroup == oca_group
+                    ):
+                        LOGGER.info(
+                            f"Auto-cancelling OCA sibling order {t.order.orderId} "
+                            f"because order {trade.order.orderId} was cancelled"
+                        )
+                        self.ib.cancelOrder(t.order)
+
+        if self._on_change_callback:
+            self._on_change_callback(self.get_open_orders())
+
+    def _on_new_order(self, trade: Trade):
+        """Handle new order events."""
+        if trade.contract.conId != self.contract.conId:
+            return
+        LOGGER.debug(f"New order event: orderId={trade.order.orderId}")
+        if self._on_change_callback:
+            self._on_change_callback(self.get_open_orders())
+
+    def get_open_orders(self) -> List[Dict[str, Any]]:
+        """
+        Return all active orders for this contract as a list of dicts.
+        Used by frontend to render the order lifecycle panel.
+        """
+        result = []
+        for t in self.ib.openTrades():
+            if t.contract.conId != self.contract.conId:
+                continue
+            if not t.isActive():
+                continue
+            order = t.order
+            price = None
+            if order.orderType == "STP":
+                price = order.auxPrice
+            elif order.orderType == "LMT":
+                price = order.lmtPrice
+            elif order.orderType == "STP LMT":
+                price = order.auxPrice
+
+            result.append(
+                {
+                    "orderId": order.orderId,
+                    "action": order.action,
+                    "orderType": order.orderType,
+                    "totalQuantity": int(order.totalQuantity),
+                    "price": price,
+                    "status": t.orderStatus.status,
+                    "parentId": order.parentId if order.parentId else None,
+                    "ocaGroup": order.ocaGroup if order.ocaGroup else None,
+                }
+            )
+        return result
+
+    def cancel_order(self, order_id: int) -> Dict[str, Any]:
+        """Cancel a specific order by orderId."""
+        trade = self._find_trade_by_order_id(order_id)
+        if not trade:
+            raise Exception(f"No active order found with orderId={order_id}")
+        self.ib.cancelOrder(trade.order)
+        LOGGER.info(f"Cancelled order {order_id}")
+
+        # 1. Explicitly cancel any child orders of this parent
+        for t in list(self.ib.openTrades()):
+            if t.contract.conId == self.contract.conId and t.order.parentId == order_id:
+                LOGGER.info(f"Cancelling child order {t.order.orderId} of parent {order_id}")
+                self.ib.cancelOrder(t.order)
+
+        # 2. If this order is a child, explicitly cancel any siblings (sharing same parentId)
+        parent_id = trade.order.parentId
+        if parent_id:
+            for t in list(self.ib.openTrades()):
+                if (
+                    t.contract.conId == self.contract.conId
+                    and t.order.orderId != order_id
+                    and t.order.parentId == parent_id
+                ):
+                    LOGGER.info(
+                        f"Cancelling sibling child order {t.order.orderId} sharing parent {parent_id}"
+                    )
+                    self.ib.cancelOrder(t.order)
+
+        # 3. If this order has an ocaGroup, explicitly cancel any other orders in the same OCA group
+        oca_group = trade.order.ocaGroup
+        if oca_group:
+            for t in list(self.ib.openTrades()):
+                if (
+                    t.contract.conId == self.contract.conId
+                    and t.order.orderId != order_id
+                    and t.order.ocaGroup == oca_group
+                ):
+                    LOGGER.info(
+                        f"Cancelling OCA sibling order {t.order.orderId} in group {oca_group}"
+                    )
+                    self.ib.cancelOrder(t.order)
+
+        return {"orderId": order_id, "status": "cancel_requested"}
 
     # --------------------------------------------------------------------------
     # Override: Avanza-specific account/position methods

@@ -199,6 +199,121 @@
       margin: 3px 0;
       flex-shrink: 0;
     }
+
+    /* ── Order Lifecycle Panel ──────────────────────────────── */
+    .order-panel {
+      background: #0d1117;
+      border-top: 1px solid #333;
+      height: 150px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #333 #0d1117;
+    }
+
+    .order-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #161b22;
+      font-size: 11px;
+      font-weight: 600;
+      color: #8b949e;
+      border-bottom: 1px solid #21262d;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .order-list {
+      font-size: 11px;
+      font-family: monospace;
+    }
+
+    .order-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 8px;
+      border-bottom: 1px solid #161b22;
+      transition: background 0.15s;
+    }
+
+    .order-row:hover {
+      background: #161b22;
+    }
+
+    .order-row .tag {
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .order-row .tag-buy {
+      background: #0d4429;
+      color: #4caf50;
+    }
+
+    .order-row .tag-sell {
+      background: #4a1c1c;
+      color: #f44336;
+    }
+
+    .order-row .tag-type {
+      background: #1c2541;
+      color: #6bebff;
+    }
+
+    .order-row .order-price-input {
+      width: 55px;
+      background: #0f172a;
+      border: 1px solid #333;
+      color: #ddd;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-family: monospace;
+      outline: none;
+    }
+
+    .order-row .order-price-input:focus {
+      border-color: #4caf50;
+    }
+
+    .order-row .order-btn {
+      background: #21262d;
+      border: 1px solid #333;
+      color: #8b949e;
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .order-row .order-btn:hover {
+      background: #30363d;
+      color: #ddd;
+    }
+
+    .order-row .order-btn-danger:hover {
+      background: #4a1c1c;
+      color: #f44336;
+    }
+
+    .order-row .order-btn-market:hover {
+      background: #1c3d2e;
+      color: #4caf50;
+    }
+
+    .order-empty {
+      padding: 8px;
+      color: #484f58;
+      text-align: center;
+      font-style: italic;
+    }
   </style>
 
   <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
@@ -218,9 +333,8 @@
       </div>
       <div class="trading-controls" data-side="future">
         <label>
-          💰
-          <input type="number" id="order-percentage-future" value="15.00" min="0.01" step="0.01" class="volume-input" />
-          %
+          📦
+          <input type="number" id="order-contracts-future" value="1" min="1" step="1" class="volume-input" />
         </label>
         <button id="btn-buy-stop-future"><span class="buy">B</span> Stop</button>
         <button id="btn-cancel-buy-stop-future">❌</button>
@@ -233,7 +347,32 @@
         <button id="btn-market-buy-future"><span class="buy">B</span> Market</button>
         <button id="btn-market-sell-future"><span class="sell">S</span> Market</button>
       </div>
+      <!-- OCA Bracket Controls -->
+      <div class="trading-controls" data-side="future" style="border-top: none;">
+        <label style="font-size:11px; color:#888;">OCA:</label>
+        <label style="font-size:11px;">
+          <span class="sell">SL</span>
+          <input type="number" id="oca-stop-price" value="" step="0.25" class="volume-input" placeholder="Stop" />
+        </label>
+        <label style="font-size:11px;">
+          <span class="buy">TP</span>
+          <input type="number" id="oca-limit-price" value="" step="0.25" class="volume-input" placeholder="Limit" />
+        </label>
+        <select id="oca-action" class="volume-input" style="width:65px;">
+          <option value="SELL">SELL</option>
+          <option value="BUY">BUY</option>
+        </select>
+        <button id="btn-place-oca">📎 OCA</button>
+      </div>
       <div id="chart-future" class="chart-container"></div>
+      <!-- Order Lifecycle Panel -->
+      <div id="order-panel" class="order-panel">
+        <div class="order-panel-header">
+          <span>📋 Active Orders</span>
+          <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
+        </div>
+        <div id="order-list" class="order-list"></div>
+      </div>
     </div>
   </div>
 

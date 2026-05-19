@@ -1,6 +1,8 @@
 /**
  * future_chart.js — OMXS30 continuous future chart (single panel).
  * Extends PACChartApp from chart_core.js.
+ *
+ * Trading controls call /ibkr/* endpoints (separate from Avanza /trade/*).
  */
 class FutureChartApp extends PACChartApp {
   constructor() {
@@ -8,14 +10,13 @@ class FutureChartApp extends PACChartApp {
     window.PAC_TRADING_STATE = { futureInstrument: null };
     this.chartFuture = this.createChartManager("chart-future", { toolTipId: "chart-ohlc-info-future" });
     this.instrumentMapFlat = null;
+    this._orderPollTimer = null;
   }
 
   getStatusChartManager() { return this.chartFuture; }
 
   // ── Initialization ────────────────────────────────────────────────
   async initialize() {
-    // Backend is the single source of truth for the active OMXS30 future.
-    // /active_future returns: { key, name, orderbookId, timezone, market_open, market_close }
     const res = await fetch("/active_future");
     if (!res.ok) throw new Error("active_future fetch failed: " + res.status);
     const info = await res.json();
@@ -27,7 +28,6 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
-    // Build a minimal flat map so chart_core's setSessionConfig / loadHistoryForInstrument work
     this.instrumentMapFlat = {
       [futureKey]: {
         name: info.name,
@@ -47,6 +47,12 @@ class FutureChartApp extends PACChartApp {
 
   // ── WebSocket message handler ─────────────────────────────────────
   handleWsMessage(msg) {
+    // Handle order update broadcasts from backend
+    if (msg.type === "order_update" && msg.orders) {
+      this._renderOrders(msg.orders);
+      return;
+    }
+
     if (msg.instrument !== window.PAC_TRADING_STATE.futureInstrument || !msg.bar) return;
 
     const t = this.isoToLWTime(msg.bar.start_time);
@@ -63,28 +69,152 @@ class FutureChartApp extends PACChartApp {
     this._applyEMAFromMsg(this.chartFuture, msg);
   }
 
-  // ── Trading Controls (stubs — real logic will be in future trading.js) ──
+  // ── Helper: call API endpoint ─────────────────────────────────────
+  async _callApi(endpoint, payload, method = "POST") {
+    try {
+      const opts = { method, headers: { "Content-Type": "application/json" } };
+      if (method !== "GET") opts.body = JSON.stringify(payload);
+      const res = await fetch(endpoint, opts);
+      const text = await res.text();
+      if (!res.ok) {
+        console.error("[ibkr] Failed", res.status, text);
+        return null;
+      }
+      return JSON.parse(text);
+    } catch (e) {
+      console.error("[ibkr] Request error", e);
+      return null;
+    }
+  }
+
+  // ── Trading Controls (IBKR via /ibkr/* endpoints) ─────────────────
   _initTradingControls() {
     const instrument = () => window.PAC_TRADING_STATE.futureInstrument;
-    const pct = () => parseFloat(document.getElementById("order-percentage-future").value) || 15;
+    const contracts = () => parseInt(document.getElementById("order-contracts-future").value) || 1;
 
-    const stub = (label) => () => this._log(`[stub] ${label} — instrument: ${instrument()}, pct: ${pct()}%`);
-
-    const bindings = {
-      "btn-buy-stop-future": stub("Buy Stop"),
-      "btn-cancel-buy-stop-future": stub("Cancel Buy Stop"),
-      "btn-sell-stop-future": stub("Sell Stop"),
-      "btn-cancel-sell-stop-future": stub("Cancel Sell Stop"),
-      "btn-late-buy-stop-future": stub("Late Buy Stop"),
-      "btn-late-sell-stop-future": stub("Late Sell Stop"),
-      "btn-delete-stop-losses-future": stub("Delete Stop Losses"),
-      "btn-market-buy-future": stub("Market Buy"),
-      "btn-market-sell-future": stub("Market Sell"),
+    // Bind stop/market buttons — these call existing /trade/* endpoints
+    // (which the backend routes to IbkrTrading when that's the active trading instance)
+    const bind = (id, endpoint, needsContracts) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("click", async () => {
+        const iid = instrument();
+        if (!iid) return;
+        const payload = { instrumentId: iid };
+        if (needsContracts) payload.percentage = contracts(); // percentage repurposed as contracts
+        const res = await this._callApi(endpoint, payload);
+        if (res) {
+          console.log("[ibkr] OK:", res);
+          this._refreshOrders();
+        }
+      });
     };
 
-    for (const [id, handler] of Object.entries(bindings)) {
-      const el = document.getElementById(id);
-      if (el) el.addEventListener("click", handler);
+    bind("btn-buy-stop-future", "/ibkr/buy_stop", true);
+    bind("btn-cancel-buy-stop-future", "/ibkr/cancel_buy_stop", false);
+    bind("btn-sell-stop-future", "/ibkr/sell_stop", true);
+    bind("btn-cancel-sell-stop-future", "/ibkr/cancel_sell_stop", false);
+    bind("btn-late-buy-stop-future", "/ibkr/late_buy_stop", true);
+    bind("btn-late-sell-stop-future", "/ibkr/late_sell_stop", true);
+    bind("btn-delete-stop-losses-future", "/ibkr/delete_stop_losses", false);
+    bind("btn-market-buy-future", "/ibkr/market_buy", true);
+    bind("btn-market-sell-future", "/ibkr/market_sell", true);
+
+    // OCA Bracket button — calls new /ibkr/ endpoint
+    const ocaBtn = document.getElementById("btn-place-oca");
+    if (ocaBtn) {
+      ocaBtn.addEventListener("click", async () => {
+        const action = document.getElementById("oca-action").value;
+        const volume = contracts();
+        const limitPrice = parseFloat(document.getElementById("oca-limit-price").value);
+        const stopPrice = parseFloat(document.getElementById("oca-stop-price").value);
+        if (!limitPrice || !stopPrice) {
+          console.warn("[ibkr] OCA: need limit and stop prices");
+          return;
+        }
+        const res = await this._callApi("/ibkr/place_oca_bracket", {
+          action, volume, limitPrice, stopPrice,
+        });
+        if (res) {
+          console.log("[ibkr] OCA placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
+    // Refresh orders button
+    const refreshBtn = document.getElementById("btn-refresh-orders");
+    if (refreshBtn) refreshBtn.addEventListener("click", () => this._refreshOrders());
+
+    // Initial load + periodic polling
+    this._refreshOrders();
+    this._orderPollTimer = setInterval(() => this._refreshOrders(), 5000);
+  }
+
+  // ── Order Lifecycle Panel ─────────────────────────────────────────
+  async _refreshOrders() {
+    const res = await this._callApi("/ibkr/open_orders", null, "GET");
+    if (res && res.orders) this._renderOrders(res.orders);
+  }
+
+  _renderOrders(orders) {
+    const container = document.getElementById("order-list");
+    if (!container) return;
+
+    if (!orders || orders.length === 0) {
+      container.innerHTML = '<div class="order-empty">No active orders</div>';
+      return;
+    }
+
+    container.innerHTML = orders.map(o => {
+      const actionCls = o.action === "BUY" ? "tag-buy" : "tag-sell";
+      const priceVal = o.price != null ? o.price : "";
+      const isMkt = o.orderType === "MKT";
+      const parentInfo = o.parentId ? `<span style="color:#555;">P:${o.parentId}</span>` : "";
+      const ocaInfo = o.ocaGroup ? `<span style="color:#555;">OCA</span>` : "";
+
+      return `<div class="order-row" data-order-id="${o.orderId}">
+        <span class="tag ${actionCls}">${o.action}</span>
+        <span class="tag tag-type">${o.orderType}</span>
+        <span style="color:#888;">×${o.totalQuantity}</span>
+        ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
+          `<input type="number" class="order-price-input" value="${priceVal}" step="0.25" data-oid="${o.orderId}" />`}
+        <span style="color:#555;">${o.status}</span>
+        ${parentInfo}${ocaInfo}
+        <span style="flex:1;"></span>
+        ${!isMkt ? `<button class="order-btn" onclick="_futureApp._editOrderPrice(${o.orderId}, this)">✏️</button>` : ""}
+        ${!isMkt ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
+        <button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>
+      </div>`;
+    }).join("");
+  }
+
+  async _editOrderPrice(orderId, btn) {
+    const row = btn.closest(".order-row");
+    const input = row.querySelector(`.order-price-input[data-oid="${orderId}"]`);
+    if (!input) return;
+    const price = parseFloat(input.value);
+    if (!price || isNaN(price)) return;
+    const res = await this._callApi("/ibkr/edit_order", { orderId, price });
+    if (res) {
+      console.log("[ibkr] Edited:", res);
+      this._refreshOrders();
+    }
+  }
+
+  async _toMarket(orderId) {
+    const res = await this._callApi("/ibkr/edit_order_follow_market", { orderId });
+    if (res) {
+      console.log("[ibkr] Converted to market:", res);
+      this._refreshOrders();
+    }
+  }
+
+  async _cancelOrder(orderId) {
+    const res = await this._callApi("/ibkr/cancel_order", { orderId });
+    if (res) {
+      console.log("[ibkr] Cancelled:", res);
+      this._refreshOrders();
     }
   }
 }

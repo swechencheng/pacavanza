@@ -67,10 +67,14 @@ def create_app(
     redis_url="redis://localhost:6379/0",
     redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     static_html_path: str | Path = STATIC_HTML,
+    ibkr_conn=None,
 ):
     """
     Create FastAPI app. Uses lifespan async context manager to start/stop background
     Redis subscriber task and to close the redis client cleanly (uses aclose()).
+
+    Args:
+        ibkr_conn: Optional (ib, contract) tuple from ib_async for IBKR trading.
     """
     # redis client (async)
     redis_client = aioredis.from_url(redis_url)
@@ -118,7 +122,7 @@ def create_app(
             active_future_info = {"key": key, **meta}
             # also register in instrument_list so /history and trading endpoints can serve it
             instrument_list.update(flat_active)
-            LOGGER.info(f"Loaded active future: {key} ({meta.get('name', '')}")
+            LOGGER.info(f"Loaded active future: {key} ({meta.get('name', '')})")
     except Exception as e:
         LOGGER.warning("Could not fetch active future: %s", e)
 
@@ -160,6 +164,99 @@ def create_app(
         bars_map_lock=recent_bars_locks_map_lock,
         metadata_map_lock=metadata_locks_map_lock,
     )
+
+    # instantiate IbkrTrading (if IBKR connection is available)
+    # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
+    # so that Avanza SSE price updates don't corrupt IBKR bar data.
+    ibkr_trading = None
+    if ibkr_conn is not None:
+        try:
+            from pacavanza.modules.ibkr_trading import IbkrTrading
+
+            ib, contract = ibkr_conn
+
+            # Build separate bar storage for the active future only
+            ibkr_recent_bars: Dict[str, List[Dict[str, Any]]] = {}
+            if active_future_info:
+                future_key = active_future_info.get("key")
+                if future_key:
+                    # RTH filter: only keep bars within market hours
+                    from zoneinfo import ZoneInfo
+
+                    tz_name = active_future_info.get("timezone", "Europe/Stockholm")
+                    market_open_str = active_future_info.get("market_open", "09:00")
+                    market_close_str = active_future_info.get("market_close", "17:45")
+                    zone = ZoneInfo(tz_name)
+                    oh, om = (int(x) for x in market_open_str.split(":"))
+                    ch, cm = (int(x) for x in market_close_str.split(":"))
+
+                    def _is_rth(utc_time):
+                        """Return True if utc_time is within regular trading hours."""
+                        local = utc_time.astimezone(zone)
+                        t = (local.hour, local.minute)
+                        return (oh, om) <= t < (ch, cm)
+
+                    ibkr_recent_bars[future_key] = []
+                    data_file = f"ohlc_{future_key}.json"
+                    skipped = 0
+                    try:
+                        with open(data_file, "r") as f:
+                            data = json.load(f)
+                        for bar in data:
+                            start = datetime.fromisoformat(bar["start_time"])
+                            end = datetime.fromisoformat(bar["end_time"])
+                            if start.tzinfo is None:
+                                start = start.replace(tzinfo=timezone.utc)
+                            else:
+                                start = start.astimezone(timezone.utc)
+                            if end.tzinfo is None:
+                                end = end.replace(tzinfo=timezone.utc)
+                            else:
+                                end = end.astimezone(timezone.utc)
+                            bar["start_time"] = start
+                            bar["end_time"] = end
+                            # Skip bars outside RTH
+                            if not _is_rth(start):
+                                skipped += 1
+                                continue
+                            # Skip dirty in-progress bars (duration >> interval)
+                            if (end - start).total_seconds() > 600:
+                                skipped += 1
+                                continue
+                            ibkr_recent_bars[future_key].append(bar)
+                        LOGGER.info(
+                            f"[IBKR] Loaded {len(ibkr_recent_bars[future_key])} "
+                            f"RTH bars for {future_key} "
+                            f"(filtered {skipped} out-of-hours)"
+                        )
+                    except FileNotFoundError:
+                        LOGGER.info(f"[IBKR] No data file {data_file}")
+                    except Exception as e:
+                        LOGGER.error(f"[IBKR] Failed to load bars: {e}")
+
+            # Separate locks for IBKR bars
+            ibkr_bars_locks: Dict[str, asyncio.Lock] = {}
+            ibkr_bars_locks_map_lock = asyncio.Lock()
+            ibkr_metadata: Dict[str, Dict[str, Any]] = {}
+            ibkr_metadata_locks: Dict[str, asyncio.Lock] = {}
+            ibkr_metadata_locks_map_lock = asyncio.Lock()
+
+            ibkr_trading = IbkrTrading(
+                ib=ib,
+                contract=contract,
+                recent_bars=ibkr_recent_bars,
+                instrument_list=instrument_list,
+                metadata=ibkr_metadata,
+                logger=LOGGER,
+                bars_locks_map=ibkr_bars_locks,
+                metadata_locks_map=ibkr_metadata_locks,
+                bars_map_lock=ibkr_bars_locks_map_lock,
+                metadata_map_lock=ibkr_metadata_locks_map_lock,
+            )
+            LOGGER.info("IbkrTrading instance created successfully")
+        except Exception as e:
+            LOGGER.warning(f"Failed to create IbkrTrading: {e}")
+            ibkr_trading = None
 
     # Background task: subscribe to redis channel and forward events
     async def _redis_subscriber_task():
@@ -312,6 +409,34 @@ def create_app(
                 if len(lst) > 1500:
                     lst[:] = lst[-1500:]
 
+            # Also mirror to ibkr_recent_bars if this is the active future
+            if ibkr_trading is not None and sid in ibkr_trading.recent_bars:
+                ibkr_lst = ibkr_trading.recent_bars[sid]
+                if not ibkr_lst or ibkr_lst[-1]["start_time"] != ts:
+                    ibkr_lst.append(
+                        {
+                            "start_time": ts,
+                            "end_time": datetime.fromisoformat(bar["end_time"]),
+                            "open": bar["open"],
+                            "high": bar["high"],
+                            "low": bar["low"],
+                            "close": bar["close"],
+                            "volume": bar.get("volume", 0),
+                        }
+                    )
+                else:
+                    ibkr_lst[-1].update(
+                        {
+                            "open": bar["open"],
+                            "high": bar["high"],
+                            "low": bar["low"],
+                            "close": bar["close"],
+                            "volume": bar.get("volume", 0),
+                        }
+                    )
+                if len(ibkr_lst) > 1500:
+                    ibkr_lst[:] = ibkr_lst[-1500:]
+
             # compute incremental EMA updates (fast) - uses the global recent_bars dict; reading latest snapshot is fine
             emas = {}
             for L in (20, 50, 100, 220):
@@ -364,6 +489,44 @@ def create_app(
                 if len(lst) > 1500:
                     lst[:] = lst[-1500:]
 
+            # Also mirror completed bar to ibkr_recent_bars
+            if ibkr_trading is not None and sid in ibkr_trading.recent_bars:
+                ibkr_lst = ibkr_trading.recent_bars[sid]
+                found = False
+                for i in range(len(ibkr_lst) - 1, -1, -1):
+                    b = ibkr_lst[i]
+                    bstart = b["start_time"]
+                    if bstart.tzinfo is None:
+                        bstart = bstart.replace(tzinfo=timezone.utc)
+                    if bstart == ts:
+                        ibkr_lst[i].update(
+                            {
+                                "start_time": ts,
+                                "end_time": datetime.fromisoformat(bar["end_time"]),
+                                "open": bar["open"],
+                                "high": bar["high"],
+                                "low": bar["low"],
+                                "close": bar["close"],
+                                "volume": bar.get("volume", 0),
+                            }
+                        )
+                        found = True
+                        break
+                if not found:
+                    ibkr_lst.append(
+                        {
+                            "start_time": ts,
+                            "end_time": datetime.fromisoformat(bar["end_time"]),
+                            "open": bar["open"],
+                            "high": bar["high"],
+                            "low": bar["low"],
+                            "close": bar["close"],
+                            "volume": bar.get("volume", 0),
+                        }
+                    )
+                if len(ibkr_lst) > 1500:
+                    ibkr_lst[:] = ibkr_lst[-1500:]
+
             # recompute EMAs using incremental update with the finalized close
             emas = {}
             for L in (20, 50, 100, 220):
@@ -383,15 +546,42 @@ def create_app(
             }
             await manager.broadcast(out)
 
+    # Background task: pump ib_async event loop so openTrades()/events stay current
+    async def _ibkr_event_pump():
+        """Periodically pump ib_async event loop to process TWS messages."""
+        if ibkr_trading is None:
+            return
+        ib = ibkr_trading.ib
+        LOGGER.info("Starting IBKR event pump task")
+        try:
+            while True:
+                try:
+                    ib.sleep(0)  # process pending IB events without blocking
+                except Exception as e:
+                    LOGGER.debug(f"IBKR event pump error: {e}")
+                await asyncio.sleep(0.1)  # 100ms cycle
+        except asyncio.CancelledError:
+            LOGGER.info("IBKR event pump task cancelled (normal shutdown)")
+
     # Lifespan context manager: start subscriber on startup and close on shutdown
     @asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
         # start subscriber task in background
         app.state._redis_task = asyncio.create_task(_redis_subscriber_task())
+        # start IBKR event pump if connected
+        app.state._ibkr_pump_task = asyncio.create_task(_ibkr_event_pump())
         LOGGER.info("FastAPI Redis WS app started (lifespan)")
         try:
             yield
         finally:
+            # cancel IBKR event pump
+            ibkr_pump = getattr(app.state, "_ibkr_pump_task", None)
+            if ibkr_pump:
+                ibkr_pump.cancel()
+                try:
+                    await ibkr_pump
+                except asyncio.CancelledError:
+                    pass
             # cancel and await subscriber task
             task = getattr(app.state, "_redis_task", None)
             if task:
@@ -411,6 +601,12 @@ def create_app(
                 await redis_client.aclose()
             except Exception:
                 pass
+            # disconnect IBKR if connected
+            if ibkr_trading is not None:
+                try:
+                    ibkr_trading.ib.disconnect()
+                except Exception:
+                    pass
             LOGGER.info("FastAPI Redis WS app stopped (lifespan)")
 
     # create app with lifespan
@@ -831,14 +1027,326 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok"})
 
+    # ══════════════════════════════════════════════════════════════════════
+    # IBKR-specific trading endpoints (prefixed /ibkr/)
+    # These use the separate ibkr_trading instance passed to create_app().
+    # They do NOT modify any existing /trade/* Avanza endpoints above.
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _require_ibkr():
+        """Raise 501 if no ibkr_trading instance is available."""
+        if ibkr_trading is None:
+            raise HTTPException(
+                status_code=501,
+                detail="IBKR trading not active",
+            )
+
+    # ── IBKR stop/market/cancel endpoints (mirror /trade/* but use ibkr_trading) ──
+
+    @app.post("/ibkr/market_buy")
+    async def ibkr_market_buy(req: Request):
+        """Place a market buy order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
+            raise HTTPException(
+                status_code=400, detail="instrumentId and percentage required"
+            )
+        try:
+            order = await ibkr_trading.place_market_buy(instrument_id, percentage)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
+    @app.post("/ibkr/market_sell")
+    async def ibkr_market_sell(req: Request):
+        """Place a market sell order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            num_contracts = int(percentage) if percentage is not None else None
+            order = await ibkr_trading.place_market_sell(
+                instrument_id, number_of_contracts=num_contracts
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
+    @app.post("/ibkr/buy_stop")
+    async def ibkr_buy_stop(req: Request):
+        """Schedule a buy stop order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
+            raise HTTPException(
+                status_code=400, detail="instrumentId and percentage required"
+            )
+        try:
+            res = await ibkr_trading.schedule_buy_stop(instrument_id, percentage)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/late_buy_stop")
+    async def ibkr_late_buy_stop(req: Request):
+        """Place a late buy stop order immediately via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id or percentage is None:
+            raise HTTPException(
+                status_code=400, detail="instrumentId and percentage required"
+            )
+        try:
+            res = await ibkr_trading.late_buy_stop(instrument_id, percentage)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/sell_stop")
+    async def ibkr_sell_stop(req: Request):
+        """Schedule a sell stop order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            num_contracts = int(percentage) if percentage is not None else None
+            res = await ibkr_trading.schedule_sell_stop(
+                instrument_id, number_of_contracts=num_contracts
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/late_sell_stop")
+    async def ibkr_late_sell_stop(req: Request):
+        """Place a late sell stop order immediately via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        percentage = body.get("percentage")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            num_contracts = int(percentage) if percentage is not None else None
+            res = await ibkr_trading.late_sell_stop(
+                instrument_id, number_of_contracts=num_contracts
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/cancel_buy_stop")
+    async def ibkr_cancel_buy_stop(req: Request):
+        """Cancel a scheduled buy_stop via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            res = await ibkr_trading.cancel_buy_stop(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/cancel_sell_stop")
+    async def ibkr_cancel_sell_stop(req: Request):
+        """Cancel a scheduled sell_stop via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            res = await ibkr_trading.cancel_sell_stop(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=res)
+
+    @app.post("/ibkr/delete_stop_losses")
+    async def ibkr_delete_stop_losses(req: Request):
+        """Delete stop losses via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            ibkr_trading.delete_stop_losses(instrument_id)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok"})
+
+    # ── IBKR order management endpoints ──
+
+    @app.post("/ibkr/edit_order")
+    async def ibkr_edit_order(req: Request):
+        """
+        Edit the price of an existing IBKR order (non-market).
+        Accepts: { orderId: int, price: float }
+        """
+        _require_ibkr()
+        body = await req.json()
+        order_id = body.get("orderId")
+        price = body.get("price")
+        if order_id is None or price is None:
+            raise HTTPException(status_code=400, detail="orderId and price required")
+        try:
+            result = ibkr_trading.edit_order(order_id=int(order_id), price=float(price))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
+    @app.post("/ibkr/edit_order_follow_market")
+    async def ibkr_edit_order_follow_market(req: Request):
+        """
+        Convert an existing IBKR order to a market order.
+        Accepts: { orderId: int }
+        """
+        _require_ibkr()
+        body = await req.json()
+        order_id = body.get("orderId")
+        if order_id is None:
+            raise HTTPException(status_code=400, detail="orderId required")
+        try:
+            result = ibkr_trading.edit_order_follow_market(order_id=int(order_id))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
+    @app.post("/ibkr/place_oca_bracket")
+    async def ibkr_place_oca_bracket(req: Request):
+        """
+        Place an OCA bracket (SL + TP) with explicit prices.
+        Accepts: { action: str, volume: int, limitPrice: float, stopPrice: float }
+        """
+        _require_ibkr()
+        body = await req.json()
+        action = body.get("action")
+        volume = body.get("volume")
+        limit_price = body.get("limitPrice")
+        stop_price = body.get("stopPrice")
+        if not action or volume is None or limit_price is None or stop_price is None:
+            raise HTTPException(
+                status_code=400,
+                detail="action, volume, limitPrice, and stopPrice required",
+            )
+        try:
+            result = ibkr_trading.place_oca_bracket(
+                action=action,
+                volume=int(volume),
+                limit_price=float(limit_price),
+                stop_price=float(stop_price),
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
+    @app.get("/ibkr/open_orders")
+    async def ibkr_open_orders():
+        """Return all active orders for the IBKR contract."""
+        if ibkr_trading is None:
+            return JSONResponse(content={"orders": []})
+        try:
+            orders = ibkr_trading.get_open_orders()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"orders": orders})
+
+    @app.post("/ibkr/cancel_order")
+    async def ibkr_cancel_order(req: Request):
+        """
+        Cancel a specific IBKR order by orderId.
+        Accepts: { orderId: int }
+        """
+        _require_ibkr()
+        body = await req.json()
+        order_id = body.get("orderId")
+        if order_id is None:
+            raise HTTPException(status_code=400, detail="orderId required")
+        try:
+            result = ibkr_trading.cancel_order(order_id=int(order_id))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
+    # Setup trade event subscription to broadcast order changes via WebSocket
+    def _on_order_change(orders_snapshot):
+        """Broadcast order updates to all connected WebSocket clients."""
+
+        async def _broadcast():
+            await manager.broadcast(
+                {
+                    "type": "order_update",
+                    "orders": orders_snapshot,
+                }
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_broadcast())
+        except RuntimeError:
+            pass
+
+    if ibkr_trading is not None and hasattr(ibkr_trading, "_setup_trade_subscription"):
+        try:
+            ibkr_trading._setup_trade_subscription(
+                on_change_callback=_on_order_change
+            )
+        except Exception:
+            LOGGER.warning(
+                "Could not setup IBKR trade subscription"
+            )
+
     return app
 
 
 def main():
     # run as: python -m pacavanza.backend.main
+
+    # Try to create an IbkrTrading instance for the future chart
+    ibkr_inst = None
+    try:
+        from ib_async import IB, ContFuture
+        from pacavanza.modules.ibkr_trading import IbkrTrading
+
+        ib = IB()
+        ib.connect("127.0.0.1", 7497, clientId=50)
+
+        contract = ContFuture("OMXS30", "OMS")
+        ib.qualifyContracts(contract)
+        LOGGER.info(
+            f"IBKR connected: conId={contract.conId}, "
+            f"localSymbol={contract.localSymbol}"
+        )
+
+        # IbkrTrading shares recent_bars/instrument_list with AvanzaTrading
+        # but they are populated inside create_app. So we create a minimal
+        # instance here and it will be wired up after create_app populates
+        # the in-memory state.
+        ibkr_inst = (ib, contract)
+    except Exception as e:
+        LOGGER.warning(f"Could not connect to IBKR: {e}. IBKR endpoints disabled.")
+
+    # Build the app — AvanzaTrading is always created internally.
+    # ibkr_trading is created using shared state from inside create_app.
     app = create_app(
         redis_url="redis://localhost:6379/0",
         redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
+        ibkr_conn=ibkr_inst,
     )
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
 
