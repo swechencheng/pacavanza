@@ -70,7 +70,7 @@ class FutureChartApp extends PACChartApp {
   }
 
   // ── Helper: call API endpoint ─────────────────────────────────────
-  async _callApi(endpoint, payload, method = "POST") {
+  async _callApi(endpoint, payload, method = "POST", alertOnError = false) {
     try {
       const opts = { method, headers: { "Content-Type": "application/json" } };
       if (method !== "GET") opts.body = JSON.stringify(payload);
@@ -78,11 +78,24 @@ class FutureChartApp extends PACChartApp {
       const text = await res.text();
       if (!res.ok) {
         console.error("[ibkr] Failed", res.status, text);
+        let errMsg = text;
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && parsed.detail) {
+            errMsg = parsed.detail;
+          }
+        } catch (_) {}
+        if (alertOnError) {
+          alert(`Error: ${errMsg}`);
+        }
         return null;
       }
       return JSON.parse(text);
     } catch (e) {
       console.error("[ibkr] Request error", e);
+      if (alertOnError) {
+        alert(`Request Error: ${e.message}`);
+      }
       return null;
     }
   }
@@ -128,13 +141,25 @@ class FutureChartApp extends PACChartApp {
         const volume = contracts();
         const limitPrice = parseFloat(document.getElementById("oca-limit-price").value);
         const stopPrice = parseFloat(document.getElementById("oca-stop-price").value);
-        if (!limitPrice || !stopPrice) {
-          console.warn("[ibkr] OCA: need limit and stop prices");
+        if (isNaN(limitPrice) || isNaN(stopPrice)) {
+          alert("OCA: Both Limit (TP) and Stop (SL) prices are required.");
+          return;
+        }
+        if (limitPrice === stopPrice) {
+          alert("OCA: Limit (TP) and Stop (SL) prices cannot be equal.");
+          return;
+        }
+        if (limitPrice > stopPrice && action !== "SELL") {
+          alert("TP is greater than SL: Action must be S (SELL) to close a long position.");
+          return;
+        }
+        if (limitPrice < stopPrice && action !== "BUY") {
+          alert("TP is smaller than SL: Action must be B (BUY) to close a short position.");
           return;
         }
         const res = await this._callApi("/ibkr/place_oca_bracket", {
           action, volume, limitPrice, stopPrice,
-        });
+        }, "POST", true);
         if (res) {
           console.log("[ibkr] OCA placed:", res);
           this._refreshOrders();

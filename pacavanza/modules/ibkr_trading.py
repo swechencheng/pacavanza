@@ -788,6 +788,19 @@ class IbkrTrading(BaseAvanzaTrading):
         Returns:
             Dict with order IDs and OCA group name.
         """
+        # Check active position
+        pos_size = self._get_instrument_position_size("")
+        if pos_size == 0:
+            raise Exception("No active position found. OCA bracket is not allowed when flat.")
+
+        # Check TP/SL relationship and action
+        if limit_price == stop_price:
+            raise Exception("Limit (TP) and Stop (SL) prices cannot be equal.")
+        if limit_price > stop_price and action != "SELL":
+            raise Exception("TP is greater than SL: Action must be SELL (closing a long position).")
+        if limit_price < stop_price and action != "BUY":
+            raise Exception("TP is smaller than SL: Action must be BUY (closing a short position).")
+
         tp_order = LimitOrder(action, volume, limit_price)
         sl_order = StopOrder(action, volume, stop_price)
 
