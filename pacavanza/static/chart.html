@@ -82,7 +82,7 @@
     }
 
     .volume-input {
-      width: 60px;
+      width: 40px;
       background: #0f172a;
       border: 1px solid #333;
       color: #ddd;
@@ -352,17 +352,19 @@
         <label style="font-size:11px; color:#888;">OCA:</label>
         <label style="font-size:11px;">
           <span class="sell">SL</span>
-          <input type="number" id="oca-stop-price" value="" step="0.25" class="volume-input" placeholder="Stop" />
+          <input type="number" id="oca-stop-price" value="" step="0.25" class="volume-input" style="width:80px;"
+            placeholder="Stop" />
         </label>
         <label style="font-size:11px;">
           <span class="buy">TP</span>
-          <input type="number" id="oca-limit-price" value="" step="0.25" class="volume-input" placeholder="Limit" />
+          <input type="number" id="oca-limit-price" value="" step="0.25" class="volume-input" style="width:80px;"
+            placeholder="Limit" />
         </label>
-        <select id="oca-action" class="volume-input" style="width:65px;">
-          <option value="SELL">SELL</option>
-          <option value="BUY">BUY</option>
+        <select id="oca-action" class="volume-input" style="width:40px;">
+          <option value="SELL"><span class="sell">S</span></option>
+          <option value="BUY"><span class="buy">B</span></option>
         </select>
-        <button id="btn-place-oca">📎 OCA</button>
+        <button id="btn-place-oca">📎</button>
       </div>
       <div id="chart-future" class="chart-container"></div>
       <!-- Order Lifecycle Panel -->
