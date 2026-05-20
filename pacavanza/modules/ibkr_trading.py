@@ -1053,7 +1053,23 @@ class IbkrTrading(BaseAvanzaTrading):
         trade.orderStatus.status = "Cancelled"
         LOGGER.info(f"Cancelled order {order_id}")
 
-        return {"orderId": order_id, "status": "cancel_requested"}
+    def get_position_info(self) -> Optional[Dict[str, Any]]:
+        """Return the current active position size and average cost for the contract."""
+        positions = self.ib.positions()
+        for pos in positions:
+            if pos.contract.conId == self.contract.conId:
+                try:
+                    mult = float(self.contract.multiplier) if self.contract.multiplier else 1.0
+                except (ValueError, TypeError):
+                    mult = 1.0
+                if mult <= 0:
+                    mult = 1.0
+                price = pos.avgCost / mult if pos.avgCost else 0.0
+                return {
+                    "position": int(pos.position),
+                    "avgCost": price
+                }
+        return None
 
     # --------------------------------------------------------------------------
     # Override: Avanza-specific account/position methods

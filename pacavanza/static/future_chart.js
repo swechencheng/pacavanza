@@ -12,6 +12,7 @@ class FutureChartApp extends PACChartApp {
     this.instrumentMapFlat = null;
     this._orderPollTimer = null;
     this._orderDrawingIds = [];
+    this._currentPosition = null;
 
     // Global error trackers for remote backend logging
     window.addEventListener("error", (e) => {
@@ -87,6 +88,9 @@ class FutureChartApp extends PACChartApp {
   handleWsMessage(msg) {
     // Handle order update broadcasts from backend
     if (msg.type === "order_update" && msg.orders) {
+      if (msg.position !== undefined) {
+        this._currentPosition = msg.position;
+      }
       this._renderOrders(msg.orders);
       return;
     }
@@ -257,7 +261,14 @@ class FutureChartApp extends PACChartApp {
   // ── Order Lifecycle Panel ─────────────────────────────────────────
   async _refreshOrders() {
     const res = await this._callApi("/ibkr/open_orders", null, "GET");
-    if (res && res.orders) this._renderOrders(res.orders);
+    if (res) {
+      if (res.position !== undefined) {
+        this._currentPosition = res.position;
+      }
+      if (res.orders) {
+        this._renderOrders(res.orders);
+      }
+    }
   }
 
   _renderOrders(orders) {
@@ -430,69 +441,104 @@ class FutureChartApp extends PACChartApp {
     });
 
     // ── 2. OCA orders ──
-    const ocaGroupToOrders = {};
-    activeOrders.forEach(o => {
-      if (o.ocaGroup && !processedOrderIds.has(o.orderId)) {
-        if (!ocaGroupToOrders[o.ocaGroup]) {
-          ocaGroupToOrders[o.ocaGroup] = [];
+    const ocaGroupToAllOrders = {};
+    orders.forEach(o => {
+      if (o.ocaGroup) {
+        if (!ocaGroupToAllOrders[o.ocaGroup]) {
+          ocaGroupToAllOrders[o.ocaGroup] = [];
         }
-        ocaGroupToOrders[o.ocaGroup].push(o);
+        ocaGroupToAllOrders[o.ocaGroup].push(o);
       }
     });
 
-    for (const ocaGroupId in ocaGroupToOrders) {
-      const ocaOrders = ocaGroupToOrders[ocaGroupId];
-      if (ocaOrders.length >= 2) {
-        const prices = ocaOrders.map(o => o.price).filter(p => p != null);
-        if (prices.length === 0) continue;
-        const upperPrice = Math.max(...prices);
-        const lowerPrice = Math.min(...prices);
+    for (const ocaGroupId in ocaGroupToAllOrders) {
+      const ocaOrders = ocaGroupToAllOrders[ocaGroupId];
 
-        const times = ocaOrders.map(o => o.placedTime).filter(t => t != null);
-        const earliestPlacedTime = times.length > 0 ? times.reduce((a, b) => a < b ? a : b) : null;
-        const leftBarTime = getBarTimeForOrder(earliestPlacedTime);
+      // Only draw if at least one order in the OCA group is active (not done)
+      // and not already processed by bracket logic
+      const activeOcaOrders = ocaOrders.filter(o => !o.isDone && !processedOrderIds.has(o.orderId));
+      if (activeOcaOrders.length === 0) continue;
 
-        if (leftBarTime !== null) {
-          const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
-          const leftIndex = allTimes.indexOf(leftBarTime);
-          let rightBarTime;
-          if (leftIndex !== -1 && leftIndex + 20 < allTimes.length) {
-            rightBarTime = allTimes[leftIndex + 20];
-          } else {
-            rightBarTime = leftBarTime + 20 * this.INTERVAL_SECONDS;
-          }
+      // We need at least 2 orders in the OCA group (TP and SL) to determine upper and lower prices
+      const prices = ocaOrders.map(o => o.price).filter(p => p != null);
+      if (prices.length < 2) continue;
 
-          const id = `order-oca-${ocaGroupId}`;
-          const anchors = [
-            { time: leftBarTime, price: upperPrice },
-            { time: rightBarTime, price: lowerPrice }
-          ];
-          const style = {
-            lineColor: '#ff9800',
-            lineWidth: 1.5,
-            fillColor: 'rgba(255, 152, 0, 0.1)'
-          };
-          const opts = {
-            filled: true,
-            showDimensions: false
-          };
+      const upperPrice = Math.max(...prices);
+      const lowerPrice = Math.min(...prices);
 
-          this._remoteLog("INFO", `Attempting to create OCA drawing rectangle for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
-          try {
-            const drawing = cm.toolRegistry.createDrawing('rectangle', id, anchors, style, opts);
-            if (drawing) {
-              cm.drawingManager.addDrawing(drawing);
-              this._orderDrawingIds.push(id);
-              this._remoteLog("INFO", `Successfully added OCA drawing ${id}`);
-            } else {
-              this._remoteLog("WARN", `createDrawing returned null for OCA rectangle`);
-            }
-          } catch (err) {
-            this._remoteLog("ERROR", `Failed to create OCA drawing rectangle: ${err.message}\nStack: ${err.stack}`);
-          }
+      const times = ocaOrders.map(o => o.placedTime).filter(t => t != null);
+      const earliestPlacedTime = times.length > 0 ? times.reduce((a, b) => a < b ? a : b) : null;
+      const leftBarTime = getBarTimeForOrder(earliestPlacedTime);
 
-          ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
+      if (leftBarTime !== null) {
+        const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
+        const leftIndex = allTimes.indexOf(leftBarTime);
+        let rightBarTime;
+        if (leftIndex !== -1 && leftIndex + 20 < allTimes.length) {
+          rightBarTime = allTimes[leftIndex + 20];
+        } else {
+          rightBarTime = leftBarTime + 20 * this.INTERVAL_SECONDS;
         }
+
+        // Determine if long or short position drawing should be used
+        let isLong = true;
+        let entryPrice = null;
+
+        // Try using the current active position
+        if (this._currentPosition && this._currentPosition.position !== 0) {
+          isLong = this._currentPosition.position > 0;
+          entryPrice = this._currentPosition.avgCost;
+        } else {
+          // Fallback to OCA orders action (which closes the position)
+          // If action is SELL, the position is Long (isLong = true)
+          // If action is BUY, the position is Short (isLong = false)
+          const firstOca = ocaOrders[0];
+          isLong = (firstOca.action === "SELL");
+
+          // Fallback entry price: last bar's close price or midpoint
+          const lastTime = allTimes[allTimes.length - 1];
+          entryPrice = lastTime ? cm.data.get(lastTime).close : (upperPrice + lowerPrice) / 2;
+        }
+
+        // Long position: TP is upperPrice, SL is lowerPrice
+        // Short position: TP is lowerPrice, SL is upperPrice
+        const slPrice = isLong ? lowerPrice : upperPrice;
+        const tpPrice = isLong ? upperPrice : lowerPrice;
+
+        const toolType = isLong ? "long-position" : "short-position";
+        const id = `order-oca-${ocaGroupId}`;
+        const anchors = [
+          { time: leftBarTime, price: entryPrice },
+          { time: rightBarTime, price: slPrice },
+          { time: rightBarTime, price: tpPrice }
+        ];
+
+        const style = {
+          lineColor: isLong ? "#26A69A" : "#EF5350",
+          lineWidth: 1.5
+        };
+        const opts = {
+          showPrices: true,
+          showPercentage: true,
+          showRiskReward: true
+        };
+
+        this._remoteLog("INFO", `Attempting to create OCA position drawing ${toolType} for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
+        try {
+          const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
+          if (drawing) {
+            cm.drawingManager.addDrawing(drawing);
+            this._orderDrawingIds.push(id);
+            this._remoteLog("INFO", `Successfully added OCA position drawing ${id}`);
+          } else {
+            this._remoteLog("WARN", `createDrawing returned null for OCA position ${toolType}`);
+          }
+        } catch (err) {
+          this._remoteLog("ERROR", `Failed to create OCA position drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
+        }
+
+        // Mark all OCA orders in the group as processed
+        ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
       }
     }
 

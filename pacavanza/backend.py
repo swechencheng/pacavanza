@@ -1330,12 +1330,13 @@ def create_app(
     async def ibkr_open_orders():
         """Return all active orders for the IBKR contract."""
         if ibkr_trading is None:
-            return JSONResponse(content={"orders": []})
+            return JSONResponse(content={"orders": [], "position": None})
         try:
             orders = ibkr_trading.get_open_orders()
+            position = ibkr_trading.get_position_info()
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-        return JSONResponse(content={"orders": orders})
+        return JSONResponse(content={"orders": orders, "position": position})
 
     @app.post("/ibkr/cancel_order")
     async def ibkr_cancel_order(req: Request):
@@ -1357,12 +1358,19 @@ def create_app(
     # Setup trade event subscription to broadcast order changes via WebSocket
     def _on_order_change(orders_snapshot):
         """Broadcast order updates to all connected WebSocket clients."""
+        pos_info = None
+        if ibkr_trading:
+            try:
+                pos_info = ibkr_trading.get_position_info()
+            except Exception:
+                pass
 
         async def _broadcast():
             await manager.broadcast(
                 {
                     "type": "order_update",
                     "orders": orders_snapshot,
+                    "position": pos_info,
                 }
             )
 
