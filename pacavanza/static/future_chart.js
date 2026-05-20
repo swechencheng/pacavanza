@@ -303,7 +303,9 @@ class FutureChartApp extends PACChartApp {
     const cm = this.chartFuture;
     if (!cm || !cm.drawingManager || !cm.toolRegistry) return;
 
-    this._remoteLog("INFO", `_updateOrderDrawings starting. Total orders: ${orders ? orders.length : 0}. Chart data size: ${cm.data ? cm.data.size : 0}`);
+    if (orders && orders.length > 0) {
+      this._remoteLog("INFO", `_updateOrderDrawings starting. Total orders: ${orders.length}. Chart data size: ${cm.data ? cm.data.size : 0}`);
+    }
 
     // 1. Clear previous drawings
     if (this._orderDrawingIds) {
@@ -319,7 +321,7 @@ class FutureChartApp extends PACChartApp {
 
     // If no orders, or chart history is not loaded yet (no data), we don't draw anything
     if (!orders || orders.length === 0 || cm.data.size === 0) {
-      this._remoteLog("INFO", `Skipping drawing sync: orders empty or cm.data empty.`);
+      // this._remoteLog("INFO", `Skipping drawing sync: orders empty or cm.data empty.`);
       return;
     }
 
