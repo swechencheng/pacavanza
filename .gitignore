@@ -4,6 +4,7 @@ __pycache__/
 venv/
 logs/
 pacavanza.egg-info/
+scratch/
 
 .temp
 temp_*.py
