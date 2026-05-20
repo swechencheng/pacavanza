@@ -11,6 +11,24 @@ class FutureChartApp extends PACChartApp {
     this.chartFuture = this.createChartManager("chart-future", { toolTipId: "chart-ohlc-info-future" });
     this.instrumentMapFlat = null;
     this._orderPollTimer = null;
+
+    // Global error trackers for remote backend logging
+    window.addEventListener("error", (e) => {
+      this._remoteLog("ERROR", `Unhandled: ${e.message} at ${e.filename}:${e.lineno}`);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      this._remoteLog("ERROR", `Unhandled rejection: ${e.reason}`);
+    });
+    this._remoteLog("INFO", "FutureChartApp constructor initialized");
+  }
+
+  _remoteLog(level, message) {
+    console.log(`[${level}] ${message}`);
+    fetch("/client_log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ level, message })
+    }).catch(() => { });
   }
 
   getStatusChartManager() { return this.chartFuture; }

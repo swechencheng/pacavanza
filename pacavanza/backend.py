@@ -725,6 +725,22 @@ def create_app(
         except Exception:
             return JSONResponse({"status": "ok", "note": "Static file not available"})
 
+    @app.post("/client_log")
+    async def client_log(req: Request):
+        try:
+            body = await req.json()
+            level = body.get("level", "INFO")
+            message = body.get("message", "")
+            if level == "ERROR":
+                LOGGER.error(f"[Client Console ERROR] {message}")
+            elif level == "WARN":
+                LOGGER.warning(f"[Client Console WARN] {message}")
+            else:
+                LOGGER.info(f"[Client Console INFO] {message}")
+        except Exception as e:
+            LOGGER.error(f"Error handling client log: {e}")
+        return JSONResponse({"status": "ok"})
+
     @app.get("/ava")
     async def ava_index():
         try:
