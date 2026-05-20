@@ -1232,17 +1232,22 @@ def create_app(
     @app.post("/ibkr/edit_order")
     async def ibkr_edit_order(req: Request):
         """
-        Edit the price of an existing IBKR order (non-market).
-        Accepts: { orderId: int, price: float }
+        Edit the price and/or quantity of an existing IBKR order.
+        Accepts: { orderId: int, price: float (optional), quantity: int (optional) }
         """
         _require_ibkr()
         body = await req.json()
         order_id = body.get("orderId")
         price = body.get("price")
-        if order_id is None or price is None:
-            raise HTTPException(status_code=400, detail="orderId and price required")
+        quantity = body.get("quantity")
+        if order_id is None:
+            raise HTTPException(status_code=400, detail="orderId is required")
+        if price is None and quantity is None:
+            raise HTTPException(status_code=400, detail="Either price or quantity must be provided")
         try:
-            result = ibkr_trading.edit_order(order_id=int(order_id), price=float(price))
+            p_val = float(price) if price is not None else None
+            q_val = int(quantity) if quantity is not None else None
+            result = ibkr_trading.edit_order(order_id=int(order_id), price=p_val, quantity=q_val)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})

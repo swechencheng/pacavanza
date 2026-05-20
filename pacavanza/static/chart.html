@@ -276,8 +276,9 @@
       color: #6bebff;
     }
 
-    .order-row .order-price-input {
-      width: 55px;
+    .order-row .order-price-input,
+    .order-row .order-qty-input {
+      width: 45px;
       background: #0f172a;
       border: 1px solid #333;
       color: #ddd;
@@ -286,9 +287,11 @@
       font-size: 10px;
       font-family: monospace;
       outline: none;
+      text-align: center;
     }
 
-    .order-row .order-price-input:focus {
+    .order-row .order-price-input:focus,
+    .order-row .order-qty-input:focus {
       border-color: #4caf50;
     }
 
@@ -328,7 +331,8 @@
       background: rgba(106, 27, 154, 0.18) !important;
     }
 
-    .order-row-fulfilled .order-price-input {
+    .order-row-fulfilled .order-price-input,
+    .order-row-fulfilled .order-qty-input {
       color: #b388ff !important;
       border-color: rgba(179, 136, 255, 0.3) !important;
       background: rgba(106, 27, 154, 0.05) !important;

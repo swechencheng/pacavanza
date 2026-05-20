@@ -297,13 +297,14 @@ class FutureChartApp extends PACChartApp {
       return `<div class="order-row ${fulfilledCls}" data-order-id="${o.orderId}" ${purpleStyle}>
         <span class="tag ${actionCls}">${o.action}</span>
         <span class="tag tag-type">${o.orderType}</span>
-        <span style="color:#888;">×${o.totalQuantity}</span>
+        ${isFulfilled || isDone ? `<span style="color:#888; ${purpleStyle}">×${o.totalQuantity}</span>` :
+          `×<input type="number" class="order-qty-input" value="${o.totalQuantity}" step="1" min="1" data-oid="${o.orderId}" />`}
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
           `<input type="number" class="order-price-input" value="${priceVal}" step="0.25" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
         <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
         ${parentInfo}${ocaInfo}
         <span style="flex:1;"></span>
-        ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrderPrice(${o.orderId}, this)">✏️</button>` : ""}
+        ${(!isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrder(${o.orderId}, this)">✏️</button>` : ""}
         ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
         ${!isDone ? `<button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>` : ""}
       </div>`;
@@ -579,15 +580,30 @@ class FutureChartApp extends PACChartApp {
     });
   }
 
-  async _editOrderPrice(orderId, btn) {
+  async _editOrder(orderId, btn) {
     const row = btn.closest(".order-row");
-    const input = row.querySelector(`.order-price-input[data-oid="${orderId}"]`);
-    if (!input) return;
-    const price = parseFloat(input.value);
-    if (!price || isNaN(price)) return;
-    const res = await this._callApi("/ibkr/edit_order", { orderId, price });
+    
+    // Read price if input exists
+    const priceInput = row.querySelector(`.order-price-input[data-oid="${orderId}"]`);
+    const price = priceInput ? parseFloat(priceInput.value) : null;
+    
+    // Read quantity if input exists
+    const qtyInput = row.querySelector(`.order-qty-input[data-oid="${orderId}"]`);
+    const qty = qtyInput ? parseInt(qtyInput.value, 10) : null;
+
+    const payload = { orderId };
+    if (price !== null && !isNaN(price)) {
+      payload.price = price;
+    }
+    if (qty !== null && !isNaN(qty)) {
+      payload.quantity = qty;
+    }
+
+    if (payload.price === undefined && payload.quantity === undefined) return;
+
+    const res = await this._callApi("/ibkr/edit_order", payload);
     if (res) {
-      console.log("[ibkr] Edited:", res);
+      console.log("[ibkr] Edited order:", res);
       this._refreshOrders();
     }
   }

@@ -705,36 +705,46 @@ class IbkrTrading(BaseAvanzaTrading):
                 return t
         return None
 
-    def edit_order(self, order_id: int, price: float) -> Dict[str, Any]:
+    def edit_order(self, order_id: int, price: Optional[float] = None, quantity: Optional[int] = None) -> Dict[str, Any]:
         """
-        Change the price of an existing non-market order.
-        For STP orders, updates auxPrice. For LMT orders, updates lmtPrice.
+        Change the price and/or quantity of an existing active order.
+        For STP orders, price updates auxPrice. For LMT orders, price updates lmtPrice.
         """
         trade = self._find_trade_by_order_id(order_id)
         if not trade:
             raise Exception(f"No active order found with orderId={order_id}")
 
         order = trade.order
-        if order.orderType == "MKT":
-            raise Exception("Cannot edit price of a market order")
 
-        if order.orderType == "STP":
-            order.auxPrice = price
-        elif order.orderType == "LMT":
-            order.lmtPrice = price
-        elif order.orderType == "STP LMT":
-            order.auxPrice = price
-        else:
-            raise Exception(f"Unsupported order type for edit: {order.orderType}")
+        # Apply quantity update if provided
+        if quantity is not None:
+            if quantity <= 0:
+                raise Exception("Quantity must be greater than 0")
+            order.totalQuantity = quantity
+
+        # Apply price update if provided
+        if price is not None:
+            if order.orderType == "MKT":
+                raise Exception("Cannot edit price of a market order")
+
+            if order.orderType == "STP":
+                order.auxPrice = price
+            elif order.orderType == "LMT":
+                order.lmtPrice = price
+            elif order.orderType == "STP LMT":
+                order.auxPrice = price
+            else:
+                raise Exception(f"Unsupported order type for price edit: {order.orderType}")
 
         self.ib.placeOrder(self.contract, order)
         LOGGER.info(
-            f"Edited order {order_id}: type={order.orderType}, newPrice={price}"
+            f"Edited order {order_id}: type={order.orderType}, newPrice={price}, newQuantity={quantity}"
         )
         return {
             "orderId": order_id,
             "orderType": order.orderType,
             "newPrice": price,
+            "newQuantity": quantity,
             "status": "modified",
         }
 
