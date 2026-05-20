@@ -24,6 +24,7 @@ class FutureChartApp extends PACChartApp {
     this._pendingDrawingUpdate = null;
     this._lastOrders = [];
     this._isSnapping = false;
+    this.tickSize = 0.25;
 
     if (this.chartFuture.drawingManager) {
       this.chartFuture.drawingManager.on("drawing:updated", (event) => this._handleDrawingUpdated(event));
@@ -77,6 +78,17 @@ class FutureChartApp extends PACChartApp {
       document.getElementById("status").textContent = "No future found";
       return;
     }
+
+    this.tickSize = parseFloat(info.tick_size) || parseFloat(info.tickSize) || 0.25;
+    this._remoteLog("INFO", `Set tickSize to ${this.tickSize} from active_future`);
+
+    const inputsToUpdate = ["oca-stop-price", "oca-limit-price", "limit-order-price"];
+    inputsToUpdate.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.setAttribute("step", this.tickSize);
+      }
+    });
 
     this.instrumentMapFlat = {
       [futureKey]: {
@@ -331,7 +343,7 @@ class FutureChartApp extends PACChartApp {
         ${isFulfilled || isDone ? `<span style="color:#888; ${purpleStyle}">×${o.totalQuantity}</span>` :
           `×<input type="number" class="order-qty-input" value="${o.totalQuantity}" step="1" min="1" data-oid="${o.orderId}" />`}
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
-          `<input type="number" class="order-price-input" value="${priceVal}" step="0.25" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
+          `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
         <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
         ${parentInfo}${ocaInfo}
         <span style="flex:1;"></span>
@@ -625,11 +637,11 @@ class FutureChartApp extends PACChartApp {
 
   async _editOrder(orderId, btn) {
     const row = btn.closest(".order-row");
-    
+
     // Read price if input exists
     const priceInput = row.querySelector(`.order-price-input[data-oid="${orderId}"]`);
     const price = priceInput ? parseFloat(priceInput.value) : null;
-    
+
     // Read quantity if input exists
     const qtyInput = row.querySelector(`.order-qty-input[data-oid="${orderId}"]`);
     const qty = qtyInput ? parseInt(qtyInput.value, 10) : null;
@@ -679,8 +691,8 @@ class FutureChartApp extends PACChartApp {
 
     if (this._isSnapping) return;
 
-    // Tick size snapping (0.25)
-    const tickSize = 0.25;
+    // Tick size snapping
+    const tickSize = this.tickSize || 0.25;
     let changed = false;
     drawing.anchors.forEach((anchor, index) => {
       const roundedPrice = Math.round(anchor.price / tickSize) * tickSize;

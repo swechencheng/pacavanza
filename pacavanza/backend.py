@@ -647,11 +647,29 @@ def create_app(
     # Returns the single active OMXS30 future — completely independent of ava_mini_future_list.
     # Response: { "key": "omxs30 jun-2025", "name": "OMXS30 JUN-2025",
     #             "orderbookId": "...", "timezone": "...",
-    #             "market_open": "09:00", "market_close": "17:45" }
+    #             "market_open": "09:00", "market_close": "17:45",
+    #             "tick_size": 0.25 }
     @app.get("/active_future")
     async def get_active_future():
         if not active_future_info:
+            try:
+                raw_active = fetch_active_omxs30_future()
+                flat_active = flatten_instrument_list(raw_active)
+                if flat_active:
+                    key, meta = next(iter(flat_active.items()))
+                    active_future_info.clear()
+                    active_future_info.update({"key": key, **meta})
+                    instrument_list.update(flat_active)
+                    LOGGER.info(f"Dynamically loaded active future: {key} ({meta.get('name', '')})")
+            except Exception as e:
+                LOGGER.warning("Could not dynamically fetch active future: %s", e)
+
+        if not active_future_info:
             raise HTTPException(status_code=404, detail="No active future loaded")
+
+        # Ensure tick_size has a default fallback
+        if "tick_size" not in active_future_info:
+            active_future_info["tick_size"] = 0.25
         return active_future_info
 
     # Useful tiny endpoints to silence noisy probes from browser/devtools
