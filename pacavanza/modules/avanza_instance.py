@@ -11,8 +11,17 @@ def _init_avanza():
         secrets_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../secret.json"))
         with open(secrets_path, "r") as f:
             secrets = json.load(f)
-        _AVANZA_INSTANCE = Avanza(secrets)
-        _ACCOUNT_ID = secrets["accountId"]
+        try:
+            _AVANZA_INSTANCE = Avanza(secrets)
+            _ACCOUNT_ID = secrets["accountId"]
+        except Exception as e:
+            import time
+            import logging
+            logging.basicConfig(level=logging.INFO)
+            logger = logging.getLogger("avanza_init")
+            logger.error(f"Failed to initialize Avanza: {e}. Sleeping 30s to prevent rapid restarts/TOTP reuse...")
+            time.sleep(30)
+            raise e
 
 def get_avanza() -> Avanza:
     _init_avanza()
