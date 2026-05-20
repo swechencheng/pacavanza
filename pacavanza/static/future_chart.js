@@ -343,7 +343,7 @@ class FutureChartApp extends PACChartApp {
       return orderBarTime;
     };
 
-    // Filter orders
+    // Filter active orders for standalone drawings and OCA drawings
     const activeOrders = orders.filter(o => !o.isDone && !o.fulfilled);
     this._remoteLog("INFO", `Active orders for drawings: ${JSON.stringify(activeOrders)}`);
 
@@ -351,8 +351,9 @@ class FutureChartApp extends PACChartApp {
     const processedOrderIds = new Set();
 
     // ── 1. Stop order with children (bracket) ──
+    // Map parentId to children using the full orders array to catch active children of fulfilled parents
     const parentIdToChildren = {};
-    activeOrders.forEach(o => {
+    orders.forEach(o => {
       if (o.parentId) {
         if (!parentIdToChildren[o.parentId]) {
           parentIdToChildren[o.parentId] = [];
@@ -361,9 +362,9 @@ class FutureChartApp extends PACChartApp {
       }
     });
 
-    activeOrders.forEach(parent => {
-      // Must be a parent order (no parentId)
-      if (parent.parentId) return;
+    // Find brackets: iterate over all parents in the full orders array
+    orders.forEach(parent => {
+      if (parent.parentId) return; // Must be a parent order
       const children = parentIdToChildren[parent.orderId] || [];
       if (children.length === 0) return;
 
@@ -374,51 +375,54 @@ class FutureChartApp extends PACChartApp {
       const slChild = children.find(c => c.orderType === "STP" || c.orderType === "STP LMT");
 
       if (tpChild && slChild) {
-        const orderBarTime = getBarTimeForOrder(parent.placedTime);
-        if (orderBarTime !== null) {
-          const times = Array.from(cm.data.keys()).sort((a, b) => a - b);
-          const startIndex = times.indexOf(orderBarTime);
-          let endBarTime;
-          if (startIndex !== -1 && startIndex + 20 < times.length) {
-            endBarTime = times[startIndex + 20];
-          } else {
-            endBarTime = orderBarTime + 20 * this.INTERVAL_SECONDS;
-          }
-
-          const toolType = parent.action === "BUY" ? "long-position" : "short-position";
-          const id = `order-bracket-${parent.orderId}`;
-          const anchors = [
-            { time: orderBarTime, price: parent.price },
-            { time: endBarTime, price: slChild.price },
-            { time: endBarTime, price: tpChild.price }
-          ];
-          const style = {
-            lineColor: parent.action === "BUY" ? "#26A69A" : "#EF5350",
-            lineWidth: 1.5
-          };
-          const opts = {
-            showPrices: true,
-            showPercentage: true,
-            showRiskReward: true
-          };
-
-          this._remoteLog("INFO", `Attempting to create bracket drawing ${toolType} for parent ${parent.orderId} with anchors: ${JSON.stringify(anchors)}`);
-          try {
-            const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
-            if (drawing) {
-              cm.drawingManager.addDrawing(drawing);
-              this._orderDrawingIds.push(id);
-              this._remoteLog("INFO", `Successfully added bracket drawing ${id}`);
+        // The bracket persists only if BOTH TP and SL children are still active (not done)
+        if (!tpChild.isDone && !slChild.isDone) {
+          const orderBarTime = getBarTimeForOrder(parent.placedTime);
+          if (orderBarTime !== null) {
+            const times = Array.from(cm.data.keys()).sort((a, b) => a - b);
+            const startIndex = times.indexOf(orderBarTime);
+            let endBarTime;
+            if (startIndex !== -1 && startIndex + 20 < times.length) {
+              endBarTime = times[startIndex + 20];
             } else {
-              this._remoteLog("WARN", `createDrawing returned null for bracket ${toolType}`);
+              endBarTime = orderBarTime + 20 * this.INTERVAL_SECONDS;
             }
-          } catch (err) {
-            this._remoteLog("ERROR", `Failed to create bracket drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
-          }
 
-          processedOrderIds.add(parent.orderId);
-          processedOrderIds.add(tpChild.orderId);
-          processedOrderIds.add(slChild.orderId);
+            const toolType = parent.action === "BUY" ? "long-position" : "short-position";
+            const id = `order-bracket-${parent.orderId}`;
+            const anchors = [
+              { time: orderBarTime, price: parent.price },
+              { time: endBarTime, price: slChild.price },
+              { time: endBarTime, price: tpChild.price }
+            ];
+            const style = {
+              lineColor: parent.action === "BUY" ? "#26A69A" : "#EF5350",
+              lineWidth: 1.5
+            };
+            const opts = {
+              showPrices: true,
+              showPercentage: true,
+              showRiskReward: true
+            };
+
+            this._remoteLog("INFO", `Attempting to create bracket drawing ${toolType} for parent ${parent.orderId} with anchors: ${JSON.stringify(anchors)}`);
+            try {
+              const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
+              if (drawing) {
+                cm.drawingManager.addDrawing(drawing);
+                this._orderDrawingIds.push(id);
+                this._remoteLog("INFO", `Successfully added bracket drawing ${id}`);
+              } else {
+                this._remoteLog("WARN", `createDrawing returned null for bracket ${toolType}`);
+              }
+            } catch (err) {
+              this._remoteLog("ERROR", `Failed to create bracket drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
+            }
+
+            processedOrderIds.add(parent.orderId);
+            processedOrderIds.add(tpChild.orderId);
+            processedOrderIds.add(slChild.orderId);
+          }
         }
       } else {
         this._remoteLog("INFO", `Parent ${parent.orderId} does not have both TP (LMT) and SL (STP). Found TP: ${!!tpChild}, SL: ${!!slChild}`);
