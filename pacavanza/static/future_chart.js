@@ -11,6 +11,7 @@ class FutureChartApp extends PACChartApp {
     this.chartFuture = this.createChartManager("chart-future", { toolTipId: "chart-ohlc-info-future" });
     this.instrumentMapFlat = null;
     this._orderPollTimer = null;
+    this._orderDrawingIds = [];
 
     // Global error trackers for remote backend logging
     window.addEventListener("error", (e) => {
@@ -260,6 +261,8 @@ class FutureChartApp extends PACChartApp {
   }
 
   _renderOrders(orders) {
+    this._updateOrderDrawings(orders);
+
     const container = document.getElementById("order-list");
     if (!container) return;
 
@@ -294,6 +297,234 @@ class FutureChartApp extends PACChartApp {
         ${!isDone ? `<button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>` : ""}
       </div>`;
     }).join("");
+  }
+
+  _updateOrderDrawings(orders) {
+    const cm = this.chartFuture;
+    if (!cm || !cm.drawingManager || !cm.toolRegistry) return;
+
+    this._remoteLog("INFO", `_updateOrderDrawings starting. Total orders: ${orders ? orders.length : 0}. Chart data size: ${cm.data ? cm.data.size : 0}`);
+
+    // 1. Clear previous drawings
+    if (this._orderDrawingIds) {
+      for (const id of this._orderDrawingIds) {
+        try {
+          cm.drawingManager.removeDrawing(id);
+        } catch (e) {
+          this._remoteLog("WARN", `Failed to remove drawing ${id}: ${e.message}`);
+        }
+      }
+    }
+    this._orderDrawingIds = [];
+
+    // If no orders, or chart history is not loaded yet (no data), we don't draw anything
+    if (!orders || orders.length === 0 || cm.data.size === 0) {
+      this._remoteLog("INFO", `Skipping drawing sync: orders empty or cm.data empty.`);
+      return;
+    }
+
+    const getBarTimeForOrder = (placedTimeStr) => {
+      if (!placedTimeStr) return null;
+      const placedUnix = this.isoToLWTime(placedTimeStr);
+      const times = Array.from(cm.data.keys()).sort((a, b) => a - b);
+      if (times.length === 0) return null;
+      let orderBarTime = null;
+      for (let i = times.length - 1; i >= 0; i--) {
+        if (times[i] <= placedUnix) {
+          orderBarTime = times[i];
+          break;
+        }
+      }
+      if (orderBarTime === null) {
+        orderBarTime = times[0];
+      }
+      return orderBarTime;
+    };
+
+    // Filter orders
+    const activeOrders = orders.filter(o => !o.isDone && !o.fulfilled);
+    this._remoteLog("INFO", `Active orders for drawings: ${JSON.stringify(activeOrders)}`);
+
+    // Track which order IDs are processed as part of a drawing group to avoid double rendering
+    const processedOrderIds = new Set();
+
+    // ── 1. Stop order with children (bracket) ──
+    const parentIdToChildren = {};
+    activeOrders.forEach(o => {
+      if (o.parentId) {
+        if (!parentIdToChildren[o.parentId]) {
+          parentIdToChildren[o.parentId] = [];
+        }
+        parentIdToChildren[o.parentId].push(o);
+      }
+    });
+
+    activeOrders.forEach(parent => {
+      // Must be a parent order (no parentId)
+      if (parent.parentId) return;
+      const children = parentIdToChildren[parent.orderId] || [];
+      if (children.length === 0) return;
+
+      this._remoteLog("INFO", `Parent ${parent.orderId} has children: ${JSON.stringify(children)}`);
+
+      // Find children: TP (LMT) and SL (STP / STP LMT)
+      const tpChild = children.find(c => c.orderType === "LMT");
+      const slChild = children.find(c => c.orderType === "STP" || c.orderType === "STP LMT");
+
+      if (tpChild && slChild) {
+        const orderBarTime = getBarTimeForOrder(parent.placedTime);
+        if (orderBarTime !== null) {
+          const times = Array.from(cm.data.keys()).sort((a, b) => a - b);
+          const startIndex = times.indexOf(orderBarTime);
+          let endBarTime;
+          if (startIndex !== -1 && startIndex + 20 < times.length) {
+            endBarTime = times[startIndex + 20];
+          } else {
+            endBarTime = orderBarTime + 20 * this.INTERVAL_SECONDS;
+          }
+
+          const toolType = parent.action === "BUY" ? "long-position" : "short-position";
+          const id = `order-bracket-${parent.orderId}`;
+          const anchors = [
+            { time: orderBarTime, price: parent.price },
+            { time: endBarTime, price: slChild.price },
+            { time: endBarTime, price: tpChild.price }
+          ];
+          const style = {
+            lineColor: parent.action === "BUY" ? "#26A69A" : "#EF5350",
+            lineWidth: 1.5
+          };
+          const opts = {
+            showPrices: true,
+            showPercentage: true,
+            showRiskReward: true
+          };
+
+          this._remoteLog("INFO", `Attempting to create bracket drawing ${toolType} for parent ${parent.orderId} with anchors: ${JSON.stringify(anchors)}`);
+          try {
+            const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
+            if (drawing) {
+              cm.drawingManager.addDrawing(drawing);
+              this._orderDrawingIds.push(id);
+              this._remoteLog("INFO", `Successfully added bracket drawing ${id}`);
+            } else {
+              this._remoteLog("WARN", `createDrawing returned null for bracket ${toolType}`);
+            }
+          } catch (err) {
+            this._remoteLog("ERROR", `Failed to create bracket drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
+          }
+
+          processedOrderIds.add(parent.orderId);
+          processedOrderIds.add(tpChild.orderId);
+          processedOrderIds.add(slChild.orderId);
+        }
+      } else {
+        this._remoteLog("INFO", `Parent ${parent.orderId} does not have both TP (LMT) and SL (STP). Found TP: ${!!tpChild}, SL: ${!!slChild}`);
+      }
+    });
+
+    // ── 2. OCA orders ──
+    const ocaGroupToOrders = {};
+    activeOrders.forEach(o => {
+      if (o.ocaGroup && !processedOrderIds.has(o.orderId)) {
+        if (!ocaGroupToOrders[o.ocaGroup]) {
+          ocaGroupToOrders[o.ocaGroup] = [];
+        }
+        ocaGroupToOrders[o.ocaGroup].push(o);
+      }
+    });
+
+    for (const ocaGroupId in ocaGroupToOrders) {
+      const ocaOrders = ocaGroupToOrders[ocaGroupId];
+      if (ocaOrders.length >= 2) {
+        const prices = ocaOrders.map(o => o.price).filter(p => p != null);
+        if (prices.length === 0) continue;
+        const upperPrice = Math.max(...prices);
+        const lowerPrice = Math.min(...prices);
+
+        const times = ocaOrders.map(o => o.placedTime).filter(t => t != null);
+        const earliestPlacedTime = times.length > 0 ? times.reduce((a, b) => a < b ? a : b) : null;
+        const leftBarTime = getBarTimeForOrder(earliestPlacedTime);
+
+        if (leftBarTime !== null) {
+          const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
+          const leftIndex = allTimes.indexOf(leftBarTime);
+          let rightBarTime;
+          if (leftIndex !== -1 && leftIndex + 20 < allTimes.length) {
+            rightBarTime = allTimes[leftIndex + 20];
+          } else {
+            rightBarTime = leftBarTime + 20 * this.INTERVAL_SECONDS;
+          }
+
+          const id = `order-oca-${ocaGroupId}`;
+          const anchors = [
+            { time: leftBarTime, price: upperPrice },
+            { time: rightBarTime, price: lowerPrice }
+          ];
+          const style = {
+            lineColor: '#ff9800',
+            lineWidth: 1.5,
+            fillColor: 'rgba(255, 152, 0, 0.1)'
+          };
+          const opts = {
+            filled: true,
+            showDimensions: false
+          };
+
+          this._remoteLog("INFO", `Attempting to create OCA drawing rectangle for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
+          try {
+            const drawing = cm.toolRegistry.createDrawing('rectangle', id, anchors, style, opts);
+            if (drawing) {
+              cm.drawingManager.addDrawing(drawing);
+              this._orderDrawingIds.push(id);
+              this._remoteLog("INFO", `Successfully added OCA drawing ${id}`);
+            } else {
+              this._remoteLog("WARN", `createDrawing returned null for OCA rectangle`);
+            }
+          } catch (err) {
+            this._remoteLog("ERROR", `Failed to create OCA drawing rectangle: ${err.message}\nStack: ${err.stack}`);
+          }
+
+          ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
+        }
+      }
+    }
+
+    // ── 3. Individual limit orders ──
+    activeOrders.forEach(o => {
+      if (processedOrderIds.has(o.orderId)) return;
+      if (o.orderType === "LMT") {
+        const orderBarTime = getBarTimeForOrder(o.placedTime);
+        if (orderBarTime !== null) {
+          const isBuy = o.action === "BUY";
+          const id = `order-limit-${o.orderId}`;
+          const anchors = [{ time: orderBarTime, price: o.price }];
+          const style = {
+            lineColor: isBuy ? '#2196F3' : '#9E9E9E',
+            lineWidth: 1.5,
+            lineDash: [6, 4]
+          };
+          const opts = {
+            showPrice: false
+          };
+
+          this._remoteLog("INFO", `Attempting to create limit drawing horizontal-ray for order ${o.orderId} with anchors: ${JSON.stringify(anchors)}`);
+          try {
+            const drawing = cm.toolRegistry.createDrawing('horizontal-ray', id, anchors, style, opts);
+            if (drawing) {
+              cm.drawingManager.addDrawing(drawing);
+              this._orderDrawingIds.push(id);
+              this._remoteLog("INFO", `Successfully added limit drawing ${id}`);
+            } else {
+              this._remoteLog("WARN", `createDrawing returned null for limit horizontal-ray`);
+            }
+          } catch (err) {
+            this._remoteLog("ERROR", `Failed to create limit drawing horizontal-ray: ${err.message}\nStack: ${err.stack}`);
+          }
+          processedOrderIds.add(o.orderId);
+        }
+      }
+    });
   }
 
   async _editOrderPrice(orderId, btn) {

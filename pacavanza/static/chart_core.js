@@ -34,9 +34,15 @@ class PACChartApp {
       wickDownColor: "#f44336", wickUpColor: "#4caf50",
     });
     const ema20Series = chart.addSeries(LightweightCharts.LineSeries, { color: "#6bebffff", lineWidth: 1, crosshairMarkerVisible: false, lastValueVisible: false, priceLineVisible: false });
+    const whitespaceSeries = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "rgba(0, 0, 0, 0)",
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
     const state = {
       chart,
-      series: { candle: candleSeries, ema20: ema20Series },
+      series: { candle: candleSeries, ema20: ema20Series, whitespace: whitespaceSeries },
       drawingManager: null,
       toolRegistry: null,
       autoRays: { yh: null, yl: null, th: null, tl: null },
@@ -368,6 +374,7 @@ class PACChartApp {
     cm.data.clear(); cm.lastBarTime = null;
     cm.ema20Data.clear(); cm.lastEMAValue = null; cm.lastEMATime = null;
     cm.series.candle.setData([]); cm.series.ema20.setData([]);
+    if (cm.series.whitespace) cm.series.whitespace.setData([]);
     if (cm.drawingManager) {
       for (const key of ['yh', 'yl', 'th', 'tl']) {
         if (cm.autoRays[key]) {
@@ -422,6 +429,7 @@ class PACChartApp {
       }
       this.calculateHistoryHighLow(cm, sorted);
       sorted.forEach((b) => this.processBarForGrouping(cm, b));
+      this._updateWhitespace(cm);
     }
   }
 
@@ -454,6 +462,7 @@ class PACChartApp {
       if (t > cm.lastBarTime) {
         this.processBarForGrouping(cm, candleData);
         cm.lastBarTime = t;
+        this._updateWhitespace(cm);
       }
     }
   }
@@ -465,7 +474,10 @@ class PACChartApp {
       cm.series.candle.update(candleData);
       this.updateEMA20Incremental(cm, candleData.close, t);
       this.updateHighLowIncremental(cm, candleData);
-      if (t > cm.lastBarTime) cm.lastBarTime = t;
+      if (t > cm.lastBarTime) {
+        cm.lastBarTime = t;
+        this._updateWhitespace(cm);
+      }
     }
   }
 
@@ -480,6 +492,15 @@ class PACChartApp {
         cm.series.ema20.update({ time: et, value: ev });
       }
     }
+  }
+
+  _updateWhitespace(cm) {
+    if (!cm.series.whitespace || cm.lastBarTime === null) return;
+    const whitespaceData = [];
+    for (let i = 1; i <= 50; i++) {
+      whitespaceData.push({ time: cm.lastBarTime + i * this.INTERVAL_SECONDS });
+    }
+    cm.series.whitespace.setData(whitespaceData);
   }
 
   // ── WebSocket ─────────────────────────────────────────────────────

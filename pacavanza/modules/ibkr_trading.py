@@ -12,6 +12,9 @@ from .base_trading import BaseAvanzaTrading, PROFIT_LOSS_RATIO
 
 LOGGER = logging.getLogger("ibkr_trading")
 
+# IBKR uses the maximum 64-bit signed integer value (2^63 - 1) to indicate uninitialized/unset integer fields (like parentId or parentPermId).
+IB_UNSET_INT = 9223372036854775807
+
 
 class IbkrTrading(BaseAvanzaTrading):
     """
@@ -54,6 +57,7 @@ class IbkrTrading(BaseAvanzaTrading):
         )
         self.ib = ib
         self.contract = contract
+        self.order_placed_times = {}
 
     # --------------------------------------------------------------------------
     # Override: volume is numberOfContracts (not calculated from balance)
@@ -695,9 +699,9 @@ class IbkrTrading(BaseAvanzaTrading):
     # --------------------------------------------------------------------------
 
     def _find_trade_by_order_id(self, order_id: int) -> Optional[Trade]:
-        """Find an active Trade object by its orderId."""
+        """Find an active Trade object by its orderId or permId."""
         for t in self.ib.openTrades():
-            if t.order.orderId == order_id and t.isActive():
+            if (t.order.orderId == order_id or t.order.permId == order_id) and t.isActive():
                 return t
         return None
 
@@ -945,24 +949,49 @@ class IbkrTrading(BaseAvanzaTrading):
             t for t in self.ib.trades() if t.contract.conId == self.contract.conId
         ]
 
-        # Step 1: Find all parent IDs
-        parent_ids = set()
+        # Build local orderId to global permId mapping for all contract trades
+        order_id_to_perm_id = {}
         for t in contract_trades:
-            if t.order.parentId:
-                parent_ids.add(t.order.parentId)
+            oid = getattr(t.order, "orderId", 0)
+            pid = getattr(t.order, "permId", 0)
+            if oid and pid:
+                order_id_to_perm_id[oid] = pid
+
+        def get_parent_perm_id(order):
+            # 1. Try parentId mapped to permId
+            p_id = getattr(order, "parentId", 0)
+            if p_id and p_id != IB_UNSET_INT:
+                mapped = order_id_to_perm_id.get(p_id)
+                if mapped:
+                    return mapped
+            # 2. Fall back to parentPermId
+            parent_perm = getattr(order, "parentPermId", 0)
+            if parent_perm and parent_perm != IB_UNSET_INT:
+                return parent_perm
+            return 0
+
+        # Step 1: Find all parent perm IDs
+        parent_perm_ids = set()
+        for t in contract_trades:
+            p_perm = get_parent_perm_id(t.order)
+            if p_perm:
+                parent_perm_ids.add(p_perm)
 
         # Step 2: Group trades
         trade_groups = {}
         for t in contract_trades:
             order = t.order
-            if order.parentId:
-                group_key = f"parent_{order.parentId}"
-            elif order.orderId in parent_ids:
-                group_key = f"parent_{order.orderId}"
+            p_perm = get_parent_perm_id(order)
+            has_parent = bool(p_perm)
+
+            if has_parent:
+                group_key = f"parent_{p_perm}"
+            elif order.permId in parent_perm_ids:
+                group_key = f"parent_{order.permId}"
             elif order.ocaGroup:
                 group_key = f"oca_{order.ocaGroup}"
             else:
-                group_key = f"order_{order.orderId}"
+                group_key = f"order_{order.permId}"
 
             if group_key not in trade_groups:
                 trade_groups[group_key] = []
@@ -986,18 +1015,31 @@ class IbkrTrading(BaseAvanzaTrading):
                 elif order.orderType == "STP LMT":
                     price = order.auxPrice
 
+                placed_time = self.order_placed_times.get(order.permId)
+                if not placed_time:
+                    if t.log:
+                        placed_time = t.log[0].time
+                    if not placed_time:
+                        placed_time = datetime.now(timezone.utc)
+                    self.order_placed_times[order.permId] = placed_time
+
+                parent_id_val = get_parent_perm_id(order)
+                if parent_id_val == 0:
+                    parent_id_val = None
+
                 result.append(
                     {
-                        "orderId": order.orderId,
+                        "orderId": order.permId,
                         "action": order.action,
                         "orderType": order.orderType,
                         "totalQuantity": int(order.totalQuantity),
                         "price": price,
                         "status": t.orderStatus.status,
-                        "parentId": order.parentId if order.parentId else None,
+                        "parentId": parent_id_val,
                         "ocaGroup": order.ocaGroup if order.ocaGroup else None,
                         "isDone": t.isDone(),
                         "fulfilled": t.orderStatus.status == "Filled",
+                        "placedTime": placed_time.isoformat(),
                     }
                 )
         return result
