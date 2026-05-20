@@ -37,8 +37,172 @@ class DrawingToolbar {
       return;
     }
 
-    this._container = containerEl;
     const LCD = window.LightweightChartsDrawing;
+
+    // Patch renderers to customize drawings
+    if (!LCD.__renderersPatched) {
+      LCD.__renderersPatched = true;
+      const patchPositionRenderer = (rendererProto) => {
+        const originalDrawImpl = rendererProto.drawImpl;
+        if (!originalDrawImpl) return;
+
+        rendererProto.drawImpl = function (s) {
+          const ctx = s.context;
+          const originalFillText = ctx.fillText;
+          const drawing = this._drawing;
+
+          ctx.fillText = function (text, x, y, maxWidth) {
+            if (text === "LONG" || text === "SHORT") {
+              return;
+            }
+            if (typeof text === "string" && text.startsWith("R:R = ")) {
+              try {
+                const viewport = drawing.getViewport();
+                const anchors = drawing.anchors;
+                if (viewport && anchors && anchors.length > 0) {
+                  const firstPixel = drawing.anchorToPixel(anchors[0], viewport);
+                  if (firstPixel) {
+                    const e = s.horizontalPixelRatio;
+                    const d = 200; // Hardcoded width of position box in pixels in the library
+                    x = (firstPixel.x + d + 5) * e;
+                  }
+                }
+              } catch (err) {
+                console.error("[pac-chart] Failed to relocate R:R text:", err);
+              }
+            }
+            originalFillText.call(ctx, text, x, y, maxWidth);
+          };
+
+          try {
+            originalDrawImpl.call(this, s);
+          } finally {
+            ctx.fillText = originalFillText;
+          }
+        };
+      };
+
+      const patchHorizontalRayRenderer = (rendererProto) => {
+        const originalDrawImpl = rendererProto.drawImpl;
+        if (!originalDrawImpl) return;
+
+        rendererProto.drawImpl = function (s) {
+          const ctx = s.context;
+          const originalFill = ctx.fill;
+          const drawing = this._drawing;
+          const opts = drawing.horizontalRayOptions || {};
+          const wasShowPrice = opts.showPrice;
+
+          // Temporarily disable showPrice to prevent original drawImpl from drawing the bad label
+          if (wasShowPrice) {
+            opts.showPrice = false;
+          }
+
+          let fillCount = 0;
+          ctx.fill = function () {
+            fillCount++;
+            if (fillCount === 2) {
+              // Suppress the arrow
+              return;
+            }
+            originalFill.apply(ctx, arguments);
+          };
+
+          try {
+            originalDrawImpl.call(this, s);
+          } finally {
+            ctx.fill = originalFill;
+            if (wasShowPrice) {
+              opts.showPrice = true;
+            }
+          }
+
+          // Draw our custom price label if showPrice is active
+          if (wasShowPrice && drawing.isValid()) {
+            try {
+              const viewport = drawing.getViewport();
+              const anchors = drawing.anchors;
+              if (viewport && anchors && anchors.length > 0) {
+                const o = anchors[0];
+                const a = viewport.priceScale.priceToCoordinate(o.price);
+                if (a !== null) {
+                  const e = s.horizontalPixelRatio;
+                  const text = o.price.toFixed(2);
+                  const font = drawing.style.labelFont || "18px sans-serif";
+                  const textColor = "#ffffff";
+                  const backgroundColor = (drawing.style.lineColor || "#2196F3") + "CC";
+                  const padding = 4;
+                  const borderRadius = 3;
+
+                  ctx.save();
+                  // Scale the font size by device pixel ratio (e) for high-DPI screens
+                  const scaledFont = font.replace(/(\d+)(px)/, (match, size, unit) => {
+                    return (parseFloat(size) * e) + unit;
+                  });
+                  ctx.font = scaledFont;
+                  const textWidth = ctx.measureText(text).width;
+                  const fontSize = parseInt(font.match(/(\d+)px/)?.[1] ?? "12") * e;
+
+                  const boxWidth = textWidth + padding * 2 * e;
+                  const boxHeight = fontSize + padding * 2 * e;
+
+                  // Position right-aligned at viewport.width - 5
+                  const rightX = (viewport.width - 5) * e;
+                  const leftX = rightX - boxWidth;
+                  const centerY = a * e;
+                  const topY = centerY - boxHeight / 2;
+
+                  ctx.fillStyle = backgroundColor;
+                  ctx.beginPath();
+                  if (ctx.roundRect) {
+                    ctx.roundRect(leftX, topY, boxWidth, boxHeight, borderRadius * e);
+                  } else {
+                    ctx.rect(leftX, topY, boxWidth, boxHeight);
+                  }
+                  ctx.fill();
+
+                  ctx.fillStyle = textColor;
+                  ctx.textAlign = "left";
+                  ctx.textBaseline = "middle";
+                  ctx.fillText(text, leftX + padding * e, centerY);
+                  ctx.restore();
+                }
+              }
+            } catch (err) {
+              console.error("[pac-chart] Failed to draw custom price label:", err);
+            }
+          }
+        };
+      };
+
+      try {
+        if (LCD.LongPositionPaneView) {
+          const dummy = new LCD.LongPositionPaneView(null);
+          const renderer = dummy.renderer();
+          if (renderer) {
+            patchPositionRenderer(Object.getPrototypeOf(renderer));
+          }
+        }
+        if (LCD.ShortPositionPaneView) {
+          const dummy = new LCD.ShortPositionPaneView(null);
+          const renderer = dummy.renderer();
+          if (renderer) {
+            patchPositionRenderer(Object.getPrototypeOf(renderer));
+          }
+        }
+        if (LCD.HorizontalRayPaneView) {
+          const dummy = new LCD.HorizontalRayPaneView(null);
+          const renderer = dummy.renderer();
+          if (renderer) {
+            patchHorizontalRayRenderer(Object.getPrototypeOf(renderer));
+          }
+        }
+      } catch (err) {
+        console.error('[drawing-tools] Failed to patch renderers:', err);
+      }
+    }
+
+    this._container = containerEl;
 
     if (this._cm.drawingManager && this._cm.toolRegistry) {
       this._manager = this._cm.drawingManager;

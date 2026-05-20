@@ -505,7 +505,7 @@ class FutureChartApp extends PACChartApp {
             lineDash: [6, 4]
           };
           const opts = {
-            showPrice: false
+            showPrice: true
           };
 
           this._remoteLog("INFO", `Attempting to create limit drawing horizontal-ray for order ${o.orderId} with anchors: ${JSON.stringify(anchors)}`);
