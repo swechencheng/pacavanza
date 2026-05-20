@@ -120,13 +120,11 @@ def main():
             is_active_window = start_time_limit <= now < stop_time_limit
 
             if is_active_window:
-                # 1. Market Daemon (Always ensure it is running)
+                # 1. Dashboard
                 if start_process(
-                    "market",
-                    "pacavanza.avanza_market_daemon",
-                    "pacavanza.avanza_market_daemon",
+                    "dashboard", "pacavanza.backend", "pacavanza.dashboard"
                 ):
-                    time.sleep(30)
+                    time.sleep(5)
 
                 # 2. Future Daemon (Always ensure it is running)
                 if start_process(
@@ -136,9 +134,11 @@ def main():
                 ):
                     time.sleep(5)
 
-                # 3. Dashboard
+                # 3. Market Daemon (Always ensure it is running)
                 if start_process(
-                    "dashboard", "pacavanza.backend", "pacavanza.dashboard"
+                    "market",
+                    "pacavanza.avanza_market_daemon",
+                    "pacavanza.avanza_market_daemon",
                 ):
                     time.sleep(5)
 
