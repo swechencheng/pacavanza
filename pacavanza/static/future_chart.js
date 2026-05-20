@@ -21,6 +21,36 @@ class FutureChartApp extends PACChartApp {
     window.addEventListener("unhandledrejection", (e) => {
       this._remoteLog("ERROR", `Unhandled rejection: ${e.reason}`);
     });
+    this._pendingDrawingUpdate = null;
+    this._lastOrders = [];
+    this._isSnapping = false;
+
+    if (this.chartFuture.drawingManager) {
+      this.chartFuture.drawingManager.on("drawing:updated", (event) => this._handleDrawingUpdated(event));
+      this.chartFuture.drawingManager.on("drawing:selected", (event) => {
+        this._remoteLog("INFO", `Drawing selected: ${event.drawingId}`);
+      });
+      this.chartFuture.drawingManager.on("drawing:deselected", (event) => {
+        this._remoteLog("INFO", `Drawing deselected: ${event.drawingId}`);
+        this._pendingDrawingUpdate = null;
+      });
+      window.addEventListener("mouseup", (e) => this._handleMouseUp(e));
+      const container = document.getElementById("chart-future");
+      if (container) {
+        container.addEventListener("mouseup", (e) => this._handleMouseUp(e));
+      }
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          const selected = this.chartFuture.drawingManager.getSelectedDrawing();
+          if (selected && selected.id && selected.id.startsWith("order-")) {
+            this._remoteLog("INFO", `Escape pressed. Deselecting drawing ${selected.id}`);
+            this.chartFuture.drawingManager.deselectAll();
+            this._refreshOrders();
+          }
+        }
+      });
+    }
+
     this._remoteLog("INFO", "FutureChartApp constructor initialized");
   }
 
@@ -272,6 +302,7 @@ class FutureChartApp extends PACChartApp {
   }
 
   _renderOrders(orders) {
+    this._lastOrders = orders;
     this._updateOrderDrawings(orders);
 
     const container = document.getElementById("order-list");
@@ -314,6 +345,18 @@ class FutureChartApp extends PACChartApp {
   _updateOrderDrawings(orders) {
     const cm = this.chartFuture;
     if (!cm || !cm.drawingManager || !cm.toolRegistry) return;
+
+    // Check if any order drawing is currently selected or being modified
+    const selected = cm.drawingManager.getSelectedDrawing();
+    if (selected && selected.id && selected.id.startsWith("order-")) {
+      this._remoteLog("INFO", `Skipping _updateOrderDrawings because drawing ${selected.id} is currently selected/being edited.`);
+      return;
+    }
+
+    if (this._pendingDrawingUpdate) {
+      this._remoteLog("INFO", "Skipping _updateOrderDrawings because there is a pending drawing update.");
+      return;
+    }
 
     if (orders && orders.length > 0) {
       this._remoteLog("INFO", `_updateOrderDrawings starting. Total orders: ${orders.length}. Chart data size: ${cm.data ? cm.data.size : 0}`);
@@ -622,6 +665,140 @@ class FutureChartApp extends PACChartApp {
       console.log("[ibkr] Cancelled:", res);
       this._refreshOrders();
     }
+  }
+
+  _handleDrawingUpdated(event) {
+    const drawing = event.drawing;
+    if (!drawing || !drawing.anchors) return;
+
+    const id = event.drawingId;
+    const isOrderDrawing = id.startsWith("order-bracket-") || id.startsWith("order-oca-") || id.startsWith("order-limit-");
+    if (!isOrderDrawing) return;
+
+    this._remoteLog("INFO", `_handleDrawingUpdated called for ${id}. anchors: ${JSON.stringify(drawing.anchors.map(a => a.price))}`);
+
+    if (this._isSnapping) return;
+
+    // Tick size snapping (0.25)
+    const tickSize = 0.25;
+    let changed = false;
+    drawing.anchors.forEach((anchor, index) => {
+      const roundedPrice = Math.round(anchor.price / tickSize) * tickSize;
+      if (Math.abs(anchor.price - roundedPrice) > 1e-9) {
+        this._isSnapping = true;
+        try {
+          drawing.updateAnchor(index, { time: anchor.time, price: roundedPrice });
+        } finally {
+          this._isSnapping = false;
+        }
+        changed = true;
+      }
+    });
+
+    // Track pending update for mouseup release
+    this._pendingDrawingUpdate = {
+      drawingId: id,
+      anchors: drawing.anchors.map(a => ({ time: a.time, price: a.price }))
+    };
+  }
+
+  _handleMouseUp(e) {
+    this._remoteLog("INFO", `_handleMouseUp event triggered on target: ${e.target ? e.target.tagName : 'unknown'} id: ${e.target ? e.target.id : 'none'}. Pending update exists: ${!!this._pendingDrawingUpdate}`);
+    if (this._pendingDrawingUpdate) {
+      const { drawingId, anchors } = this._pendingDrawingUpdate;
+      this._pendingDrawingUpdate = null; // Clear immediately to prevent duplicate requests
+
+      this._remoteLog("INFO", `Mouse released. Processing pending update for drawing ${drawingId} with anchors: ${JSON.stringify(anchors)}`);
+      this._submitDrawingUpdates(drawingId, anchors);
+    }
+  }
+
+  async _submitDrawingUpdates(drawingId, anchors) {
+    const orders = this._lastOrders || [];
+    const updates = []; // Array of { orderId, price } to submit
+
+    if (drawingId.startsWith("order-bracket-")) {
+      const parentOrderId = parseInt(drawingId.substring("order-bracket-".length), 10);
+      const parent = orders.find(o => o.orderId === parentOrderId);
+      if (!parent) return;
+
+      // Map parentId to children
+      const parentIdToChildren = {};
+      orders.forEach(o => {
+        if (o.parentId) {
+          if (!parentIdToChildren[o.parentId]) parentIdToChildren[o.parentId] = [];
+          parentIdToChildren[o.parentId].push(o);
+        }
+      });
+      const children = parentIdToChildren[parentOrderId] || [];
+      const tpChild = children.find(c => c.orderType === "LMT");
+      const slChild = children.find(c => c.orderType === "STP" || c.orderType === "STP LMT");
+
+      // Check which anchors have changed compared to original order prices
+      // anchors[0] -> Parent Entry price
+      if (anchors[0] && !parent.isDone && !parent.fulfilled && Math.abs(parent.price - anchors[0].price) > 1e-9) {
+        updates.push({ orderId: parent.orderId, price: anchors[0].price });
+      }
+      // anchors[1] -> SL price
+      if (anchors[1] && slChild && !slChild.isDone && Math.abs(slChild.price - anchors[1].price) > 1e-9) {
+        updates.push({ orderId: slChild.orderId, price: anchors[1].price });
+      }
+      // anchors[2] -> TP price
+      if (anchors[2] && tpChild && !tpChild.isDone && Math.abs(tpChild.price - anchors[2].price) > 1e-9) {
+        updates.push({ orderId: tpChild.orderId, price: anchors[2].price });
+      }
+    } else if (drawingId.startsWith("order-oca-")) {
+      const ocaGroupId = drawingId.substring("order-oca-".length);
+      const ocaOrders = orders.filter(o => o.ocaGroup === ocaGroupId);
+      if (ocaOrders.length === 0) return;
+
+      const tpChild = ocaOrders.find(o => o.orderType === "LMT");
+      const slChild = ocaOrders.find(o => o.orderType === "STP" || o.orderType === "STP LMT");
+
+      // anchors[1] -> SL price (Stop)
+      if (anchors[1] && slChild && !slChild.isDone && Math.abs(slChild.price - anchors[1].price) > 1e-9) {
+        updates.push({ orderId: slChild.orderId, price: anchors[1].price });
+      }
+      // anchors[2] -> TP price (Limit)
+      if (anchors[2] && tpChild && !tpChild.isDone && Math.abs(tpChild.price - anchors[2].price) > 1e-9) {
+        updates.push({ orderId: tpChild.orderId, price: anchors[2].price });
+      }
+    } else if (drawingId.startsWith("order-limit-")) {
+      const orderId = parseInt(drawingId.substring("order-limit-".length), 10);
+      const order = orders.find(o => o.orderId === orderId);
+      if (!order) return;
+
+      // anchors[0] -> Limit Price
+      if (anchors[0] && !order.isDone && Math.abs(order.price - anchors[0].price) > 1e-9) {
+        updates.push({ orderId: order.orderId, price: anchors[0].price });
+      }
+    }
+
+    if (updates.length === 0) {
+      this._remoteLog("INFO", "No order prices changed, skipping update.");
+      if (this.chartFuture && this.chartFuture.drawingManager) {
+        this.chartFuture.drawingManager.deselectAll();
+      }
+      this._refreshOrders();
+      return;
+    }
+
+    this._remoteLog("INFO", `Submitting order updates from drawing: ${JSON.stringify(updates)}`);
+    for (const update of updates) {
+      try {
+        const res = await this._callApi("/ibkr/edit_order", update);
+        if (res) {
+          this._remoteLog("INFO", `Successfully updated order ${update.orderId} to price ${update.price}`);
+        }
+      } catch (err) {
+        this._remoteLog("ERROR", `Failed to update order ${update.orderId}: ${err.message}`);
+      }
+    }
+
+    if (this.chartFuture && this.chartFuture.drawingManager) {
+      this.chartFuture.drawingManager.deselectAll();
+    }
+    this._refreshOrders();
   }
 }
 
