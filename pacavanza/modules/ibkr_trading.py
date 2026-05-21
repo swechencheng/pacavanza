@@ -1011,7 +1011,16 @@ class IbkrTrading(BaseAvanzaTrading):
         result = []
         for group_key, trades in trade_groups.items():
             # If all orders in the group are done, do not show this group
-            if all(t.isDone() for t in trades):
+            def is_trade_done(t):
+                # ib_async's isDone() covers Filled and Cancelled, but 'Inactive' 
+                # or 'ApiCancelled' might not be fully covered or linger.
+                if t.isDone():
+                    return True
+                if t.orderStatus.status in ["Inactive", "ApiCancelled", "Cancelled"]:
+                    return True
+                return False
+
+            if all(is_trade_done(t) for t in trades):
                 continue
 
             # Otherwise, keep all of them
@@ -1047,7 +1056,7 @@ class IbkrTrading(BaseAvanzaTrading):
                         "status": t.orderStatus.status,
                         "parentId": parent_id_val,
                         "ocaGroup": order.ocaGroup if order.ocaGroup else None,
-                        "isDone": t.isDone(),
+                        "isDone": is_trade_done(t),
                         "fulfilled": t.orderStatus.status == "Filled",
                         "placedTime": placed_time.isoformat(),
                     }
