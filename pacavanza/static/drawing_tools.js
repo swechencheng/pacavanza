@@ -553,7 +553,6 @@ class DrawingToolbar {
 
     const drawing = this._registry.createDrawing(toolType, id, anchors, style, opts);
     if (drawing) {
-      // Patch fib-retracement to remove the dashed projection line
       if (toolType === 'fib-retracement') {
         const origPV = drawing.paneViews.bind(drawing);
         drawing.paneViews = () => {
@@ -597,6 +596,8 @@ class DrawingToolbar {
           });
         };
       }
+      
+      PACChartApp.patchPositionDrawing(drawing, toolType);
       this._manager.addDrawing(drawing);
       this._manager.selectDrawing(drawing.id);
     }

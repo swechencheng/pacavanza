@@ -14,6 +14,53 @@ class PACChartApp {
   _warn(...a) { console.warn("[pac-chart]", ...a); }
   _error(...a) { console.error("[pac-chart]", ...a); }
 
+  static patchPositionDrawing(drawing, toolType) {
+    if (!drawing || (toolType !== 'long-position' && toolType !== 'short-position')) return;
+    const origPV = drawing.paneViews.bind(drawing);
+    drawing.paneViews = () => {
+      const views = origPV();
+      return views.map(v => {
+        const origR = v.renderer.bind(v);
+        return {
+          zOrder: v.zOrder.bind(v),
+          renderer: () => {
+            const r = origR();
+            if (!r || !r.drawImpl) return r;
+            const origDrawImpl = r.drawImpl.bind(r);
+            return {
+              draw: (target) => {
+                target.useBitmapCoordinateSpace((scope) => {
+                  const ctx = scope.context;
+                  const realStrokeRect = ctx.strokeRect.bind(ctx);
+                  const realBeginPath = ctx.beginPath.bind(ctx);
+                  const realMoveTo = ctx.moveTo.bind(ctx);
+                  const realLineTo = ctx.lineTo.bind(ctx);
+                  const realStroke = ctx.stroke.bind(ctx);
+                  
+                  ctx.strokeRect = (x, y, w, h) => {
+                    realBeginPath();
+                    realMoveTo(x, y);
+                    realLineTo(x + w, y);
+                    realStroke();
+                    
+                    realBeginPath();
+                    realMoveTo(x, y + h);
+                    realLineTo(x + w, y + h);
+                    realStroke();
+                  };
+                  
+                  origDrawImpl(scope);
+                  
+                  ctx.strokeRect = realStrokeRect;
+                });
+              }
+            };
+          }
+        };
+      });
+    };
+  }
+
   // ── Chart Manager Factory ─────────────────────────────────────────
   createChartManager(containerId, options = {}) {
     const container = document.getElementById(containerId);

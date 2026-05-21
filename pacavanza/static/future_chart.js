@@ -476,6 +476,7 @@ class FutureChartApp extends PACChartApp {
             try {
               const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
               if (drawing) {
+                PACChartApp.patchPositionDrawing(drawing, toolType);
                 cm.drawingManager.addDrawing(drawing);
                 this._orderDrawingIds.push(id);
                 this._remoteLog("INFO", `Successfully added bracket drawing ${id}`);
@@ -583,6 +584,7 @@ class FutureChartApp extends PACChartApp {
         try {
           const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
           if (drawing) {
+            PACChartApp.patchPositionDrawing(drawing, toolType);
             cm.drawingManager.addDrawing(drawing);
             this._orderDrawingIds.push(id);
             this._remoteLog("INFO", `Successfully added OCA position drawing ${id}`);
