@@ -122,6 +122,49 @@ class IbkrTrading(BaseAvanzaTrading):
                 tp_price = t.order.lmtPrice
         return sl_price, tp_price
 
+    def _sync_sl_tp_volume(self) -> None:
+        """
+        Synchronize the volume of all active SL and TP orders
+        to match the current position size.
+        """
+        signed_pos = self._get_signed_position()
+        abs_pos = abs(signed_pos)
+        closing_action = "SELL" if signed_pos > 0 else "BUY"
+
+        open_trades = self.ib.openTrades()
+        for t in open_trades:
+            if t.contract.conId != self.contract.conId or not t.isActive():
+                continue
+            
+            # Identify if this is a closing SL or TP.
+            # We assume any active order with an ocaGroup or parentId is an SL/TP bracket child.
+            is_sl_tp = False
+            if t.order.ocaGroup:
+                is_sl_tp = True
+            elif getattr(t.order, "parentId", 0) and getattr(t.order, "parentId", 0) != 0:
+                is_sl_tp = True
+                
+            if not is_sl_tp:
+                continue
+
+            # If position is 0, cancel all SL/TP
+            if abs_pos == 0:
+                LOGGER.info(f"Sync: Position is 0, cancelling SL/TP orderId={t.order.orderId}")
+                self.ib.cancelOrder(t.order)
+                continue
+            
+            # If position is non-zero, check direction
+            if t.order.action != closing_action:
+                LOGGER.info(f"Sync: Wrong direction, cancelling SL/TP orderId={t.order.orderId}")
+                self.ib.cancelOrder(t.order)
+                continue
+            
+            # Right direction, update volume if different
+            if t.order.totalQuantity != abs_pos:
+                LOGGER.info(f"Sync: Updating SL/TP orderId={t.order.orderId} volume {t.order.totalQuantity} -> {abs_pos}")
+                t.order.totalQuantity = abs_pos
+                self.ib.placeOrder(self.contract, t.order)
+
     # --------------------------------------------------------------------------
     # Bear swing leg calculation (symmetric to bull leg in base)
     # --------------------------------------------------------------------------
@@ -420,6 +463,7 @@ class IbkrTrading(BaseAvanzaTrading):
             # Scenario 3: Close short — standalone stop only, no SL/TP
             LOGGER.info("Buy stop: closing short position (exact match)")
             order = StopOrder("BUY", volume, stop_price)
+            order.orderRef = "CloseOnly"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
                 f"Placed buy STOP (close short) via IBKR: "
@@ -428,29 +472,14 @@ class IbkrTrading(BaseAvanzaTrading):
             return
 
         if signed_pos > 0:
-            # Scenario 2: Scale up long — standalone stop + OCA SL/TP
+            # Scenario 2: Scale up long — standalone stop only
             LOGGER.info("Buy stop: scaling up long position")
             order = StopOrder("BUY", volume, stop_price)
+            order.orderRef = "ScaleUp"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
                 f"Placed buy STOP (scale up) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
-            )
-            existing_sl, existing_tp = self._get_existing_sl_tp_prices("long")
-            sl = existing_sl if existing_sl is not None else sell_stop_price
-            tp = existing_tp if existing_tp is not None else tp_limit
-            if existing_sl is None or existing_tp is None:
-                LOGGER.warning(
-                    "Scale up: no existing SL/TP found, using computed prices"
-                )
-            self._place_standalone_sl_tp(
-                instrument_id=instrument_id,
-                sl_action="SELL",
-                sl_volume=volume,
-                sl_price=sl,
-                tp_action="SELL",
-                tp_volume=volume,
-                tp_price=tp,
             )
             return
 
@@ -467,6 +496,7 @@ class IbkrTrading(BaseAvanzaTrading):
             )
             # 1. Close existing short
             close_order = StopOrder("BUY", close_volume, stop_price)
+            close_order.orderRef = "CloseOnly"
             close_trade = self.ib.placeOrder(self.contract, close_order)
             LOGGER.info(
                 f"Placed buy STOP (close short) via IBKR: "
@@ -527,6 +557,7 @@ class IbkrTrading(BaseAvanzaTrading):
             # Scenario 3: Close long — standalone stop only, no SL/TP
             LOGGER.info("Sell stop: closing long position (exact match)")
             order = StopOrder("SELL", volume, stop_price)
+            order.orderRef = "CloseOnly"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
                 f"Placed sell STOP (close long) via IBKR: "
@@ -535,32 +566,14 @@ class IbkrTrading(BaseAvanzaTrading):
             return
 
         if signed_pos < 0:
-            # Scenario 2: Scale up short — standalone stop + OCA SL/TP
+            # Scenario 2: Scale up short — standalone stop only
             LOGGER.info("Sell stop: scaling up short position")
             order = StopOrder("SELL", volume, stop_price)
+            order.orderRef = "ScaleUp"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
                 f"Placed sell STOP (scale up) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
-            )
-            existing_sl, existing_tp = self._get_existing_sl_tp_prices("short")
-            if existing_sl is not None and existing_tp is not None:
-                sl, tp = existing_sl, existing_tp
-            else:
-                LOGGER.warning(
-                    "Scale up: no existing SL/TP found, computing new prices"
-                )
-                sl, tp = self._compute_short_entry_sl_tp(
-                    instrument_id, stop_price, tick
-                )
-            self._place_standalone_sl_tp(
-                instrument_id=instrument_id,
-                sl_action="BUY",
-                sl_volume=volume,
-                sl_price=sl,
-                tp_action="BUY",
-                tp_volume=volume,
-                tp_price=tp,
             )
             return
 
@@ -572,7 +585,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if signed_pos > 0 and signed_pos < volume:
             # Scenario 4: Close long + enter short
             # Two separate orders:
-            #   1. Standalone stop to close the existing long position
+            # 1. Standalone stop to close the existing long position
             #   2. Bracket stop entry for the net new short position
             close_volume = signed_pos
             net_volume = volume - close_volume
@@ -582,6 +595,7 @@ class IbkrTrading(BaseAvanzaTrading):
             )
             # 1. Close existing long
             close_order = StopOrder("SELL", close_volume, stop_price)
+            close_order.orderRef = "CloseOnly"
             close_trade = self.ib.placeOrder(self.contract, close_order)
             LOGGER.info(
                 f"Placed sell STOP (close long) via IBKR: "
@@ -940,6 +954,13 @@ class IbkrTrading(BaseAvanzaTrading):
         """Handle execution details (fills)."""
         if trade.contract.conId != self.contract.conId:
             return
+        
+        try:
+            # When an order executes, position might have changed. Sync SL/TP.
+            self._sync_sl_tp_volume()
+        except Exception as e:
+            LOGGER.error(f"Error syncing SL/TP volume: {e}")
+
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
@@ -1056,6 +1077,7 @@ class IbkrTrading(BaseAvanzaTrading):
                         "status": t.orderStatus.status,
                         "parentId": parent_id_val,
                         "ocaGroup": order.ocaGroup if order.ocaGroup else None,
+                        "orderRef": order.orderRef,
                         "isDone": is_trade_done(t),
                         "fulfilled": t.orderStatus.status == "Filled",
                         "placedTime": placed_time.isoformat(),

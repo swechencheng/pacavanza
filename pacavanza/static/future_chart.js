@@ -600,14 +600,17 @@ class FutureChartApp extends PACChartApp {
       }
     }
 
-    // ── 3. Individual limit orders ──
+    // ── 3. Individual limit and stop orders ──
     activeOrders.forEach(o => {
       if (processedOrderIds.has(o.orderId)) return;
-      if (o.orderType === "LMT") {
+      // Skip drawing if the order is exclusively for closing or scaling up
+      if (o.orderRef === "CloseOnly" || o.orderRef === "ScaleUp") return;
+      
+      if (o.orderType === "LMT" || o.orderType === "STP" || o.orderType === "STP LMT") {
         const orderBarTime = getBarTimeForOrder(o.placedTime);
         if (orderBarTime !== null) {
           const isBuy = o.action === "BUY";
-          const id = `order-limit-${o.orderId}`;
+          const id = `order-standalone-${o.orderId}`;
           const anchors = [{ time: orderBarTime, price: o.price }];
           const style = {
             lineColor: isBuy ? '#2196F3' : '#9E9E9E',
@@ -686,7 +689,7 @@ class FutureChartApp extends PACChartApp {
     if (!drawing || !drawing.anchors) return;
 
     const id = event.drawingId;
-    const isOrderDrawing = id.startsWith("order-bracket-") || id.startsWith("order-oca-") || id.startsWith("order-limit-");
+    const isOrderDrawing = id.startsWith("order-bracket-") || id.startsWith("order-oca-") || id.startsWith("order-standalone-");
     if (!isOrderDrawing) return;
 
     this._remoteLog("INFO", `_handleDrawingUpdated called for ${id}. anchors: ${JSON.stringify(drawing.anchors.map(a => a.price))}`);
@@ -777,8 +780,8 @@ class FutureChartApp extends PACChartApp {
       if (anchors[2] && tpChild && !tpChild.isDone && Math.abs(tpChild.price - anchors[2].price) > 1e-9) {
         updates.push({ orderId: tpChild.orderId, price: anchors[2].price });
       }
-    } else if (drawingId.startsWith("order-limit-")) {
-      const orderId = parseInt(drawingId.substring("order-limit-".length), 10);
+    } else if (drawingId.startsWith("order-standalone-")) {
+      const orderId = parseInt(drawingId.substring("order-standalone-".length), 10);
       const order = orders.find(o => o.orderId === orderId);
       if (!order) return;
 
