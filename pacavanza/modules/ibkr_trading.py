@@ -1034,6 +1034,7 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.cancelOrder(trade.order)
         trade.orderStatus.status = "Cancelled"
         LOGGER.info(f"Cancelled order {order_id}")
+        return {"orderId": order_id, "status": "Cancelled"}
 
     def get_position_info(self) -> Optional[Dict[str, Any]]:
         """Return the current active position size and average cost for the contract."""
