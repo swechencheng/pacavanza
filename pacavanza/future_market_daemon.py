@@ -92,6 +92,12 @@ class FutureMarketCollector(BaseMarketCollector):
                 f"[{instrument_id}] {readable_ts} B: {buy_price}  S: {sell_price}  L: {last_price:.2f}"
             )
 
+            if not hasattr(self, "_prev_last_price"):
+                self._prev_last_price = {}
+
+            prev_price = self._prev_last_price.get(instrument_id)
+            self._prev_last_price[instrument_id] = last_price
+
             # Only proceed if market is open
             if not self.is_market_open(instrument_id, dt):
                 self.logger.debug(
@@ -103,6 +109,36 @@ class FutureMarketCollector(BaseMarketCollector):
             self.last_buy_price[instrument_id] = buy_price
             self.last_sell_price[instrument_id] = sell_price
             self.last_price[instrument_id] = last_price
+
+            # To avoid capturing the pre-market stale price exactly at market open,
+            # we delay initializing the FIRST bar of the day until the price actually moves.
+            current_bar = self.instrument_data[instrument_id].current_bars.get(
+                instrument_id
+            )
+
+            is_new_session = False
+            if current_bar is None:
+                is_new_session = True
+            else:
+                # If current_bar ended more than 1 hour ago, this is a new trading session
+                if (dt - current_bar["end_time"]).total_seconds() > 3600:
+                    is_new_session = True
+
+            if is_new_session:
+                if prev_price is not None and last_price == prev_price:
+                    self.logger.debug(
+                        f"[{instrument_id}] Delaying new session bar init until price moves from {last_price}"
+                    )
+                    # Publish B/S updates without creating the bar
+                    await self._publish_bar_update(
+                        instrument_id,
+                        extra_meta={
+                            "last_buy": self.last_buy_price[instrument_id],
+                            "last_sell": self.last_sell_price[instrument_id],
+                            "last_price": self.last_price[instrument_id],
+                        },
+                    )
+                    return
 
             # Update OHLC bar using lastPrice
             self.instrument_data[instrument_id].update_ohlc_bar(last_price, dt)
