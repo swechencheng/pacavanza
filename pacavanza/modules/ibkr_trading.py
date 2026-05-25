@@ -104,33 +104,41 @@ class IbkrTrading(BaseAvanzaTrading):
         for t in open_trades:
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
-            
+
             # Identify if this is a closing SL or TP.
             # We assume any active order with an ocaGroup or parentId is an SL/TP bracket child.
             is_sl_tp = False
             if t.order.ocaGroup:
                 is_sl_tp = True
-            elif getattr(t.order, "parentId", 0) and getattr(t.order, "parentId", 0) != 0:
+            elif (
+                getattr(t.order, "parentId", 0) and getattr(t.order, "parentId", 0) != 0
+            ):
                 is_sl_tp = True
-                
+
             if not is_sl_tp:
                 continue
 
             # If position is 0, cancel all SL/TP
             if abs_pos == 0:
-                LOGGER.info(f"Sync: Position is 0, cancelling SL/TP orderId={t.order.orderId}")
+                LOGGER.info(
+                    f"Sync: Position is 0, cancelling SL/TP orderId={t.order.orderId}"
+                )
                 self.ib.cancelOrder(t.order)
                 continue
-            
+
             # If position is non-zero, check direction
             if t.order.action != closing_action:
-                LOGGER.info(f"Sync: Wrong direction, cancelling SL/TP orderId={t.order.orderId}")
+                LOGGER.info(
+                    f"Sync: Wrong direction, cancelling SL/TP orderId={t.order.orderId}"
+                )
                 self.ib.cancelOrder(t.order)
                 continue
-            
+
             # Right direction, update volume if different
             if t.order.totalQuantity != abs_pos:
-                LOGGER.info(f"Sync: Updating SL/TP orderId={t.order.orderId} volume {t.order.totalQuantity} -> {abs_pos}")
+                LOGGER.info(
+                    f"Sync: Updating SL/TP orderId={t.order.orderId} volume {t.order.totalQuantity} -> {abs_pos}"
+                )
                 t.order.totalQuantity = abs_pos
                 self.ib.placeOrder(self.contract, t.order)
 
@@ -621,11 +629,18 @@ class IbkrTrading(BaseAvanzaTrading):
     def _find_trade_by_order_id(self, order_id: int) -> Optional[Trade]:
         """Find an active Trade object by its orderId or permId."""
         for t in self.ib.openTrades():
-            if (t.order.orderId == order_id or t.order.permId == order_id) and t.isActive():
+            if (
+                t.order.orderId == order_id or t.order.permId == order_id
+            ) and t.isActive():
                 return t
         return None
 
-    def edit_order(self, order_id: int, price: Optional[float] = None, quantity: Optional[int] = None) -> Dict[str, Any]:
+    def edit_order(
+        self,
+        order_id: int,
+        price: Optional[float] = None,
+        quantity: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Change the price and/or quantity of an existing active order.
         For STP orders, price updates auxPrice. For LMT orders, price updates lmtPrice.
@@ -647,6 +662,14 @@ class IbkrTrading(BaseAvanzaTrading):
             if order.orderType == "MKT":
                 raise Exception("Cannot edit price of a market order")
 
+            # Snap price to tick size to prevent IBKR from rejecting unrounded floats
+            tick = 0.25  # fallback
+            if self.instrument_list:
+                first_instrument = next(iter(self.instrument_list.values()))
+                tick = float(first_instrument.get("tick_size", 0.25))
+
+            price = round(price / tick) * tick
+
             if order.orderType == "STP":
                 order.auxPrice = price
             elif order.orderType == "LMT":
@@ -654,7 +677,22 @@ class IbkrTrading(BaseAvanzaTrading):
             elif order.orderType == "STP LMT":
                 order.auxPrice = price
             else:
-                raise Exception(f"Unsupported order type for price edit: {order.orderType}")
+                raise Exception(
+                    f"Unsupported order type for price edit: {order.orderType}"
+                )
+
+        # Sanitize order fields that TWS might have populated with localized strings
+        if getattr(order, "deltaNeutralOrderType", "") == "无":
+            order.deltaNeutralOrderType = ""
+        if getattr(order, "adjustedOrderType", "") == "无":
+            order.adjustedOrderType = ""
+
+        # If parent is no longer active (e.g. fulfilled), clear parentId
+        # Otherwise TWS will reject the modify with "Cannot find parent order"
+        if getattr(order, "parentId", 0) != 0:
+            parent_trade = self._find_trade_by_order_id(order.parentId)
+            if not parent_trade:
+                order.parentId = 0
 
         self.ib.placeOrder(self.contract, order)
         LOGGER.info(
@@ -743,6 +781,13 @@ class IbkrTrading(BaseAvanzaTrading):
 
         tp_order = LimitOrder(action, volume, limit_price)
         sl_order = StopOrder(action, volume, stop_price)
+
+        # Sanitize order fields that TWS might have populated with localized strings
+        for order in [tp_order, sl_order]:
+            if getattr(order, "deltaNeutralOrderType", "") == "无":
+                order.deltaNeutralOrderType = ""
+            if getattr(order, "adjustedOrderType", "") == "无":
+                order.adjustedOrderType = ""
 
         oca_group = f"ibkr_oca_manual_{int(datetime.now(tz=timezone.utc).timestamp())}"
         IB.oneCancelsAll(
@@ -850,7 +895,7 @@ class IbkrTrading(BaseAvanzaTrading):
         """Handle execution details (fills)."""
         if trade.contract.conId != self.contract.conId:
             return
-        
+
         try:
             # When an order executes, position might have changed. Sync SL/TP.
             self._sync_sl_tp_volume()
@@ -929,7 +974,7 @@ class IbkrTrading(BaseAvanzaTrading):
         for group_key, trades in trade_groups.items():
             # If all orders in the group are done, do not show this group
             def is_trade_done(t):
-                # ib_async's isDone() covers Filled and Cancelled, but 'Inactive' 
+                # ib_async's isDone() covers Filled and Cancelled, but 'Inactive'
                 # or 'ApiCancelled' might not be fully covered or linger.
                 if t.isDone():
                     return True
@@ -996,16 +1041,17 @@ class IbkrTrading(BaseAvanzaTrading):
         for pos in positions:
             if pos.contract.conId == self.contract.conId:
                 try:
-                    mult = float(self.contract.multiplier) if self.contract.multiplier else 1.0
+                    mult = (
+                        float(self.contract.multiplier)
+                        if self.contract.multiplier
+                        else 1.0
+                    )
                 except (ValueError, TypeError):
                     mult = 1.0
                 if mult <= 0:
                     mult = 1.0
                 price = pos.avgCost / mult if pos.avgCost else 0.0
-                return {
-                    "position": int(pos.position),
-                    "avgCost": price
-                }
+                return {"position": int(pos.position), "avgCost": price}
         return None
 
     # --------------------------------------------------------------------------
