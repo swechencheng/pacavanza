@@ -5,6 +5,7 @@ venv/
 logs/
 pacavanza.egg-info/
 scratch/
+.agents/
 
 .temp
 temp_*.py
