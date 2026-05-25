@@ -302,6 +302,12 @@ class FutureChartApp extends PACChartApp {
 
   // ── Order Lifecycle Panel ─────────────────────────────────────────
   async _refreshOrders() {
+    // Pause if user is currently editing an input field
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.classList.contains("order-qty-input") || activeEl.classList.contains("order-price-input"))) {
+      return; // Skip polling so we don't overwrite their input before they click save
+    }
+
     const res = await this._callApi("/ibkr/open_orders", null, "GET");
     if (res) {
       if (res.position !== undefined) {
@@ -605,7 +611,7 @@ class FutureChartApp extends PACChartApp {
       if (processedOrderIds.has(o.orderId)) return;
       // Skip drawing if the order is exclusively for closing or scaling up
       if (o.orderRef === "CloseOnly" || o.orderRef === "ScaleUp") return;
-      
+
       if (o.orderType === "LMT" || o.orderType === "STP" || o.orderType === "STP LMT") {
         const orderBarTime = getBarTimeForOrder(o.placedTime);
         if (orderBarTime !== null) {
