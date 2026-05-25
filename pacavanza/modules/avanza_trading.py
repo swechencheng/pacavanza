@@ -1,11 +1,4 @@
-import asyncio
-import json
-import logging
-from typing import Dict, Any, List, Optional
-
-from datetime import datetime, timezone
-
-from .base_trading import BaseAvanzaTrading, LOGGER
+from .base_trading import BaseAvanzaTrading
 
 
 class AvanzaTrading(BaseAvanzaTrading):

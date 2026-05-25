@@ -291,7 +291,7 @@ class AvanzaTradingMonitor:
                 active_order_ids = {
                     o.get("orderId") for o in active_orders if o.get("orderId")
                 }
-                instrument_keys = (
+                instrument_keys = set(
                     item.get("orderbookId") for item in self._instrument_list.values()
                 )  # Relies on _load_instrument_list
 

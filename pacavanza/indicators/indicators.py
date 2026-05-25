@@ -1,34 +1,6 @@
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-
-def compute_emas_from_bars(bars: List[Dict[str, Any]], lengths=[20, 50, 100, 220]):
-    """
-    bars: list of dicts with 'start_time' (aware dt), 'end_time', 'open','high','low','close','volume'
-    returns: dict length -> list of {time: iso, value: float} aligned with bars' end_time
-    """
-    if not bars:
-        return {l: [] for l in lengths}
-    df = pd.DataFrame(bars)
-    # ensure close and time are present
-    df["close"] = df["close"].astype(float)
-    # use end_time as the timestamp for series
-    df["time"] = pd.to_datetime(df["end_time"])
-    df = df.sort_values("time")
-    out = {}
-    close = df["close"]
-    for L in lengths:
-        # pandas ewm alpha = 2/(L+1) with adjust=False produces same recursive EMA
-        ema_series = close.ewm(span=L, adjust=False).mean()
-        out[L] = [
-            {"time": t.isoformat(), "value": float(v)}
-            for t, v in zip(
-                df["time"].dt.tz_localize(None).tolist(), ema_series.tolist()
-            )
-        ]
-    return out
-
-
 def incremental_ema_update(
     prev_value: Optional[float],
     close: float,

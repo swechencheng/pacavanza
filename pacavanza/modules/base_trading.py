@@ -241,20 +241,6 @@ class BaseAvanzaTrading:
                     except Exception as e:
                         LOGGER.error(f"Failed to delete stop loss {sl['id']}: {e}")
 
-    # helper: prune bars older than 7 days for memory saving (called under lock by caller)
-    def prune_old_bars_snapshot(
-        self, lst: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        if not lst:
-            return lst
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
-        try:
-            return [
-                b for b in lst if b["start_time"].astimezone(timezone.utc) >= cutoff
-            ]
-        except Exception:
-            return lst
-
     # helper: get/create per-instrument bars lock
     async def _get_bars_lock(self, instrument_id: str) -> asyncio.Lock:
         # fast path

@@ -1,7 +1,6 @@
 import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-import copy
 
 INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
@@ -67,9 +66,3 @@ class InstrumentData:
                 current_bar["low"] = min(current_bar["low"], price)
                 current_bar["close"] = price
 
-    def get_dataframes(self):
-        """Thread-safe deep copy for use in Dash chart updates."""
-        with self.lock:
-            completed = copy.deepcopy(self.completed_ohlc[self.instrument_id])
-            current = copy.deepcopy(self.current_bars.get(self.instrument_id))
-        return completed, current

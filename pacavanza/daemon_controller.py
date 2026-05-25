@@ -1,6 +1,5 @@
 import time
 import sys
-import os
 import signal
 import logging
 import importlib
@@ -94,6 +93,7 @@ def stop_process(name):
 
 def stop_all():
     logger.info("Stopping all processes...")
+    stop_process("future_market")
     stop_process("monitor")
     stop_process("dashboard")
     stop_process("market")

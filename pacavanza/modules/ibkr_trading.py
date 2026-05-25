@@ -91,37 +91,6 @@ class IbkrTrading(BaseAvanzaTrading):
         """Query current position size (absolute) from IBKR for the contract."""
         return abs(self._get_signed_position())
 
-    def _get_existing_sl_tp_prices(
-        self, direction: str
-    ) -> Tuple[Optional[float], Optional[float]]:
-        """
-        Find existing stop-loss and take-profit prices from open orders.
-
-        Args:
-            direction: 'long' or 'short' — the current position direction.
-                For a long position, SL is a SELL stop and TP is a SELL limit.
-                For a short position, SL is a BUY stop and TP is a BUY limit.
-
-        Returns:
-            (sl_price, tp_price) — either or both may be None if not found.
-        """
-        sl_price = None
-        tp_price = None
-        if direction == "long":
-            sl_action, tp_action = "SELL", "SELL"
-        else:  # short
-            sl_action, tp_action = "BUY", "BUY"
-
-        open_trades = self.ib.openTrades()
-        for t in open_trades:
-            if t.contract.conId != self.contract.conId or not t.isActive():
-                continue
-            if t.order.action == sl_action and t.order.orderType == "STP":
-                sl_price = t.order.auxPrice  # stop price
-            elif t.order.action == tp_action and t.order.orderType == "LMT":
-                tp_price = t.order.lmtPrice
-        return sl_price, tp_price
-
     def _sync_sl_tp_volume(self) -> None:
         """
         Synchronize the volume of all active SL and TP orders
@@ -357,45 +326,6 @@ class IbkrTrading(BaseAvanzaTrading):
             f"parentId={parent_id}, stopPrice={sl_price}"
         )
         return parent_trade
-
-    def _place_standalone_sl_tp(
-        self,
-        instrument_id: str,
-        sl_action: str,
-        sl_volume: int,
-        sl_price: float,
-        tp_action: str,
-        tp_volume: int,
-        tp_price: float,
-    ) -> None:
-        """
-        Place standalone SL and TP orders linked by OCA group.
-
-        Used for scale-up scenarios where there is no parent entry to attach
-        children to — the SL/TP must be immediately active.
-        """
-        sl_order = StopOrder(sl_action, sl_volume, sl_price)
-        tp_order = LimitOrder(tp_action, tp_volume, tp_price)
-
-        oca_group = (
-            f"ibkr_oca_{instrument_id}_{int(datetime.now(tz=timezone.utc).timestamp())}"
-        )
-        IB.oneCancelsAll(
-            orders=[sl_order, tp_order],
-            ocaGroup=oca_group,
-            ocaType=1,
-        )
-
-        sl_trade = self.ib.placeOrder(self.contract, sl_order)
-        LOGGER.info(
-            f"Standalone {sl_action} STOP (SL): orderId={sl_trade.order.orderId}, "
-            f"stopPrice={sl_price}, ocaGroup={oca_group}"
-        )
-        tp_trade = self.ib.placeOrder(self.contract, tp_order)
-        LOGGER.info(
-            f"Standalone {tp_action} LIMIT (TP): orderId={tp_trade.order.orderId}, "
-            f"limitPrice={tp_price}, ocaGroup={oca_group}"
-        )
 
     # --------------------------------------------------------------------------
     # Override: broker-specific order execution hooks (ib_async)
@@ -684,30 +614,6 @@ class IbkrTrading(BaseAvanzaTrading):
             "cleanup_residual_sell_stop_losses is Avanza-specific"
         )
 
-    def cleanup_residual_orders(self) -> List[Dict[str, Any]]:
-        """
-        Cancel residual orders that have no corresponding position.
-        IBKR version: check positions and cancel orphaned orders.
-        """
-        position_size = self._get_instrument_position_size("")
-        if position_size > 0:
-            return []  # have a position, don't clean up
-
-        open_trades = self.ib.openTrades()
-        cancelled = []
-        for t in open_trades:
-            if (
-                t.contract.conId == self.contract.conId
-                and t.order.orderType in ("STP", "LMT", "STP LMT")
-                and t.isActive()
-            ):
-                LOGGER.info(
-                    f"Cancelling residual IBKR order: orderId={t.order.orderId}"
-                )
-                self.ib.cancelOrder(t.order)
-                cancelled.append({"orderId": t.order.orderId})
-        return cancelled
-
     # --------------------------------------------------------------------------
     # Order editing: IBKR implementations
     # --------------------------------------------------------------------------
@@ -915,16 +821,6 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.errorEvent += self._on_error
         self.ib.execDetailsEvent += self._on_exec_details
         LOGGER.info("Subscribed to IBKR trade events")
-
-    def _teardown_trade_subscription(self):
-        """Unsubscribe from IBKR trade events."""
-        try:
-            self.ib.orderStatusEvent -= self._on_order_status
-            self.ib.newOrderEvent -= self._on_new_order
-            self.ib.errorEvent -= self._on_error
-            self.ib.execDetailsEvent -= self._on_exec_details
-        except Exception:
-            pass
 
     def _on_order_status(self, trade: Trade):
         """Handle order status change events."""

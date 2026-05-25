@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Dict, Any, List, AsyncIterator
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse, Response, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import redis.asyncio as aioredis
@@ -128,7 +128,7 @@ def create_app(
 
     recent_bars = {sid: [] for sid in instrument_list.keys()}
 
-    for sid, _sd in recent_bars.items():
+    for sid in recent_bars:
         data_file = f"ohlc_{sid}.json"
         try:
             with open(data_file, "r") as f:
