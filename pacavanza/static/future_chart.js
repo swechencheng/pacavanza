@@ -517,14 +517,12 @@ class FutureChartApp extends PACChartApp {
     for (const ocaGroupId in ocaGroupToAllOrders) {
       const ocaOrders = ocaGroupToAllOrders[ocaGroupId];
 
-      // Only draw if at least one order in the OCA group is active (not done)
+      // Only draw if at least two orders in the OCA group are active (not done)
       // and not already processed by bracket logic
       const activeOcaOrders = ocaOrders.filter(o => !o.isDone && !processedOrderIds.has(o.orderId));
-      if (activeOcaOrders.length === 0) continue;
+      if (activeOcaOrders.length < 2) continue;
 
-      // We need at least 2 orders in the OCA group (TP and SL) to determine upper and lower prices
       const prices = ocaOrders.map(o => o.price).filter(p => p != null);
-      if (prices.length < 2) continue;
 
       const upperPrice = Math.max(...prices);
       const lowerPrice = Math.min(...prices);

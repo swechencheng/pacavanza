@@ -58,6 +58,14 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib = ib
         self.contract = contract
         self.order_placed_times = {}
+        self.perm_id_to_parent_perm_id = {}
+        self.perm_id_to_oca_group = {}
+
+        # Subscribe to position updates from IBKR so that ib.positions()
+        # is automatically populated and updated.
+        # We must use client.reqPositions() instead of ib.reqPositions()
+        # to avoid blocking the already-running asyncio event loop.
+        self.ib.client.reqPositions()
 
     # --------------------------------------------------------------------------
     # Override: volume is numberOfContracts (not calculated from balance)
@@ -139,8 +147,12 @@ class IbkrTrading(BaseAvanzaTrading):
                 LOGGER.info(
                     f"Sync: Updating SL/TP orderId={t.order.orderId} volume {t.order.totalQuantity} -> {abs_pos}"
                 )
-                t.order.totalQuantity = abs_pos
-                self.ib.placeOrder(self.contract, t.order)
+                try:
+                    self.edit_order(t.order.orderId, quantity=abs_pos)
+                except Exception as e:
+                    LOGGER.error(
+                        f"Sync: Failed to update orderId={t.order.orderId}: {e}"
+                    )
 
     # --------------------------------------------------------------------------
     # Bear swing leg calculation (symmetric to bull leg in base)
@@ -694,6 +706,11 @@ class IbkrTrading(BaseAvanzaTrading):
             if not parent_trade:
                 order.parentId = 0
 
+        # IMPORTANT: Force transmit=True on modifications. Bracket children may
+        # have transmit=False from their initial creation. Leaving it False
+        # causes the modification to be accepted but suspends the order locally.
+        order.transmit = True
+
         self.ib.placeOrder(self.contract, order)
         LOGGER.info(
             f"Edited order {order_id}: type={order.orderType}, newPrice={price}, newQuantity={quantity}"
@@ -942,10 +959,26 @@ class IbkrTrading(BaseAvanzaTrading):
                 return parent_perm
             return 0
 
+        # Update cache for all trades
+        for t in contract_trades:
+            order = t.order
+            pid = getattr(order, "permId", 0)
+            if not pid:
+                continue
+
+            p_perm = get_parent_perm_id(order)
+            if p_perm:
+                self.perm_id_to_parent_perm_id[pid] = p_perm
+
+            oca = getattr(order, "ocaGroup", "")
+            if oca:
+                self.perm_id_to_oca_group[pid] = oca
+
         # Step 1: Find all parent perm IDs
         parent_perm_ids = set()
         for t in contract_trades:
-            p_perm = get_parent_perm_id(t.order)
+            pid = getattr(t.order, "permId", 0)
+            p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
             if p_perm:
                 parent_perm_ids.add(p_perm)
 
@@ -953,17 +986,19 @@ class IbkrTrading(BaseAvanzaTrading):
         trade_groups = {}
         for t in contract_trades:
             order = t.order
-            p_perm = get_parent_perm_id(order)
+            pid = getattr(order, "permId", 0)
+            p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
             has_parent = bool(p_perm)
+            oca = self.perm_id_to_oca_group.get(pid, "")
 
             if has_parent:
                 group_key = f"parent_{p_perm}"
-            elif order.permId in parent_perm_ids:
-                group_key = f"parent_{order.permId}"
-            elif order.ocaGroup:
-                group_key = f"oca_{order.ocaGroup}"
+            elif pid in parent_perm_ids:
+                group_key = f"parent_{pid}"
+            elif oca:
+                group_key = f"oca_{oca}"
             else:
-                group_key = f"order_{order.permId}"
+                group_key = f"order_{pid}"
 
             if group_key not in trade_groups:
                 trade_groups[group_key] = []
@@ -1004,9 +1039,13 @@ class IbkrTrading(BaseAvanzaTrading):
                         placed_time = datetime.now(timezone.utc)
                     self.order_placed_times[order.permId] = placed_time
 
-                parent_id_val = get_parent_perm_id(order)
+                parent_id_val = self.perm_id_to_parent_perm_id.get(order.permId, 0)
                 if parent_id_val == 0:
                     parent_id_val = None
+
+                oca_val = self.perm_id_to_oca_group.get(order.permId, "")
+                if not oca_val:
+                    oca_val = None
 
                 result.append(
                     {
@@ -1017,7 +1056,7 @@ class IbkrTrading(BaseAvanzaTrading):
                         "price": price,
                         "status": t.orderStatus.status,
                         "parentId": parent_id_val,
-                        "ocaGroup": order.ocaGroup if order.ocaGroup else None,
+                        "ocaGroup": oca_val,
                         "orderRef": order.orderRef,
                         "isDone": is_trade_done(t),
                         "fulfilled": t.orderStatus.status == "Filled",
