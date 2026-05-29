@@ -141,6 +141,24 @@ class PACChartApp {
       state.toolRegistry = window.LightweightChartsDrawing.getToolRegistry();
     }
 
+    // Fix for custom drawings: Disable chart panning if the user mousedowns on a drawing.
+    // LightweightChartsDrawing changes the cursor on the container/canvas when hovering a drawing.
+    if (container) {
+      container.addEventListener('mousedown', (e) => {
+        if (!state.drawingManager) return;
+        const cursor = e.target.style.cursor || window.getComputedStyle(e.target).cursor;
+        // 'crosshair', 'default', 'auto' mean empty space. Anything else (pointer, move, ns-resize, etc.) means drawing interaction.
+        if (cursor && !['crosshair', 'default', 'auto'].includes(cursor)) {
+          chart.applyOptions({ handleScroll: false });
+          const onMouseUp = () => {
+            chart.applyOptions({ handleScroll: true });
+            window.removeEventListener('mouseup', onMouseUp, { capture: true });
+          };
+          window.addEventListener('mouseup', onMouseUp, { capture: true });
+        }
+      }, { capture: true });
+    }
+
     return state;
   }
 
