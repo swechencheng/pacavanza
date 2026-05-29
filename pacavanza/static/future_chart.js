@@ -650,10 +650,12 @@ class FutureChartApp extends PACChartApp {
     // Read price if input exists
     const priceInput = row.querySelector(`.order-price-input[data-oid="${orderId}"]`);
     const price = priceInput ? parseFloat(priceInput.value) : null;
+    if (priceInput) priceInput.blur();
 
     // Read quantity if input exists
     const qtyInput = row.querySelector(`.order-qty-input[data-oid="${orderId}"]`);
     const qty = qtyInput ? parseInt(qtyInput.value, 10) : null;
+    if (qtyInput) qtyInput.blur();
 
     const payload = { orderId };
     if (price !== null && !isNaN(price)) {
