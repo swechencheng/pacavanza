@@ -210,6 +210,65 @@
       flex-shrink: 0;
     }
 
+    /* ── Position Info Overlay ─────────────────────────────── */
+    .pac-position-overlay {
+      position: absolute;
+      bottom: 30px;
+      left: 42px;
+      /* right of the drawing toolbar (toolbar width ~36px + gap) */
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      background: rgba(22, 27, 34, 0.88);
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      font-size: 12px;
+      color: #c9d1d9;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+      transition: opacity 0.25s ease;
+      white-space: nowrap;
+    }
+
+    .pac-position-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .pac-position-overlay .pos-label {
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    .pac-position-overlay .pos-long {
+      color: #26A69A;
+    }
+
+    .pac-position-overlay .pos-short {
+      color: #EF5350;
+    }
+
+    .pac-position-overlay .pos-flat {
+      color: #8b949e;
+    }
+
+    .pac-position-overlay .pos-size {
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .pac-position-overlay .pos-sep {
+      color: #484f58;
+    }
+
+    .pac-position-overlay .pos-avg {
+      color: #8b949e;
+      font-size: 11px;
+    }
+
     /* ── Order Lifecycle Panel ──────────────────────────────── */
     .order-panel {
       background: #0d1117;

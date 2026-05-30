@@ -132,6 +132,7 @@ class FutureChartApp extends PACChartApp {
     if (msg.type === "order_update" && msg.orders) {
       if (msg.position !== undefined) {
         this._currentPosition = msg.position;
+        this._updatePositionOverlay();
       }
       this._renderOrders(msg.orders);
       return;
@@ -312,6 +313,7 @@ class FutureChartApp extends PACChartApp {
     if (res) {
       if (res.position !== undefined) {
         this._currentPosition = res.position;
+        this._updatePositionOverlay();
       }
       if (res.orders) {
         this._renderOrders(res.orders);
@@ -642,6 +644,38 @@ class FutureChartApp extends PACChartApp {
         }
       }
     });
+  }
+
+  // ── Position Info Overlay ─────────────────────────────────────────
+  _updatePositionOverlay() {
+    const container = document.getElementById('chart-future');
+    if (!container) return;
+
+    let overlay = container.querySelector('.pac-position-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'pac-position-overlay';
+      container.appendChild(overlay);
+    }
+
+    const pos = this._currentPosition;
+    if (!pos || pos.position === 0) {
+      overlay.innerHTML = `<span class="pos-label pos-flat">FLAT</span>`;
+      return;
+    }
+
+    const isLong = pos.position > 0;
+    const sideClass = isLong ? 'pos-long' : 'pos-short';
+    const sideLabel = isLong ? 'LONG' : 'SHORT';
+    const size = Math.abs(pos.position);
+    const avgPrice = pos.avgCost != null ? pos.avgCost.toFixed(2) : '—';
+
+    overlay.innerHTML = [
+      `<span class="pos-label ${sideClass}">${sideLabel}</span>`,
+      `<span class="pos-size ${sideClass}">×${size}</span>`,
+      `<span class="pos-sep">│</span>`,
+      `<span class="pos-avg">Avg ${avgPrice}</span>`,
+    ].join('');
   }
 
   async _editOrder(orderId, btn) {
