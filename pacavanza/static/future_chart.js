@@ -29,10 +29,10 @@ class FutureChartApp extends PACChartApp {
     if (this.chartFuture.drawingManager) {
       this.chartFuture.drawingManager.on("drawing:updated", (event) => this._handleDrawingUpdated(event));
       this.chartFuture.drawingManager.on("drawing:selected", (event) => {
-        this._remoteLog("INFO", `Drawing selected: ${event.drawingId}`);
+        this._remoteLog("DEBUG", `Drawing selected: ${event.drawingId}`);
       });
       this.chartFuture.drawingManager.on("drawing:deselected", (event) => {
-        this._remoteLog("INFO", `Drawing deselected: ${event.drawingId}`);
+        this._remoteLog("DEBUG", `Drawing deselected: ${event.drawingId}`);
         this._pendingDrawingUpdate = null;
       });
       window.addEventListener("mouseup", (e) => this._handleMouseUp(e));
@@ -44,7 +44,7 @@ class FutureChartApp extends PACChartApp {
         if (e.key === "Escape") {
           const selected = this.chartFuture.drawingManager.getSelectedDrawing();
           if (selected && selected.id && selected.id.startsWith("order-")) {
-            this._remoteLog("INFO", `Escape pressed. Deselecting drawing ${selected.id}`);
+            this._remoteLog("DEBUG", `Escape pressed. Deselecting drawing ${selected.id}`);
             this.chartFuture.drawingManager.deselectAll();
             this._refreshOrders();
           }
@@ -57,6 +57,10 @@ class FutureChartApp extends PACChartApp {
 
   _remoteLog(level, message) {
     console.log(`[${level}] ${message}`);
+    const levelUpper = (level || "").toUpperCase();
+    if (levelUpper === "DEBUG") {
+      return;
+    }
     fetch("/client_log", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -369,17 +373,17 @@ class FutureChartApp extends PACChartApp {
     // Check if any order drawing is currently selected or being modified
     const selected = cm.drawingManager.getSelectedDrawing();
     if (selected && selected.id && selected.id.startsWith("order-")) {
-      this._remoteLog("INFO", `Skipping _updateOrderDrawings because drawing ${selected.id} is currently selected/being edited.`);
+      this._remoteLog("DEBUG", `Skipping _updateOrderDrawings because drawing ${selected.id} is currently selected/being edited.`);
       return;
     }
 
     if (this._pendingDrawingUpdate) {
-      this._remoteLog("INFO", "Skipping _updateOrderDrawings because there is a pending drawing update.");
+      this._remoteLog("DEBUG", "Skipping _updateOrderDrawings because there is a pending drawing update.");
       return;
     }
 
     if (orders && orders.length > 0) {
-      this._remoteLog("INFO", `_updateOrderDrawings starting. Total orders: ${orders.length}. Chart data size: ${cm.data ? cm.data.size : 0}`);
+      this._remoteLog("DEBUG", `_updateOrderDrawings starting. Total orders: ${orders.length}. Chart data size: ${cm.data ? cm.data.size : 0}`);
     }
 
     // 1. Clear previous drawings
@@ -396,7 +400,7 @@ class FutureChartApp extends PACChartApp {
 
     // If no orders, or chart history is not loaded yet (no data), we don't draw anything
     if (!orders || orders.length === 0 || cm.data.size === 0) {
-      // this._remoteLog("INFO", `Skipping drawing sync: orders empty or cm.data empty.`);
+      this._remoteLog("DEBUG", `Skipping drawing sync: orders empty or cm.data empty.`);
       return;
     }
 
@@ -420,7 +424,7 @@ class FutureChartApp extends PACChartApp {
 
     // Filter active orders for standalone drawings and OCA drawings
     const activeOrders = orders.filter(o => !o.isDone && !o.fulfilled);
-    this._remoteLog("INFO", `Active orders for drawings: ${JSON.stringify(activeOrders)}`);
+    this._remoteLog("DEBUG", `Active orders for drawings: ${JSON.stringify(activeOrders)}`);
 
     // Track which order IDs are processed as part of a drawing group to avoid double rendering
     const processedOrderIds = new Set();
@@ -443,7 +447,7 @@ class FutureChartApp extends PACChartApp {
       const children = parentIdToChildren[parent.orderId] || [];
       if (children.length === 0) return;
 
-      this._remoteLog("INFO", `Parent ${parent.orderId} has children: ${JSON.stringify(children)}`);
+      this._remoteLog("DEBUG", `Parent ${parent.orderId} has children: ${JSON.stringify(children)}`);
 
       // Find children: TP (LMT) and SL (STP / STP LMT)
       const tpChild = children.find(c => c.orderType === "LMT");
@@ -480,14 +484,14 @@ class FutureChartApp extends PACChartApp {
               showRiskReward: true
             };
 
-            this._remoteLog("INFO", `Attempting to create bracket drawing ${toolType} for parent ${parent.orderId} with anchors: ${JSON.stringify(anchors)}`);
+            this._remoteLog("DEBUG", `Attempting to create bracket drawing ${toolType} for parent ${parent.orderId} with anchors: ${JSON.stringify(anchors)}`);
             try {
               const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
               if (drawing) {
                 PACChartApp.patchPositionDrawing(drawing, toolType);
                 cm.drawingManager.addDrawing(drawing);
                 this._orderDrawingIds.push(id);
-                this._remoteLog("INFO", `Successfully added bracket drawing ${id}`);
+                this._remoteLog("DEBUG", `Successfully added bracket drawing ${id}`);
               } else {
                 this._remoteLog("WARN", `createDrawing returned null for bracket ${toolType}`);
               }
@@ -501,7 +505,7 @@ class FutureChartApp extends PACChartApp {
           }
         }
       } else {
-        this._remoteLog("INFO", `Parent ${parent.orderId} does not have both TP (LMT) and SL (STP). Found TP: ${!!tpChild}, SL: ${!!slChild}`);
+        this._remoteLog("DEBUG", `Parent ${parent.orderId} does not have both TP (LMT) and SL (STP). Found TP: ${!!tpChild}, SL: ${!!slChild}`);
       }
     });
 
@@ -586,14 +590,14 @@ class FutureChartApp extends PACChartApp {
           showRiskReward: true
         };
 
-        this._remoteLog("INFO", `Attempting to create OCA position drawing ${toolType} for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
+        this._remoteLog("DEBUG", `Attempting to create OCA position drawing ${toolType} for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
         try {
           const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
           if (drawing) {
             PACChartApp.patchPositionDrawing(drawing, toolType);
             cm.drawingManager.addDrawing(drawing);
             this._orderDrawingIds.push(id);
-            this._remoteLog("INFO", `Successfully added OCA position drawing ${id}`);
+            this._remoteLog("DEBUG", `Successfully added OCA position drawing ${id}`);
           } else {
             this._remoteLog("WARN", `createDrawing returned null for OCA position ${toolType}`);
           }
@@ -627,13 +631,13 @@ class FutureChartApp extends PACChartApp {
             showPrice: true
           };
 
-          this._remoteLog("INFO", `Attempting to create limit drawing horizontal-ray for order ${o.orderId} with anchors: ${JSON.stringify(anchors)}`);
+          this._remoteLog("DEBUG", `Attempting to create limit drawing horizontal-ray for order ${o.orderId} with anchors: ${JSON.stringify(anchors)}`);
           try {
             const drawing = cm.toolRegistry.createDrawing('horizontal-ray', id, anchors, style, opts);
             if (drawing) {
               cm.drawingManager.addDrawing(drawing);
               this._orderDrawingIds.push(id);
-              this._remoteLog("INFO", `Successfully added limit drawing ${id}`);
+              this._remoteLog("DEBUG", `Successfully added limit drawing ${id}`);
             } else {
               this._remoteLog("WARN", `createDrawing returned null for limit horizontal-ray`);
             }
@@ -732,7 +736,7 @@ class FutureChartApp extends PACChartApp {
     const isOrderDrawing = id.startsWith("order-bracket-") || id.startsWith("order-oca-") || id.startsWith("order-standalone-");
     if (!isOrderDrawing) return;
 
-    this._remoteLog("INFO", `_handleDrawingUpdated called for ${id}. anchors: ${JSON.stringify(drawing.anchors.map(a => a.price))}`);
+    this._remoteLog("DEBUG", `_handleDrawingUpdated called for ${id}. anchors: ${JSON.stringify(drawing.anchors.map(a => a.price))}`);
 
     if (this._isSnapping) return;
 
@@ -760,12 +764,12 @@ class FutureChartApp extends PACChartApp {
   }
 
   _handleMouseUp(e) {
-    this._remoteLog("INFO", `_handleMouseUp event triggered on target: ${e.target ? e.target.tagName : 'unknown'} id: ${e.target ? e.target.id : 'none'}. Pending update exists: ${!!this._pendingDrawingUpdate}`);
+    this._remoteLog("DEBUG", `_handleMouseUp event triggered on target: ${e.target ? e.target.tagName : 'unknown'} id: ${e.target ? e.target.id : 'none'}. Pending update exists: ${!!this._pendingDrawingUpdate}`);
     if (this._pendingDrawingUpdate) {
       const { drawingId, anchors } = this._pendingDrawingUpdate;
       this._pendingDrawingUpdate = null; // Clear immediately to prevent duplicate requests
 
-      this._remoteLog("INFO", `Mouse released. Processing pending update for drawing ${drawingId} with anchors: ${JSON.stringify(anchors)}`);
+      this._remoteLog("DEBUG", `Mouse released. Processing pending update for drawing ${drawingId} with anchors: ${JSON.stringify(anchors)}`);
       this._submitDrawingUpdates(drawingId, anchors);
     }
   }
@@ -832,7 +836,7 @@ class FutureChartApp extends PACChartApp {
     }
 
     if (updates.length === 0) {
-      this._remoteLog("INFO", "No order prices changed, skipping update.");
+      this._remoteLog("DEBUG", "No order prices changed, skipping update.");
       if (this.chartFuture && this.chartFuture.drawingManager) {
         this.chartFuture.drawingManager.deselectAll();
       }
@@ -840,12 +844,12 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
-    this._remoteLog("INFO", `Submitting order updates from drawing: ${JSON.stringify(updates)}`);
+    this._remoteLog("DEBUG", `Submitting order updates from drawing: ${JSON.stringify(updates)}`);
     for (const update of updates) {
       try {
         const res = await this._callApi("/ibkr/edit_order", update);
         if (res) {
-          this._remoteLog("INFO", `Successfully updated order ${update.orderId} to price ${update.price}`);
+          this._remoteLog("DEBUG", `Successfully updated order ${update.orderId} to price ${update.price}`);
         }
       } catch (err) {
         this._remoteLog("ERROR", `Failed to update order ${update.orderId}: ${err.message}`);
