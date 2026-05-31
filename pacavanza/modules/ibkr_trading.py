@@ -908,7 +908,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
-    def _on_exec_details(self, trade: Trade, fill: Any):
+    def _on_exec_details(self, trade: Trade, _fill: Any):
         """Handle execution details (fills)."""
         if trade.contract.conId != self.contract.conId:
             return
@@ -922,7 +922,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
-    def _on_error(self, reqId: int, errorCode: int, errorString: str, contract: Any):
+    def _on_error(self, reqId: int, _errorCode: int, _errorString: str, contract: Any):
         """Handle errors, which could be order rejections/cancellations."""
         if reqId != -1 and self._on_change_callback:
             # Rejections often cause the order status to change to Cancelled/Inactive,

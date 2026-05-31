@@ -102,7 +102,7 @@ def stop_all():
 def main():
     logger.info("Daemon Controller Started")
 
-    def signal_handler(sig, frame):
+    def signal_handler(sig, _frame):
         logger.info(f"Received signal {sig}. Shutting down all processes.")
         stop_all()
         sys.exit(0)

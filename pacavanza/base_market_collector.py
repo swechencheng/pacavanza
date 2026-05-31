@@ -120,8 +120,6 @@ class BaseMarketCollector:
 
         # bookkeeping to limit snapshot IO
         self._dirty_current = set()
-        self._last_current_snapshot = datetime.now(timezone.utc)
-
         # hook: subclass sets up its own price-tracking dicts
         self._init_price_tracking()
 

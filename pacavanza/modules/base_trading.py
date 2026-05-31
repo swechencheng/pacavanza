@@ -776,7 +776,7 @@ class BaseAvanzaTrading:
                 info = self._get_instrument_info(instrument_id)
 
                 # Delegate limit price calculations to subclass
-                sell_trigger, sell_limit, sell_trigger_on_mm = (
+                _sell_trigger, sell_limit, sell_trigger_on_mm = (
                     self._compute_sell_stop_trigger_and_limit(
                         sell_stop_price, tick, tick_coeff
                     )
@@ -882,7 +882,7 @@ class BaseAvanzaTrading:
         info = self._get_instrument_info(instrument_id)
 
         # Delegate limit price calculations to subclass
-        sell_trigger, sell_limit, sell_trigger_on_mm = (
+        _sell_trigger, sell_limit, sell_trigger_on_mm = (
             self._compute_sell_stop_trigger_and_limit(sell_stop_price, tick, tick_coeff)
         )
         tp_limit, tp_trigger_on_mm = self._compute_take_profit_limit(take_profit, tick)

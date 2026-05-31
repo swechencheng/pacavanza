@@ -43,7 +43,7 @@ def flatten_instrument_list(nested_data):
     into a flat dictionary (InstrumentID -> InstrumentData) with inherited metadata.
     """
     flat = {}
-    for asset, data in nested_data.items():
+    for _asset, data in nested_data.items():
         # Common inheritance fields
         common = {
             k: v
