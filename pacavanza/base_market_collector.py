@@ -43,6 +43,7 @@ class BaseMarketCollector:
 
     # ── override in subclass ──────────────────────────────────────────
     sse_base_url: str = ""
+    depth_sse_base_url: str = ""
     default_instrument_list_path: str = ""
     default_redis_channel: str = ""
     logger_name: str = "base_market_collector"
@@ -101,6 +102,7 @@ class BaseMarketCollector:
         # track tasks & clients for graceful shutdown
         self._tasks = []
         self._sse_clients = {}
+        self._depth_sse_clients = {}
         self._avanza = None
         self._shutting_down = False
         self._loop = None
@@ -131,6 +133,10 @@ class BaseMarketCollector:
     async def _sse_callback(self, instrument_id, _id, event, data):
         """Override: the per-SSE-event handler. Signature matches SSEClient listener."""
         raise NotImplementedError
+
+    async def _depth_sse_callback(self, instrument_id, _id, event, data):
+        """Override: depth SSE event handler. Called for order-depth-web-push events."""
+        pass  # no-op by default; subclass overrides
 
     # ── Market-hours helpers ──────────────────────────────────────────
 
@@ -456,37 +462,55 @@ class BaseMarketCollector:
 
     # ── SSE client loop ───────────────────────────────────────────────
 
-    async def _run_sse_client_loop(self, avanza, instrument_id, product_id):
+    async def _run_sse_client_loop(
+        self,
+        avanza,
+        instrument_id,
+        product_id,
+        *,
+        sse_url=None,
+        callback=None,
+        client_registry=None,
+        label="SSE",
+    ):
+        """Generic SSE client loop. Used for both quote and depth streams."""
+        if sse_url is None:
+            sse_url = self.sse_base_url + product_id
+        if callback is None:
+            callback = partial(self._sse_callback, instrument_id)
+        if client_registry is None:
+            client_registry = self._sse_clients
+
         while True:
             if self._shutting_down:
                 self.logger.info(
-                    f"[{instrument_id}] Shutdown requested — exiting _run_sse_client_loop."
+                    f"[{instrument_id}] Shutdown requested — exiting {label} client loop."
                 )
                 break
 
             client = None
             try:
-                client = SSEClient(avanza, self.sse_base_url + product_id)
-                self._sse_clients[instrument_id] = client
-                client.add_listener(partial(self._sse_callback, instrument_id))
+                client = SSEClient(avanza, sse_url)
+                client_registry[instrument_id] = client
+                client.add_listener(callback)
                 self.logger.info(
-                    f"[{instrument_id}] Starting SSE client for product {product_id}"
+                    f"[{instrument_id}] Starting {label} client for product {product_id}"
                 )
                 await client.start()
                 self.logger.info(
-                    f"[{instrument_id}] SSE client stopped cleanly (will reconnect)."
+                    f"[{instrument_id}] {label} client stopped cleanly (will reconnect)."
                 )
 
                 if self._shutting_down:
                     self.logger.info(
-                        f"[{instrument_id}] Shutdown requested after client stopped — exiting loop."
+                        f"[{instrument_id}] Shutdown requested after {label} client stopped — exiting loop."
                     )
-                    self._sse_clients.pop(instrument_id, None)
+                    client_registry.pop(instrument_id, None)
                     break
 
             except asyncio.CancelledError:
                 self.logger.info(
-                    f"[{instrument_id}] _run_sse_client_loop cancelled: attempting client stop."
+                    f"[{instrument_id}] {label} client loop cancelled: attempting client stop."
                 )
                 try:
                     if client is not None:
@@ -499,14 +523,14 @@ class BaseMarketCollector:
                                 await res
                 except Exception as e:
                     self.logger.debug(
-                        f"[{instrument_id}] Exception while stopping client on cancel: {e}"
+                        f"[{instrument_id}] Exception while stopping {label} client on cancel: {e}"
                     )
                 finally:
-                    self._sse_clients.pop(instrument_id, None)
+                    client_registry.pop(instrument_id, None)
                     raise
             except Exception as e:
                 self.logger.error(
-                    f"[{instrument_id}] SSE client error: {e}. Reconnecting in 5s..."
+                    f"[{instrument_id}] {label} client error: {e}. Reconnecting in 5s..."
                 )
                 try:
                     if client is not None:
@@ -519,10 +543,10 @@ class BaseMarketCollector:
                                 await res
                 except Exception:
                     pass
-                self._sse_clients.pop(instrument_id, None)
+                client_registry.pop(instrument_id, None)
                 if self._shutting_down:
                     self.logger.info(
-                        f"[{instrument_id}] Shutdown requested during error; exiting client loop."
+                        f"[{instrument_id}] Shutdown requested during {label} error; exiting client loop."
                     )
                     break
                 await asyncio.sleep(5)
@@ -559,6 +583,21 @@ class BaseMarketCollector:
                         self._run_sse_client_loop(avanza, sid, obid)
                     )
                     self._tasks.append(t)
+
+                    # Launch depth SSE client if depth URL is configured
+                    if self.depth_sse_base_url:
+                        dt = asyncio.create_task(
+                            self._run_sse_client_loop(
+                                avanza,
+                                sid,
+                                obid,
+                                sse_url=self.depth_sse_base_url + obid,
+                                callback=partial(self._depth_sse_callback, sid),
+                                client_registry=self._depth_sse_clients,
+                                label="Depth-SSE",
+                            )
+                        )
+                        self._tasks.append(dt)
 
                 await asyncio.gather(*self._tasks)
             except Exception as e:
@@ -650,21 +689,27 @@ class BaseMarketCollector:
         except Exception as e:
             self.logger.error(f"Error during force_save_all in shutdown: {e}")
 
-        # 2) Stop SSE clients
-        for sid, client in list(self._sse_clients.items()):
-            try:
-                self.logger.info(f"[{sid}] Stopping SSE client...")
-                stop_fn = getattr(client, "stop", None) or getattr(
-                    client, "close", None
-                )
-                if stop_fn:
-                    res = stop_fn()
-                    if asyncio.iscoroutine(res):
-                        await res
-            except Exception as e:
-                self.logger.debug(f"[{sid}] Exception while stopping SSE client: {e}")
-            finally:
-                self._sse_clients.pop(sid, None)
+        # 2) Stop SSE clients (quote + depth)
+        for registry_name, registry in [
+            ("SSE", self._sse_clients),
+            ("Depth-SSE", self._depth_sse_clients),
+        ]:
+            for sid, client in list(registry.items()):
+                try:
+                    self.logger.info(f"[{sid}] Stopping {registry_name} client...")
+                    stop_fn = getattr(client, "stop", None) or getattr(
+                        client, "close", None
+                    )
+                    if stop_fn:
+                        res = stop_fn()
+                        if asyncio.iscoroutine(res):
+                            await res
+                except Exception as e:
+                    self.logger.debug(
+                        f"[{sid}] Exception while stopping {registry_name} client: {e}"
+                    )
+                finally:
+                    registry.pop(sid, None)
 
         # 3) Close Avanza session
         if self._avanza is not None:

@@ -142,6 +142,12 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
+    // Handle order depth (tape) updates
+    if (msg.type === "depth") {
+      this._renderDepth(msg);
+      return;
+    }
+
     if (msg.instrument !== window.PAC_TRADING_STATE.futureInstrument || !msg.bar) return;
 
     const t = this.isoToLWTime(msg.bar.start_time);
@@ -156,6 +162,49 @@ class FutureChartApp extends PACChartApp {
       this.ensureMarketCountdown(this.chartFuture.groupingState);
     }
     this._applyEMAFromMsg(this.chartFuture, msg);
+  }
+
+  // ── Order Depth (Tape) Rendering ───────────────────────────────────
+  _renderDepth(msg) {
+    const content = document.getElementById("tape-content");
+    const updatedEl = document.getElementById("tape-updated");
+    if (!content) return;
+
+    const levels = msg.levels;
+    if (!levels || levels.length === 0) {
+      content.innerHTML = '<div class="tape-empty">No depth data</div>';
+      return;
+    }
+
+    let html = '<table class="tape-table"><thead><tr>';
+    html += '<th>Vol</th><th>Bid</th><th>Ask</th><th>Vol</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const level of levels) {
+      const bp = level.buyPrice != null ? level.buyPrice.toFixed(2) : '—';
+      const bv = level.buyVolume != null ? level.buyVolume : '—';
+      const sp = level.sellPrice != null ? level.sellPrice.toFixed(2) : '—';
+      const sv = level.sellVolume != null ? level.sellVolume : '—';
+      html += `<tr>`;
+      html += `<td class="tape-bid-vol">${bv}</td>`;
+      html += `<td class="tape-bid-price">${bp}</td>`;
+      html += `<td class="tape-ask-price">${sp}</td>`;
+      html += `<td class="tape-ask-vol">${sv}</td>`;
+      html += `</tr>`;
+    }
+
+    html += '</tbody></table>';
+    content.innerHTML = html;
+
+    // Update timestamp
+    if (updatedEl && msg.updated) {
+      try {
+        const d = new Date(msg.updated);
+        updatedEl.textContent = d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch (e) {
+        updatedEl.textContent = msg.updated;
+      }
+    }
   }
 
   // ── Helper: call API endpoint ─────────────────────────────────────

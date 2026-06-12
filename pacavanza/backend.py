@@ -538,6 +538,10 @@ def create_app(
             }
             await manager.broadcast(out)
 
+        elif mtype == "depth":
+            # Order depth (tape) — pass through to WebSocket clients, no storage
+            await manager.broadcast(payload)
+
     # Background task: pump ib_async event loop so openTrades()/events stay current
     async def _ibkr_event_pump():
         """Periodically pump ib_async event loop to process TWS messages."""
@@ -559,7 +563,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
         nonlocal ibkr_trading
-        
+
         # Connect IBKR async inside the correct event loop
         if ibkr_conn is not None:
             ib, contract = ibkr_conn
@@ -567,7 +571,7 @@ def create_app(
                 await ib.connectAsync("127.0.0.1", 7497, clientId=51)
                 await ib.qualifyContractsAsync(contract)
                 LOGGER.info("IBKR async connected inside lifespan.")
-                
+
                 ibkr_trading = IbkrTrading(
                     ib=ib,
                     contract=contract,
@@ -660,7 +664,9 @@ def create_app(
                     active_future_info.clear()
                     active_future_info.update({"key": key, **meta})
                     instrument_list.update(flat_active)
-                    LOGGER.info(f"Dynamically loaded active future: {key} ({meta.get('name', '')})")
+                    LOGGER.info(
+                        f"Dynamically loaded active future: {key} ({meta.get('name', '')})"
+                    )
             except Exception as e:
                 LOGGER.warning("Could not dynamically fetch active future: %s", e)
 
@@ -1261,11 +1267,15 @@ def create_app(
         if order_id is None:
             raise HTTPException(status_code=400, detail="orderId is required")
         if price is None and quantity is None:
-            raise HTTPException(status_code=400, detail="Either price or quantity must be provided")
+            raise HTTPException(
+                status_code=400, detail="Either price or quantity must be provided"
+            )
         try:
             p_val = float(price) if price is not None else None
             q_val = int(quantity) if quantity is not None else None
-            result = ibkr_trading.edit_order(order_id=int(order_id), price=p_val, quantity=q_val)
+            result = ibkr_trading.edit_order(
+                order_id=int(order_id), price=p_val, quantity=q_val
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
@@ -1323,9 +1333,7 @@ def create_app(
         volume = body.get("volume")
         price = body.get("price")
         if volume is None or price is None:
-            raise HTTPException(
-                status_code=400, detail="volume and price required"
-            )
+            raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_limit_buy(int(volume), float(price))
         except Exception as e:
@@ -1340,9 +1348,7 @@ def create_app(
         volume = body.get("volume")
         price = body.get("price")
         if volume is None or price is None:
-            raise HTTPException(
-                status_code=400, detail="volume and price required"
-            )
+            raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_limit_sell(int(volume), float(price))
         except Exception as e:
@@ -1402,7 +1408,6 @@ def create_app(
             loop.create_task(_broadcast())
         except RuntimeError:
             pass
-
 
     return app
 

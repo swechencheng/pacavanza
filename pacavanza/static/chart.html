@@ -269,10 +269,51 @@
       font-size: 11px;
     }
 
+    /* ── Side Panels Container (orders + tape) ──────────────── */
+    .side-panels {
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      border-top: 1px solid #333;
+    }
+
+    @media (min-width: 769px) {
+      .side-panels {
+        flex-direction: row;
+        border-top: 1px solid #333;
+      }
+
+      .side-panels>.order-panel {
+        flex: 1;
+        border-top: none;
+        border-right: 1px solid #21262d;
+        min-width: 0;
+      }
+
+      .side-panels>.tape-panel {
+        width: 260px;
+        flex-shrink: 0;
+        border-top: none;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .side-panels {
+        flex-direction: column;
+      }
+
+      .side-panels>.order-panel {
+        border-top: none;
+      }
+
+      .side-panels>.tape-panel {
+        border-top: 1px solid #21262d;
+      }
+    }
+
     /* ── Order Lifecycle Panel ──────────────────────────────── */
     .order-panel {
       background: #0d1117;
-      border-top: 1px solid #333;
       height: 150px;
       flex-shrink: 0;
       overflow-y: auto;
@@ -410,6 +451,92 @@
       text-align: center;
       font-style: italic;
     }
+
+    /* ── Tape / Order Depth Panel ───────────────────────────── */
+    .tape-panel {
+      background: #0d1117;
+      height: 150px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #333 #0d1117;
+    }
+
+    .tape-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #161b22;
+      font-size: 11px;
+      font-weight: 600;
+      color: #8b949e;
+      border-bottom: 1px solid #21262d;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .tape-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      font-family: monospace;
+    }
+
+    .tape-table th {
+      padding: 2px 6px;
+      color: #586069;
+      font-weight: 600;
+      text-align: center;
+      border-bottom: 1px solid #21262d;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tape-table td {
+      padding: 2px 6px;
+      text-align: center;
+      border-bottom: 1px solid rgba(33, 38, 45, 0.5);
+      transition: background 0.1s;
+    }
+
+    .tape-table tr:hover td {
+      background: #161b22;
+    }
+
+    .tape-bid-vol {
+      color: #4caf50;
+      font-weight: 600;
+    }
+
+    .tape-bid-price {
+      color: #66bb6a;
+    }
+
+    .tape-ask-price {
+      color: #ef5350;
+    }
+
+    .tape-ask-vol {
+      color: #f44336;
+      font-weight: 600;
+    }
+
+    .tape-updated {
+      padding: 3px 8px;
+      font-size: 9px;
+      color: #484f58;
+      text-align: right;
+      font-family: monospace;
+    }
+
+    .tape-empty {
+      padding: 8px;
+      color: #484f58;
+      text-align: center;
+      font-style: italic;
+    }
   </style>
 
   <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
@@ -472,13 +599,26 @@
         <button id="btn-sell-limit-future"><span class="sell">S</span> Limit</button>
       </div>
       <div id="chart-future" class="chart-container"></div>
-      <!-- Order Lifecycle Panel -->
-      <div id="order-panel" class="order-panel">
-        <div class="order-panel-header">
-          <span>📋 Active Orders</span>
-          <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
+      <!-- Side panels: Orders + Tape -->
+      <div class="side-panels">
+        <!-- Order Lifecycle Panel -->
+        <div id="order-panel" class="order-panel">
+          <div class="order-panel-header">
+            <span>📋 Active Orders</span>
+            <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
+          </div>
+          <div id="order-list" class="order-list"></div>
         </div>
-        <div id="order-list" class="order-list"></div>
+        <!-- Order Depth / Tape Panel -->
+        <div id="tape-panel" class="tape-panel">
+          <div class="tape-panel-header">
+            <span>📊 Order Depth</span>
+            <span id="tape-updated" class="tape-updated"></span>
+          </div>
+          <div id="tape-content">
+            <div class="tape-empty">Waiting for depth data…</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>

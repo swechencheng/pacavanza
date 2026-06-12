@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ class FutureMarketCollector(BaseMarketCollector):
     """
 
     sse_base_url = "https://www.avanza.se/_push/quote-web-push/"
+    depth_sse_base_url = "https://www.avanza.se/_push/order-depth-web-push/"
     default_redis_channel = "pacavanza:future_updates"
     logger_name = "future_market_daemon"
 
@@ -158,6 +160,36 @@ class FutureMarketCollector(BaseMarketCollector):
 
         except Exception as e:
             self.logger.exception(f"[{instrument_id}] Exception in quote callback: {e}")
+
+    async def _depth_sse_callback(self, instrument_id, _id, event, data):
+        """
+        Async callback for order-depth-web-push SSE events.
+        Publishes depth snapshots directly to Redis — no buffering or disk storage.
+        """
+        try:
+            if not isinstance(data, dict):
+                return
+
+            levels = data.get("levels")
+            if not levels:
+                return
+
+            msg = {
+                "type": "depth",
+                "instrument": instrument_id,
+                "levels": levels,
+                "updated": data.get("updated"),
+            }
+
+            if self._redis is not None:
+                try:
+                    await self._redis.publish(self.redis_channel, json.dumps(msg))
+                except Exception as e:
+                    self.logger.error(
+                        f"[{instrument_id}] Failed to publish depth to Redis: {e}"
+                    )
+        except Exception as e:
+            self.logger.exception(f"[{instrument_id}] Exception in depth callback: {e}")
 
     # ── Market hours helper ──────────────────────────────────────────
 
