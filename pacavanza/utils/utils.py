@@ -112,9 +112,18 @@ def fetch_active_omxs30_future():
 
     today = datetime.now().date().isoformat()
     # Find active OMXS30 futures (endDate >= today)
+    # Exclude BT (börsterminen) variants — they don't have live SSE streams.
+    # Standard futures match pattern like OMXS306F, OMXS306G (month digit + single letter).
+    import re
+
     valid_futures = [
-        f for f in futures if f["endDate"] >= today and f["name"].startswith("OMXS30")
+        f
+        for f in futures
+        if f["endDate"] >= today
+        and f["name"].startswith("OMXS30")
+        and re.fullmatch(r"OMXS30\d+[A-Z]", f["name"])
     ]
+
     if not valid_futures:
         valid_futures = futures  # fallback
 
