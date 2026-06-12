@@ -176,24 +176,41 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
+    let maxVol = 0;
+    for (const level of levels) {
+      if (level.buyVolume && level.buyVolume > maxVol) maxVol = level.buyVolume;
+      if (level.sellVolume && level.sellVolume > maxVol) maxVol = level.sellVolume;
+    }
+    maxVol = Math.max(maxVol, 1);
+
     let html = '<table class="tape-table"><thead><tr>';
     html += '<th>Vol</th><th>Bid</th><th>Ask</th><th>Vol</th>';
-    html += '</tr></thead><tbody>';
+    html += '</tr></thead>';
 
     for (const level of levels) {
       const bp = level.buyPrice != null ? level.buyPrice.toFixed(2) : '—';
       const bv = level.buyVolume != null ? level.buyVolume : '—';
       const sp = level.sellPrice != null ? level.sellPrice.toFixed(2) : '—';
       const sv = level.sellVolume != null ? level.sellVolume : '—';
+
+      const buyPct = level.buyVolume ? (level.buyVolume / maxVol) * 100 : 0;
+      const sellPct = level.sellVolume ? (level.sellVolume / maxVol) * 100 : 0;
+
+      html += `<tbody>`;
       html += `<tr>`;
       html += `<td class="tape-bid-vol">${bv}</td>`;
       html += `<td class="tape-bid-price">${bp}</td>`;
       html += `<td class="tape-ask-price">${sp}</td>`;
       html += `<td class="tape-ask-vol">${sv}</td>`;
       html += `</tr>`;
+      html += `<tr class="tape-bar-row">`;
+      html += `<td colspan="2"><div class="tape-bar-container buy"><div class="tape-bar" style="width: ${buyPct}%"></div></div></td>`;
+      html += `<td colspan="2"><div class="tape-bar-container sell"><div class="tape-bar" style="width: ${sellPct}%"></div></div></td>`;
+      html += `</tr>`;
+      html += `</tbody>`;
     }
 
-    html += '</tbody></table>';
+    html += '</table>';
     content.innerHTML = html;
 
     // Update timestamp

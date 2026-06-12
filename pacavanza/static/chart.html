@@ -314,7 +314,7 @@
     /* ── Order Lifecycle Panel ──────────────────────────────── */
     .order-panel {
       background: #0d1117;
-      height: 150px;
+      height: 190px;
       flex-shrink: 0;
       overflow-y: auto;
       scrollbar-width: thin;
@@ -455,7 +455,7 @@
     /* ── Tape / Order Depth Panel ───────────────────────────── */
     .tape-panel {
       background: #0d1117;
-      height: 150px;
+      height: 190px;
       overflow-y: auto;
       scrollbar-width: thin;
       scrollbar-color: #333 #0d1117;
@@ -494,15 +494,51 @@
       letter-spacing: 0.5px;
     }
 
-    .tape-table td {
-      padding: 2px 6px;
-      text-align: center;
+    .tape-table tbody {
       border-bottom: 1px solid rgba(33, 38, 45, 0.5);
       transition: background 0.1s;
     }
 
-    .tape-table tr:hover td {
+    .tape-table tbody:hover {
       background: #161b22;
+    }
+
+    .tape-table td {
+      padding: 2px 6px;
+      text-align: center;
+      border-bottom: none;
+    }
+
+    .tape-bar-row td {
+      padding: 0 6px 4px 6px;
+    }
+
+    .tape-bar-container {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      width: 100%;
+      position: relative;
+    }
+
+    .tape-bar-container.buy .tape-bar {
+      position: absolute;
+      right: 0;
+      top: 0;
+      height: 100%;
+      background: #4caf50;
+      border-radius: 2px;
+      transition: width 0.2s ease-out;
+    }
+
+    .tape-bar-container.sell .tape-bar {
+      position: absolute;
+      left: 0;
+      top: 0;
+      height: 100%;
+      background: #f44336;
+      border-radius: 2px;
+      transition: width 0.2s ease-out;
     }
 
     .tape-bid-vol {
