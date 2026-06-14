@@ -398,6 +398,12 @@ class FutureChartApp extends PACChartApp {
     const container = document.getElementById("order-list");
     if (!container) return;
 
+    // Pause HTML re-rendering if user is currently editing an input field
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.classList.contains("order-qty-input") || activeEl.classList.contains("order-price-input"))) {
+      return; // Skip overwriting HTML so we don't blur their input before they click save
+    }
+
     if (!orders || orders.length === 0) {
       container.innerHTML = '<div class="order-empty">No active orders</div>';
       return;

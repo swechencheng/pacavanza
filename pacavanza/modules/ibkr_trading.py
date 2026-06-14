@@ -880,6 +880,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
         self.ib.orderStatusEvent += self._on_order_status
         self.ib.newOrderEvent += self._on_new_order
+        self.ib.openOrderEvent += self._on_open_order
         self.ib.errorEvent += self._on_error
         self.ib.execDetailsEvent += self._on_exec_details
         LOGGER.info("Subscribed to IBKR trade events")
@@ -905,6 +906,14 @@ class IbkrTrading(BaseAvanzaTrading):
         if trade.contract.conId != self.contract.conId:
             return
         LOGGER.debug(f"New order event: orderId={trade.order.orderId}")
+        if self._on_change_callback:
+            self._on_change_callback(self.get_open_orders())
+
+    def _on_open_order(self, trade: Trade):
+        """Handle open order events (e.g. order modification)."""
+        if trade.contract.conId != self.contract.conId:
+            return
+        LOGGER.debug(f"Open order event: orderId={trade.order.orderId}")
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
