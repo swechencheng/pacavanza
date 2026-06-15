@@ -94,6 +94,7 @@ def stop_process(name):
 def stop_all():
     logger.info("Stopping all processes...")
     stop_process("future_market")
+    stop_process("future_trade_monitor")
     stop_process("monitor")
     stop_process("dashboard")
     stop_process("market")
@@ -134,7 +135,14 @@ def main():
                 ):
                     time.sleep(5)
 
-                # 3. Market Daemon (Always ensure it is running)
+                # 3. Future Trade Monitor (depends on future_market being up)
+                start_process(
+                    "future_trade_monitor",
+                    "pacavanza.future_trade_monitor",
+                    "pacavanza.future_trade_monitor",
+                )
+
+                # 4. Market Daemon (Always ensure it is running)
                 if start_process(
                     "market",
                     "pacavanza.avanza_market_daemon",
@@ -142,7 +150,7 @@ def main():
                 ):
                     time.sleep(5)
 
-                # 4. Trading Monitor
+                # 5. Trading Monitor
                 start_process(
                     "monitor",
                     "pacavanza.avanza_trading_monitor",
