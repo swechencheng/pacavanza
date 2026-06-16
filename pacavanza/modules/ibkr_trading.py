@@ -324,18 +324,18 @@ class IbkrTrading(BaseAvanzaTrading):
         sl_id = self.ib.client.getReqId()
 
         # Parent entry: stop order, don't transmit yet
-        parent = StopOrder(action, volume, self._round_price(stop_price))
+        parent = StopOrder(action, volume, self._round_price(stop_price), tif="DAY")
         parent.orderId = parent_id
         parent.transmit = False
 
         # Take-profit child: limit order (placed second, don't transmit yet)
-        tp_order = LimitOrder(opposite, volume, self._round_price(tp_price))
+        tp_order = LimitOrder(opposite, volume, self._round_price(tp_price), tif="DAY")
         tp_order.orderId = tp_id
         tp_order.parentId = parent_id
         tp_order.transmit = False
 
         # Stop-loss child: stop order (placed last, transmit=True triggers the whole group)
-        sl_order = StopOrder(opposite, volume, self._round_price(sl_price))
+        sl_order = StopOrder(opposite, volume, self._round_price(sl_price), tif="DAY")
         sl_order.orderId = sl_id
         sl_order.parentId = parent_id
         sl_order.transmit = True  # transmit all orders in the bracket
@@ -366,7 +366,7 @@ class IbkrTrading(BaseAvanzaTrading):
         self, instrument_id: str, info: Dict[str, Any], price: float, volume: int
     ) -> Any:
         """Place a market buy order via IBKR."""
-        order = MarketOrder("BUY", volume)
+        order = MarketOrder("BUY", volume, tif="DAY")
         trade = self.ib.placeOrder(self.contract, order)
         LOGGER.info(
             f"Placed market BUY order via IBKR: "
@@ -378,7 +378,7 @@ class IbkrTrading(BaseAvanzaTrading):
         self, instrument_id: str, info: Dict[str, Any], price: float, volume: int
     ) -> Any:
         """Place a market sell order via IBKR."""
-        order = MarketOrder("SELL", volume)
+        order = MarketOrder("SELL", volume, tif="DAY")
         trade = self.ib.placeOrder(self.contract, order)
         LOGGER.info(
             f"Placed market SELL order via IBKR: "
@@ -422,7 +422,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if signed_pos < 0 and abs(signed_pos) == volume:
             # Scenario 3: Close short — standalone stop only, no SL/TP
             LOGGER.info("Buy stop: closing short position (exact match)")
-            order = StopOrder("BUY", volume, self._round_price(stop_price))
+            order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
@@ -434,7 +434,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if signed_pos > 0:
             # Scenario 2: Scale up long — standalone stop only
             LOGGER.info("Buy stop: scaling up long position")
-            order = StopOrder("BUY", volume, self._round_price(stop_price))
+            order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "ScaleUp"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
@@ -455,7 +455,9 @@ class IbkrTrading(BaseAvanzaTrading):
                 f"enter long ({net_volume})"
             )
             # 1. Close existing short
-            close_order = StopOrder("BUY", close_volume, self._round_price(stop_price))
+            close_order = StopOrder(
+                "BUY", close_volume, self._round_price(stop_price), tif="DAY"
+            )
             close_order.orderRef = "CloseOnly"
             close_trade = self.ib.placeOrder(self.contract, close_order)
             LOGGER.info(
@@ -516,7 +518,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if signed_pos > 0 and signed_pos == volume:
             # Scenario 3: Close long — standalone stop only, no SL/TP
             LOGGER.info("Sell stop: closing long position (exact match)")
-            order = StopOrder("SELL", volume, self._round_price(stop_price))
+            order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
@@ -528,7 +530,7 @@ class IbkrTrading(BaseAvanzaTrading):
         if signed_pos < 0:
             # Scenario 2: Scale up short — standalone stop only
             LOGGER.info("Sell stop: scaling up short position")
-            order = StopOrder("SELL", volume, self._round_price(stop_price))
+            order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "ScaleUp"
             trade = self.ib.placeOrder(self.contract, order)
             LOGGER.info(
@@ -554,7 +556,9 @@ class IbkrTrading(BaseAvanzaTrading):
                 f"enter short ({net_volume})"
             )
             # 1. Close existing long
-            close_order = StopOrder("SELL", close_volume, self._round_price(stop_price))
+            close_order = StopOrder(
+                "SELL", close_volume, self._round_price(stop_price), tif="DAY"
+            )
             close_order.orderRef = "CloseOnly"
             close_trade = self.ib.placeOrder(self.contract, close_order)
             LOGGER.info(
@@ -743,7 +747,7 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.cancelOrder(trade.order)
         LOGGER.info(f"Cancelled order {order_id} to replace with market order")
 
-        mkt_order = MarketOrder(action, volume)
+        mkt_order = MarketOrder(action, volume, tif="DAY")
         new_trade = self.ib.placeOrder(self.contract, mkt_order)
         LOGGER.info(
             f"Placed market {action} order: orderId={new_trade.order.orderId}, "
@@ -800,8 +804,8 @@ class IbkrTrading(BaseAvanzaTrading):
                 "TP is smaller than SL: Action must be BUY (closing a short position)."
             )
 
-        tp_order = LimitOrder(action, volume, self._round_price(limit_price))
-        sl_order = StopOrder(action, volume, self._round_price(stop_price))
+        tp_order = LimitOrder(action, volume, self._round_price(limit_price), tif="DAY")
+        sl_order = StopOrder(action, volume, self._round_price(stop_price), tif="DAY")
 
         # Sanitize order fields that TWS might have populated with localized strings
         for order in [tp_order, sl_order]:
@@ -839,7 +843,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def place_limit_buy(self, volume: int, price: float) -> Dict[str, Any]:
         """Place a limit buy order via IBKR."""
-        order = LimitOrder("BUY", volume, self._round_price(price))
+        order = LimitOrder("BUY", volume, self._round_price(price), tif="DAY")
         trade = self.ib.placeOrder(self.contract, order)
         LOGGER.info(
             f"Placed limit BUY order via IBKR: "
@@ -856,7 +860,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def place_limit_sell(self, volume: int, price: float) -> Dict[str, Any]:
         """Place a limit sell order via IBKR."""
-        order = LimitOrder("SELL", volume, self._round_price(price))
+        order = LimitOrder("SELL", volume, self._round_price(price), tif="DAY")
         trade = self.ib.placeOrder(self.contract, order)
         LOGGER.info(
             f"Placed limit SELL order via IBKR: "

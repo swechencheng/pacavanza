@@ -291,7 +291,7 @@ class FutureTradeMonitor:
             LOGGER.warning(f"Cannot place {action} STOP – IBKR not connected.")
             return False
         rounded = round(round(stop_price / TICK_SIZE) * TICK_SIZE, 2)
-        order = StopOrder(action, volume, rounded)
+        order = StopOrder(action, volume, rounded, tif="DAY")
         order.orderRef = "PullbackSL"
         trade = self._ib.placeOrder(self._contract, order)
         LOGGER.info(
