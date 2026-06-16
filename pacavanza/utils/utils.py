@@ -78,16 +78,27 @@ def find_key_by_orderbook_id(data, target_id):
     return None
 
 
-def fetch_active_omxs30_future():
+def fetch_active_omxs30_future(roll_days_before_expiry: int = 5):
+    """
+    Fetch the active OMXS30 future from Avanza.
+
+    Implements a roll-window: if the nearest (front-month) contract expires
+    within ``roll_days_before_expiry`` calendar days, return the *next* contract
+    instead.  This keeps the Avanza data stream in sync with IBKR, which
+    automatically rolls to the back-month ~5 days before expiry.
+
+    Args:
+        roll_days_before_expiry: Number of calendar days before expiry at which
+            we consider the front month "rolled".  Default is 5.
+    """
     from curl_cffi import requests
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     url = "https://www.avanza.se/_api/market-option-future-forward-list/"
     headers = {
         "accept": "application/json, text/plain, */*",
         "content-type": "application/json;charset=UTF-8",
     }
-    # Pass underlyingInstruments: ["19002"] explicitly to ensure we get OMXS30
     payload = {
         "filter": {
             "underlyingInstruments": [],
@@ -110,16 +121,14 @@ def fetch_active_omxs30_future():
     if not futures:
         raise ValueError("No future contracts found")
 
-    today = datetime.now().date().isoformat()
-    # Find active OMXS30 futures (endDate >= today)
-    # Exclude BT (börsterminen) variants — they don't have live SSE streams.
-    # Standard futures match pattern like OMXS306F, OMXS306G (month digit + single letter).
+    today = datetime.now().date()
+    roll_cutoff = today + timedelta(days=roll_days_before_expiry)
     import re
 
     valid_futures = [
         f
         for f in futures
-        if f["endDate"] >= today
+        if f["endDate"] >= today.isoformat()
         and f["name"].startswith("OMXS30")
         and re.fullmatch(r"OMXS30\d+[A-Z]", f["name"])
     ]
@@ -127,9 +136,15 @@ def fetch_active_omxs30_future():
     if not valid_futures:
         valid_futures = futures  # fallback
 
-    # Sort by endDate ascending to get the closest one
+    # Sort by endDate ascending (nearest first)
     valid_futures.sort(key=lambda x: x["endDate"])
+
+    # Apply roll-window: if the front month expires within roll_days_before_expiry
+    # days, skip it and use the next contract (the back month).
     active_future = valid_futures[0]
+    front_expiry = datetime.strptime(active_future["endDate"], "%Y-%m-%d").date()
+    if front_expiry <= roll_cutoff and len(valid_futures) > 1:
+        active_future = valid_futures[1]
 
     return {
         "OMXS30": {
