@@ -883,6 +883,7 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.openOrderEvent += self._on_open_order
         self.ib.errorEvent += self._on_error
         self.ib.execDetailsEvent += self._on_exec_details
+        self.ib.positionEvent += self._on_position
         LOGGER.info("Subscribed to IBKR trade events")
 
     def _on_order_status(self, trade: Trade):
@@ -909,6 +910,28 @@ class IbkrTrading(BaseAvanzaTrading):
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
+    def _on_position(self, position) -> None:
+        """
+        Handle position update events.
+
+        positionEvent fires AFTER ib.positions() has been updated with the new
+        quantity, so _get_signed_position() will return the correct new value
+        here.  This is the correct place to synchronise SL/TP volumes after a
+        fill, because execDetailsEvent fires BEFORE the position is refreshed.
+        """
+        if position.contract.conId != self.contract.conId:
+            return
+        LOGGER.info(
+            f"Position update: conId={position.contract.conId}, "
+            f"position={position.position}, avgCost={position.avgCost}"
+        )
+        try:
+            self._sync_sl_tp_volume()
+        except Exception as e:
+            LOGGER.error(f"Error syncing SL/TP volume on position update: {e}")
+        if self._on_change_callback:
+            self._on_change_callback(self.get_open_orders())
+
     def _on_open_order(self, trade: Trade):
         """Handle open order events (e.g. order modification)."""
         if trade.contract.conId != self.contract.conId:
@@ -922,11 +945,13 @@ class IbkrTrading(BaseAvanzaTrading):
         if trade.contract.conId != self.contract.conId:
             return
 
-        try:
-            # When an order executes, position might have changed. Sync SL/TP.
-            self._sync_sl_tp_volume()
-        except Exception as e:
-            LOGGER.error(f"Error syncing SL/TP volume: {e}")
+        # NOTE: We intentionally do NOT call _sync_sl_tp_volume here.
+        # ib.positions() is NOT yet updated when execDetailsEvent fires — it
+        # updates asynchronously via a separate positionEvent.  Calling
+        # _sync_sl_tp_volume here would read the OLD position size, causing the
+        # SL/TP quantity check (totalQuantity != abs_pos) to always be False and
+        # silently skip the update.  Instead we call _sync_sl_tp_volume from
+        # _on_position, which fires only after ib.positions() is up to date.
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
