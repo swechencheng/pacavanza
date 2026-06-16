@@ -30,6 +30,7 @@ import signal
 import sys
 import threading
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -591,6 +592,26 @@ class FutureTradeMonitor:
                 pass
             self._redis = None
 
+    def _is_outside_market_hours(self, meta: Dict[str, Any]) -> bool:
+        tz_name = meta.get("timezone", "Europe/Stockholm")
+        open_str = meta.get("market_open", "09:00")
+        close_str = meta.get("market_close", "17:45")
+
+        try:
+            zone = ZoneInfo(tz_name)
+        except Exception:
+            zone = timezone.utc
+
+        try:
+            oh, om = (int(x) for x in open_str.split(":"))
+            ch, cm = (int(x) for x in close_str.split(":"))
+        except Exception:
+            return False
+
+        now_local = datetime.now(zone)
+        t = (now_local.hour, now_local.minute)
+        return t < (oh, om) or t >= (ch, cm)
+
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
@@ -610,6 +631,18 @@ class FutureTradeMonitor:
 
         try:
             while not self._shutting_down:
+                try:
+                    meta = await self._fetch_metadata()
+                except Exception as exc:
+                    LOGGER.warning(f"Failed to fetch metadata: {exc}")
+                    meta = {}
+
+                if self._is_outside_market_hours(meta):
+                    LOGGER.info("Outside trading hours. Sleeping for 1 minute...")
+                    if not self._shutting_down:
+                        await asyncio.sleep(60)
+                    continue
+
                 try:
                     await self._listen()
                 except Exception as exc:
