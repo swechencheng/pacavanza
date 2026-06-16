@@ -263,8 +263,17 @@ def create_app(
             for channel in redis_channels:
                 await redis_client.publish(channel, json.dumps(test_msg))
 
-            async for msg in pubsub.listen():
-                if msg and msg["type"] == "message":
+            while True:
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=60.0)
+                if msg is None:
+                    # Timeout reached without messages. Send a ping to keep connection alive.
+                    try:
+                        await pubsub.ping()
+                    except Exception:
+                        pass
+                    continue
+
+                if msg and msg.get("type") == "message":
                     data = msg["data"]
                     LOGGER.debug(f"Redis subscriber received raw message: {data}")
 
