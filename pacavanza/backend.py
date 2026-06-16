@@ -692,40 +692,44 @@ def create_app(
     @app.get("/history/{instrument_id}")
     async def get_history(instrument_id: str, limit: int = 3600):
         """
-        Return the most recent completed_ohlc for instrument.
-        This reads existing disk file (preferred) or uses in-memory snapshot if available.
+        Return the most recent completed_ohlc for instrument plus the current live bar.
+        This reads existing disk file (preferred) and appends the live bar from memory.
         """
-        # first attempt to read disk file (collector is authoritative)
         data_file = f"ohlc_{instrument_id}.json"
+        data = []
         try:
             with open(data_file, "r") as f:
                 data = json.load(f)
-            # ensure we only return up to limit
-            if limit and len(data) > limit:
-                data = data[-limit:]
-            return JSONResponse(content=data)
         except FileNotFoundError:
-            # fallback to in-memory recent_bars
-            # Use a per-instrument snapshot under the instrument lock to avoid inconsistent reads
-            bars_lock = await _get_bars_lock_for(instrument_id)
-            async with bars_lock:
-                lst = list(recent_bars.get(instrument_id, []))
-            out = []
-            for b in lst[-limit:]:
-                out.append(
-                    {
-                        "start_time": b["start_time"].isoformat(),
-                        "end_time": b["end_time"].isoformat(),
-                        "open": b["open"],
-                        "high": b["high"],
-                        "low": b["low"],
-                        "close": b["close"],
-                        "volume": b["volume"],
-                    }
-                )
-            if not out:
-                raise HTTPException(status_code=404, detail="no data")
-            return JSONResponse(content=out)
+            pass
+
+        # Fetch the current live bar from in-memory recent_bars to append/update
+        bars_lock = await _get_bars_lock_for(instrument_id)
+        async with bars_lock:
+            live_bars = recent_bars.get(instrument_id)
+            if live_bars:
+                last_live = live_bars[-1]
+                last_live_start_str = last_live["start_time"].isoformat()
+                live_bar_dict = {
+                    "start_time": last_live_start_str,
+                    "end_time": last_live["end_time"].isoformat(),
+                    "open": last_live["open"],
+                    "high": last_live["high"],
+                    "low": last_live["low"],
+                    "close": last_live["close"],
+                    "volume": last_live.get("volume", 0),
+                }
+                if not data or last_live_start_str > data[-1]["start_time"]:
+                    data.append(live_bar_dict)
+                elif data and last_live_start_str == data[-1]["start_time"]:
+                    data[-1] = live_bar_dict
+
+        if not data:
+            raise HTTPException(status_code=404, detail="no data")
+
+        if limit and len(data) > limit:
+            data = data[-limit:]
+        return JSONResponse(content=data)
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
