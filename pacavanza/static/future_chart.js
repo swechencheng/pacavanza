@@ -290,12 +290,42 @@ class FutureChartApp extends PACChartApp {
 
     // OCA Bracket button — calls new /ibkr/ endpoint
     const ocaBtn = document.getElementById("btn-place-oca");
+    const ocaActionSel = document.getElementById("oca-action");
+
+    // Keep the disabled action select updated whenever position changes
+    const _syncOcaAction = () => {
+      if (!ocaActionSel) return;
+      const pos = this._currentPosition;
+      if (!pos || pos.position === 0) {
+        ocaActionSel.value = "SELL"; // default
+        return;
+      }
+      // Closing a long → SELL; closing a short → BUY
+      ocaActionSel.value = pos.position > 0 ? "SELL" : "BUY";
+    };
+
+    // Patch _updatePositionOverlay to also sync the OCA action select
+    const _origUpdatePositionOverlay = this._updatePositionOverlay.bind(this);
+    this._updatePositionOverlay = () => {
+      _origUpdatePositionOverlay();
+      _syncOcaAction();
+    };
+
     if (ocaBtn) {
       ocaBtn.addEventListener("click", async () => {
-        const action = document.getElementById("oca-action").value;
+        // Derive action from the actual live position, not the (disabled) select
+        const pos = this._currentPosition;
+        if (!pos || pos.position === 0) {
+          alert("OCA: No active position found. Open a position first.");
+          return;
+        }
+        const action = pos.position > 0 ? "SELL" : "BUY";
+        // Reflect in the UI select so the user can see what will be submitted
+        if (ocaActionSel) ocaActionSel.value = action;
+
         const volume = contracts();
-        const limitPrice = parseFloat(document.getElementById("oca-limit-price").value);
-        const stopPrice = parseFloat(document.getElementById("oca-stop-price").value);
+        let limitPrice = parseFloat(document.getElementById("oca-limit-price").value);
+        let stopPrice = parseFloat(document.getElementById("oca-stop-price").value);
         if (isNaN(limitPrice) || isNaN(stopPrice)) {
           alert("OCA: Both Limit (TP) and Stop (SL) prices are required.");
           return;
@@ -304,14 +334,22 @@ class FutureChartApp extends PACChartApp {
           alert("OCA: Limit (TP) and Stop (SL) prices cannot be equal.");
           return;
         }
-        if (limitPrice > stopPrice && action !== "SELL") {
-          alert("TP is greater than SL: Action must be S (SELL) to close a long position.");
-          return;
+
+        // Validate: for long (SELL), TP must be above SL (limitPrice > stopPrice)
+        //           for short (BUY), TP must be below SL (limitPrice < stopPrice)
+        const isLong = action === "SELL";
+        const pricesReversed = isLong ? limitPrice < stopPrice : limitPrice > stopPrice;
+        if (pricesReversed) {
+          const swapMsg = isLong
+            ? `For a LONG position the TP (${limitPrice}) should be above the SL (${stopPrice}).\nSwap them?`
+            : `For a SHORT position the TP (${limitPrice}) should be below the SL (${stopPrice}).\nSwap them?`;
+          if (!confirm(swapMsg)) return;
+          [limitPrice, stopPrice] = [stopPrice, limitPrice];
+          // Write swapped values back to the inputs so the user sees them
+          document.getElementById("oca-limit-price").value = limitPrice;
+          document.getElementById("oca-stop-price").value = stopPrice;
         }
-        if (limitPrice < stopPrice && action !== "BUY") {
-          alert("TP is smaller than SL: Action must be B (BUY) to close a short position.");
-          return;
-        }
+
         const res = await this._callApi("/ibkr/place_oca_bracket", {
           action, volume, limitPrice, stopPrice,
         }, "POST", true);
