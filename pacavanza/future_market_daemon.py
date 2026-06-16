@@ -235,59 +235,60 @@ class FutureMarketCollector(BaseMarketCollector):
                 self.logger.info(
                     f"[{sid}] Filtered {before - after} out-of-hours bars from disk data."
                 )
-        self._sync_ibkr_history()
+        self._sync_avanza_history()
 
-    def _sync_ibkr_history(self):
+    def _sync_avanza_history(self):
         try:
-            from ib_async import IB, ContFuture, util
-            import pandas as pd
-            from datetime import timedelta
+            from curl_cffi import requests
         except ImportError:
-            self.logger.warning("ib_async or pandas not installed, skipping IBKR sync")
+            self.logger.warning("curl_cffi not installed, skipping Avanza history sync")
             return
+
+        from datetime import timedelta
 
         for sid, sd in self.instrument_data.items():
             try:
-                ib = IB()
-                # 7497 is default for TWS paper trading. We use a random client ID to avoid conflicts.
-                ib.connect("127.0.0.1", 7497, clientId=999)
-                contract = ContFuture("OMXS30", "OMS")
-                ib.qualifyContracts(contract)
+                info = self.instrument_list.get(sid, {})
+                orderbook_id = info.get("orderbookId")
+                if not orderbook_id:
+                    self.logger.warning(
+                        f"[{sid}] No orderbookId found, skipping Avanza history sync"
+                    )
+                    continue
 
-                # Determine barSizeSetting based on interval_seconds
                 interval_map = {
-                    60: "1 min",
-                    300: "5 mins",
-                    900: "15 mins",
-                    3600: "1 hour",
+                    60: "minute",
+                    120: "two_minutes",
+                    300: "five_minutes",
+                    600: "ten_minutes",
+                    1800: "thirty_minutes",
+                    3600: "hour",
                 }
-                bar_size = interval_map.get(self.interval_seconds, "5 mins")
+                resolution = interval_map.get(self.interval_seconds, "five_minutes")
 
-                bars = ib.reqHistoricalData(
-                    contract,
-                    endDateTime="",
-                    durationStr="1 M",
-                    barSizeSetting=bar_size,
-                    whatToShow="TRADES",
-                    useRTH=True,
-                    formatDate=2,  # Return UTC timestamps
-                )
-                df = util.df(bars)
-                ib.disconnect()
+                url = f"https://www.avanza.se/_api/price-chart/stock/{orderbook_id}?timePeriod=today&resolution={resolution}"
+                response = requests.get(url, impersonate="chrome110")
+                if response.status_code != 200:
+                    self.logger.warning(
+                        f"[{sid}] Avanza history sync failed with status {response.status_code}: {response.text}"
+                    )
+                    continue
 
-                if df is None or df.empty:
-                    self.logger.warning(f"[{sid}] No IBKR data for ContFuture OMXS30")
+                data = response.json()
+                ohlc_data = data.get("ohlc", [])
+
+                if not ohlc_data:
+                    self.logger.warning(
+                        f"[{sid}] No Avanza history data for orderbookId {orderbook_id}"
+                    )
                     continue
 
                 new_bars = []
                 skipped_pre_market = 0
-                for idx, row in df.iterrows():
-                    # idx is not the index here if we didn't set it, date is a column
-                    start_time = row["date"]
-                    if start_time.tzinfo is None:
-                        start_time = start_time.replace(tzinfo=timezone.utc)
-                    else:
-                        start_time = start_time.astimezone(timezone.utc)
+                for row in ohlc_data:
+                    start_time = datetime.fromtimestamp(
+                        row["timestamp"] / 1000.0, tz=timezone.utc
+                    )
 
                     # Skip out-of-hours bars (pre-market or post-market)
                     if self._is_outside_market_hours(start_time):
@@ -303,12 +304,13 @@ class FutureMarketCollector(BaseMarketCollector):
                         "high": float(row["high"]),
                         "low": float(row["low"]),
                         "close": float(row["close"]),
-                        "volume": float(row["volume"]),
+                        "volume": float(row["totalVolumeTraded"]),
                     }
                     new_bars.append(bar)
+
                 if skipped_pre_market:
                     self.logger.info(
-                        f"[{sid}] Skipped {skipped_pre_market} out-of-hours bars from IBKR."
+                        f"[{sid}] Skipped {skipped_pre_market} out-of-hours bars from Avanza."
                     )
 
                 with sd.lock:
@@ -317,12 +319,6 @@ class FutureMarketCollector(BaseMarketCollector):
 
                     for b in new_bars:
                         merged_bars_dict[b["start_time"]] = b
-
-                    if new_bars:
-                        last_ib_start = new_bars[-1]["start_time"]
-                        for b in local_bars:
-                            if b["start_time"] > last_ib_start:
-                                merged_bars_dict[b["start_time"]] = b
 
                     sorted_bars = sorted(
                         merged_bars_dict.values(), key=lambda x: x["start_time"]
@@ -335,12 +331,12 @@ class FutureMarketCollector(BaseMarketCollector):
                     ]
 
                 self.logger.info(
-                    f"[{sid}] Synced {len(new_bars)} bars from IBKR ContFuture. Total bars: {len(sd.completed_ohlc[sid])}"
+                    f"[{sid}] Synced {len(new_bars)} bars from Avanza. Total bars: {len(sd.completed_ohlc[sid])}"
                 )
                 self.force_save_instrument(sid)
 
             except Exception as e:
-                self.logger.exception(f"[{sid}] Failed to sync IBKR history: {e}")
+                self.logger.exception(f"[{sid}] Failed to sync Avanza history: {e}")
 
 
 def parse_args():
