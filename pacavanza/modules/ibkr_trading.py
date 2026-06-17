@@ -123,18 +123,31 @@ class IbkrTrading(BaseAvanzaTrading):
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
 
+            parent_id = getattr(t.order, "parentId", 0)
+
             # Identify if this is a closing SL or TP.
             # We assume any active order with an ocaGroup or parentId is an SL/TP bracket child.
             is_sl_tp = False
             if t.order.ocaGroup:
                 is_sl_tp = True
-            elif (
-                getattr(t.order, "parentId", 0) and getattr(t.order, "parentId", 0) != 0
-            ):
+            elif parent_id != 0:
                 is_sl_tp = True
 
             if not is_sl_tp:
                 continue
+
+            # Check if this child's parent is still active. If so, it protects an unfilled entry,
+            # NOT the current position. Do not sync or cancel it yet.
+            if parent_id != 0:
+                parent_trade = next(
+                    (pt for pt in open_trades if pt.order.orderId == parent_id), None
+                )
+                if parent_trade and parent_trade.isActive():
+                    LOGGER.debug(
+                        f"Sync: Ignoring child orderId={t.order.orderId} because "
+                        f"parentId={parent_id} is still active."
+                    )
+                    continue
 
             # If position is 0, cancel all SL/TP
             if abs_pos == 0:
