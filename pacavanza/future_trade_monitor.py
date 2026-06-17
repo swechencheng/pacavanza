@@ -139,7 +139,7 @@ class FutureTradeMonitor:
 
         # pullback counter state per instrument
         self._pullback_count: Dict[str, int] = {}
-        
+
         # track the extreme price since position entry
         self._highest_since_entry: Dict[str, float] = {}
         self._lowest_since_entry: Dict[str, float] = {}
@@ -378,7 +378,9 @@ class FutureTradeMonitor:
     # Bar processing logic
     # ------------------------------------------------------------------
 
-    def _update_extremes(self, instrument_id: str, bar: Dict[str, Any], signed_pos: int) -> None:
+    def _update_extremes(
+        self, instrument_id: str, bar: Dict[str, Any], signed_pos: int
+    ) -> None:
         """
         Track the highest-high and lowest-low since the position was entered.
         If a new extreme is found mid-bar or at completion, the pullback counter is reset to 0.
@@ -611,6 +613,19 @@ class FutureTradeMonitor:
             except Exception:
                 pass
             self._redis = None
+
+    async def _fetch_metadata(self) -> Dict[str, Any]:
+        """Fetch metadata for the active instrument asynchronously."""
+        from pacavanza.utils.utils import fetch_active_omxs30_future
+
+        loop = asyncio.get_running_loop()
+        try:
+            # run_in_executor to avoid blocking the event loop
+            data = await loop.run_in_executor(None, fetch_active_omxs30_future)
+            return data.get("OMXS30", {})
+        except Exception as exc:
+            LOGGER.warning(f"Error fetching metadata: {exc}")
+            return {}
 
     def _is_outside_market_hours(self, meta: Dict[str, Any]) -> bool:
         tz_name = meta.get("timezone", "Europe/Stockholm")
