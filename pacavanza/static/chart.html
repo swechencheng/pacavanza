@@ -286,7 +286,6 @@
       .side-panels>.order-panel {
         flex: 1;
         border-top: none;
-        border-right: 1px solid #21262d;
         min-width: 0;
       }
 
@@ -294,6 +293,7 @@
         width: 260px;
         flex-shrink: 0;
         border-top: none;
+        border-right: 1px solid #21262d;
       }
     }
 
@@ -303,11 +303,26 @@
       }
 
       .side-panels>.order-panel {
-        border-top: none;
+        border-top: 1px solid #21262d;
       }
 
       .side-panels>.tape-panel {
-        border-top: 1px solid #21262d;
+        border-top: none;
+      }
+
+      .trading-controls {
+        gap: 3px;
+        padding: 4px 4px;
+      }
+
+      .trading-controls button {
+        padding: 3px 4px;
+        font-size: 10px;
+      }
+
+      .volume-input {
+        width: 34px;
+        padding: 2px 4px;
       }
     }
 
@@ -594,16 +609,16 @@
           📦
           <input type="number" id="order-contracts-future" value="1" min="1" step="1" class="volume-input" />
         </label>
-        <button id="btn-buy-stop-future"><span class="buy">B</span> Stop</button>
+        <button id="btn-buy-stop-future"><span class="buy">B</span> Stp</button>
         <button id="btn-cancel-buy-stop-future">❌</button>
-        <button id="btn-sell-stop-future"><span class="sell">S</span> Stop</button>
+        <button id="btn-sell-stop-future"><span class="sell">S</span> Stp</button>
         <button id="btn-cancel-sell-stop-future">❌</button>
         <button id="btn-late-buy-stop-future"><span class="buy">B</span> Late</button>
         <button id="btn-late-sell-stop-future"><span class="sell">S</span> Late</button>
-        <button id="btn-delete-stop-losses-future">❌ SL</button>
+        <button id="btn-delete-stop-losses-future">❌</button>
         <div class="spacer"></div>
-        <button id="btn-market-buy-future"><span class="buy">B</span> Market</button>
-        <button id="btn-market-sell-future"><span class="sell">S</span> Market</button>
+        <button id="btn-market-buy-future"><span class="buy">B</span> Mkt</button>
+        <button id="btn-market-sell-future"><span class="sell">S</span> Mkt</button>
       </div>
       <!-- OCA Bracket Controls -->
       <div class="trading-controls" data-side="future" style="border-top: none;">
@@ -626,25 +641,19 @@
 
         <div class="spacer"></div>
 
-        <label style="font-size:11px;">
-          LMT:
-          <input type="number" id="limit-order-price" value="" step="0.25" class="volume-input" style="width:80px;"
-            placeholder="Price" />
-        </label>
-        <button id="btn-buy-limit-future"><span class="buy">B</span> Limit</button>
-        <button id="btn-sell-limit-future"><span class="sell">S</span> Limit</button>
+        <div style="display: flex; gap: inherit; align-items: center;">
+          <label style="font-size:11px;">
+            LMT:
+            <input type="number" id="limit-order-price" value="" step="0.25" class="volume-input" style="width:80px;"
+              placeholder="Price" />
+          </label>
+          <button id="btn-buy-limit-future"><span class="buy">B</span> Limit</button>
+          <button id="btn-sell-limit-future"><span class="sell">S</span> Limit</button>
+        </div>
       </div>
       <div id="chart-future" class="chart-container"></div>
       <!-- Side panels: Orders + Tape -->
       <div class="side-panels">
-        <!-- Order Lifecycle Panel -->
-        <div id="order-panel" class="order-panel">
-          <div class="order-panel-header">
-            <span>📋 Active Orders</span>
-            <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
-          </div>
-          <div id="order-list" class="order-list"></div>
-        </div>
         <!-- Order Depth / Tape Panel -->
         <div id="tape-panel" class="tape-panel">
           <div class="tape-panel-header">
@@ -654,6 +663,14 @@
           <div id="tape-content">
             <div class="tape-empty">Waiting for depth data…</div>
           </div>
+        </div>
+        <!-- Order Lifecycle Panel -->
+        <div id="order-panel" class="order-panel">
+          <div class="order-panel-header">
+            <span>📋 Active Orders</span>
+            <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
+          </div>
+          <div id="order-list" class="order-list"></div>
         </div>
       </div>
     </div>
