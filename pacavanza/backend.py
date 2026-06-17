@@ -573,6 +573,18 @@ def create_app(
     async def lifespan(app) -> AsyncIterator[None]:
         nonlocal ibkr_trading
 
+        # Suppress noisy asyncio websocket ConnectionClosedError in shielded futures
+        loop = asyncio.get_event_loop()
+        def custom_exception_handler(loop, context):
+            msg = context.get("message", "")
+            if "ConnectionClosedError exception in shielded future" in msg:
+                return
+            exc = context.get("exception")
+            if exc and "keepalive ping timeout" in str(exc):
+                return
+            loop.default_exception_handler(context)
+        loop.set_exception_handler(custom_exception_handler)
+
         # Connect IBKR async inside the correct event loop
         if ibkr_conn is not None:
             ib, contract = ibkr_conn
