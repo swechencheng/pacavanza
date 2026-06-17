@@ -535,7 +535,9 @@ class FutureTradeMonitor:
     async def _listen(self) -> None:
         """Subscribe to the Redis channel and dispatch messages."""
         LOGGER.info(f"Connecting to Redis at {self._redis_url} …")
-        self._redis = aioredis.from_url(self._redis_url)
+        self._redis = aioredis.from_url(
+            self._redis_url, health_check_interval=30, socket_keepalive=True
+        )
         await self._redis.ping()
         LOGGER.info("Redis connected.")
 
@@ -681,7 +683,15 @@ class FutureTradeMonitor:
                 try:
                     await self._listen()
                 except Exception as exc:
-                    LOGGER.error(f"Redis listener error: {exc}. Reconnecting in 5 s …")
+                    err_msg = str(exc).lower()
+                    if "timeout" in err_msg:
+                        LOGGER.info(
+                            f"Redis listener idle timeout. Reconnecting in 5 s …"
+                        )
+                    else:
+                        LOGGER.error(
+                            f"Redis listener error: {exc}. Reconnecting in 5 s …"
+                        )
                     if not self._shutting_down:
                         await asyncio.sleep(5)
         finally:
