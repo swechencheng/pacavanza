@@ -139,6 +139,11 @@ class FutureTradeMonitor:
 
         # pullback counter state per instrument
         self._pullback_count: Dict[str, int] = {}
+        
+        # track the extreme price since position entry
+        self._highest_since_entry: Dict[str, float] = {}
+        self._lowest_since_entry: Dict[str, float] = {}
+        self._current_direction: Dict[str, int] = {}
 
         # track start_time of the last bar we processed to avoid double-counting
         self._last_processed_bar_start: Dict[str, Optional[str]] = {}
@@ -373,6 +378,50 @@ class FutureTradeMonitor:
     # Bar processing logic
     # ------------------------------------------------------------------
 
+    def _update_extremes(self, instrument_id: str, bar: Dict[str, Any], signed_pos: int) -> None:
+        """
+        Track the highest-high and lowest-low since the position was entered.
+        If a new extreme is found mid-bar or at completion, the pullback counter is reset to 0.
+        """
+        current_dir = 1 if signed_pos > 0 else (-1 if signed_pos < 0 else 0)
+        last_dir = self._current_direction.get(instrument_id, 0)
+
+        # Reset tracking if direction changed or flattened
+        if current_dir != last_dir:
+            self._highest_since_entry.pop(instrument_id, None)
+            self._lowest_since_entry.pop(instrument_id, None)
+            self._pullback_count[instrument_id] = 0
+            self._current_direction[instrument_id] = current_dir
+
+        if current_dir == 0:
+            return
+
+        current_high = float(bar["high"])
+        current_low = float(bar["low"])
+
+        # Initialize if not set (this is the entry bar)
+        if instrument_id not in self._highest_since_entry:
+            self._highest_since_entry[instrument_id] = float("-inf")
+            self._lowest_since_entry[instrument_id] = float("inf")
+
+        if current_dir > 0:
+            if current_high > self._highest_since_entry[instrument_id]:
+                LOGGER.info(
+                    f"[{instrument_id}] Long: new high since entry ({current_high} > "
+                    f"{self._highest_since_entry[instrument_id]}). Resetting pullback counter."
+                )
+                self._highest_since_entry[instrument_id] = current_high
+                self._pullback_count[instrument_id] = 0
+
+        elif current_dir < 0:
+            if current_low < self._lowest_since_entry[instrument_id]:
+                LOGGER.info(
+                    f"[{instrument_id}] Short: new low since entry ({current_low} < "
+                    f"{self._lowest_since_entry[instrument_id]}). Resetting pullback counter."
+                )
+                self._lowest_since_entry[instrument_id] = current_low
+                self._pullback_count[instrument_id] = 0
+
     async def _on_bar_completed(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
         Called once per 5m bar completion.
@@ -390,17 +439,10 @@ class FutureTradeMonitor:
         else:
             bars.append(bar)
 
-        # Need at least LOOKBACK_BARS bars for meaningful analysis
-        if len(bars) < LOOKBACK_BARS:
-            LOGGER.debug(
-                f"[{instrument_id}] Only {len(bars)} bars – waiting for {LOOKBACK_BARS}."
-            )
-            return
-
         signed_pos = self._get_signed_position()
+        self._update_extremes(instrument_id, bar, signed_pos)
+
         if signed_pos == 0:
-            # Flat – reset counter and do nothing
-            self._pullback_count[instrument_id] = 0
             LOGGER.debug(f"[{instrument_id}] Flat position – no action.")
             return
 
@@ -410,17 +452,6 @@ class FutureTradeMonitor:
 
         if signed_pos > 0:
             # ── Long position ─────────────────────────────────────────
-            # Higher-high detection: did this bar's high exceed the previous 20-bar high?
-            prev_bars = bars[:-1]  # exclude current bar
-            if len(prev_bars) >= LOOKBACK_BARS:
-                prior_high = _highest_high(prev_bars, LOOKBACK_BARS)
-                if float(bar["high"]) > prior_high:
-                    LOGGER.info(
-                        f"[{instrument_id}] Long: higher high ({bar['high']} > {prior_high}). "
-                        f"Resetting pullback counter."
-                    )
-                    count = 0
-
             # Increment counter if bear bar on completion
             if is_bear:
                 count += 1
@@ -450,17 +481,6 @@ class FutureTradeMonitor:
 
         else:
             # ── Short position ────────────────────────────────────────
-            # Lower-low detection: did this bar's low break the previous 20-bar low?
-            prev_bars = bars[:-1]
-            if len(prev_bars) >= LOOKBACK_BARS:
-                prior_low = _lowest_low(prev_bars, LOOKBACK_BARS)
-                if float(bar["low"]) < prior_low:
-                    LOGGER.info(
-                        f"[{instrument_id}] Short: lower low ({bar['low']} < {prior_low}). "
-                        f"Resetting pullback counter."
-                    )
-                    count = 0
-
             # Increment counter if bull bar on completion
             if is_bull:
                 count += 1
@@ -491,9 +511,6 @@ class FutureTradeMonitor:
     def _on_bar_update(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
         Called on every in-progress bar update (type='update').
-
-        We only update the live bar in our local store here; all business logic
-        fires on *completion* (type='completed').
         """
         bars = self._bars.setdefault(instrument_id, [])
         bar_start = bar.get("start_time")
@@ -505,6 +522,9 @@ class FutureTradeMonitor:
             # Keep bounded
             if len(bars) > 1500:
                 bars[:] = bars[-1500:]
+
+        signed_pos = self._get_signed_position()
+        self._update_extremes(instrument_id, bar, signed_pos)
 
     # ------------------------------------------------------------------
     # Redis listener
