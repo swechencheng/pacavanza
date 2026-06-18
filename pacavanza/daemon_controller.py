@@ -35,7 +35,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("/tmp/pacavanza.controller.log"),
     ],
 )
 logger = logging.getLogger("controller")
