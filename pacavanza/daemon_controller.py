@@ -1,3 +1,6 @@
+import os
+os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+
 import time
 import sys
 import signal
@@ -6,14 +9,16 @@ import importlib
 import multiprocessing as mp
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import requests
 
-# Set start method to fork so AVANZA is shared
+# Set start method to spawn so we avoid macOS fork safety issues
 try:
-    mp.set_start_method("fork")
+    mp.set_start_method("spawn")
 except RuntimeError:
     pass
 
 # Initialize AVANZA once in the parent process!
+# It will serialize the session to a file for child processes to use.
 from pacavanza.modules.avanza_instance import get_avanza
 
 while True:
@@ -42,6 +47,7 @@ def _run_module(module_name, log_prefix):
     # Reset signal handlers to defaults in child — don't inherit parent's stop_all() handler
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+        
     # Redirect output to log files
     sys.stdout = open(f"/tmp/{log_prefix}.stdout.log", "a")
     sys.stderr = open(f"/tmp/{log_prefix}.stderr.log", "a")
