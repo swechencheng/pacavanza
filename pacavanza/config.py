@@ -1,0 +1,4 @@
+import os
+
+IBKR_DEFAULT_PORT = 7497
+IBKR_PORT = int(os.environ.get("PACAVANZA_IBKR_PORT", IBKR_DEFAULT_PORT))

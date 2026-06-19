@@ -1,4 +1,5 @@
 import os
+
 os.environ["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
 
 import time
@@ -10,6 +11,7 @@ import multiprocessing as mp
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
+import argparse
 
 # Set start method to spawn so we avoid macOS fork safety issues
 try:
@@ -46,7 +48,7 @@ def _run_module(module_name, log_prefix):
     # Reset signal handlers to defaults in child — don't inherit parent's stop_all() handler
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-        
+
     # Redirect output to log files
     sys.stdout = open(f"/tmp/{log_prefix}.stdout.log", "a")
     sys.stderr = open(f"/tmp/{log_prefix}.stderr.log", "a")
@@ -106,7 +108,19 @@ def stop_all():
 
 
 def main():
-    logger.info("Daemon Controller Started")
+    parser = argparse.ArgumentParser(description="Pacavanza Daemon Controller")
+    parser.add_argument(
+        "-P",
+        "--ibkr-port",
+        type=int,
+        default=7497,
+        help="IBKR gateway live trading port (e.g. 4001)",
+    )
+    args, _ = parser.parse_known_args()
+
+    os.environ["PACAVANZA_IBKR_PORT"] = str(args.ibkr_port)
+
+    logger.info(f"Daemon Controller Started. IBKR_PORT: {args.ibkr_port}")
 
     def signal_handler(sig, _frame):
         logger.info(f"Received signal {sig}. Shutting down all processes.")

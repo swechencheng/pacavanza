@@ -13,6 +13,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
 from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
+from .config import IBKR_PORT
 
 # compute pacavanza package root (pacavanza/)
 ROOT = Path(__file__).resolve().parent  # pacavanza/
@@ -589,7 +590,7 @@ def create_app(
         if ibkr_conn is not None:
             ib, contract = ibkr_conn
             try:
-                await ib.connectAsync("127.0.0.1", 7497, clientId=51)
+                await ib.connectAsync("127.0.0.1", IBKR_PORT, clientId=51)
                 await ib.qualifyContractsAsync(contract)
                 LOGGER.info("IBKR async connected inside lifespan.")
 

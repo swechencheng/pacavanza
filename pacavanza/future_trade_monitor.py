@@ -37,6 +37,8 @@ import aiohttp
 import redis.asyncio as aioredis
 from ib_async import IB, ContFuture, StopOrder
 
+from pacavanza.config import IBKR_PORT
+
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("future_trade_monitor")
 
@@ -59,7 +61,7 @@ LOOKBACK_BARS = 20
 # IBKR connection settings (TWS paper-trading port; adjust for live: 7496)
 # Used only for position queries — order management goes through the backend API.
 IBKR_HOST = "127.0.0.1"
-IBKR_PORT = 7497
+# IBKR_PORT is imported from pacavanza.config
 IBKR_CLIENT_ID = 88  # unique ID – must not clash with other clients (backend uses 51)
 
 
