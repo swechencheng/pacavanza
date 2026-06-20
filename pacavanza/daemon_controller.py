@@ -141,10 +141,7 @@ def main():
 
             if is_active_window:
                 # 1. Dashboard
-                if start_process(
-                    "dashboard", "pacavanza.backend", "pacavanza.dashboard"
-                ):
-                    time.sleep(5)
+                start_process("dashboard", "pacavanza.backend", "pacavanza.dashboard")
 
                 # 2. Future Daemon (Always ensure it is running)
                 if start_process(
@@ -152,22 +149,22 @@ def main():
                     "pacavanza.future_market_daemon",
                     "pacavanza.future_market_daemon",
                 ):
-                    time.sleep(5)
+                    time.sleep(1)
 
-                # 3. Future Trade Monitor (depends on future_market being up)
-                start_process(
-                    "future_trade_monitor",
-                    "pacavanza.future_trade_monitor",
-                    "pacavanza.future_trade_monitor",
-                )
-
-                # 4. Market Daemon (Always ensure it is running)
+                # 3. Market Daemon (Always ensure it is running)
                 if start_process(
                     "market",
                     "pacavanza.avanza_market_daemon",
                     "pacavanza.avanza_market_daemon",
                 ):
                     time.sleep(5)
+
+                # 4. Future Trade Monitor (depends on future_market being up)
+                start_process(
+                    "future_trade_monitor",
+                    "pacavanza.future_trade_monitor",
+                    "pacavanza.future_trade_monitor",
+                )
 
                 # 5. Trading Monitor
                 start_process(
