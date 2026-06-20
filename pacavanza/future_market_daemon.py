@@ -215,6 +215,8 @@ class FutureMarketCollector(BaseMarketCollector):
         """Return True if start_time (UTC) falls before market open or at/after market close."""
         zone, oh, om, ch, cm = self._get_market_hours()
         local = start_time.astimezone(zone)
+        if local.weekday() >= 5:
+            return True
         t = (local.hour, local.minute)
         return t < (oh, om) or t >= (ch, cm)
 

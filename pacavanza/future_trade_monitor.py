@@ -537,9 +537,7 @@ class FutureTradeMonitor:
     async def _listen(self) -> None:
         """Subscribe to the Redis channel and dispatch messages."""
         LOGGER.info(f"Connecting to Redis at {self._redis_url} …")
-        self._redis = aioredis.from_url(
-            self._redis_url, health_check_interval=30, socket_keepalive=True
-        )
+        self._redis = aioredis.from_url(self._redis_url)
         await self._redis.ping()
         LOGGER.info("Redis connected.")
 
@@ -648,6 +646,9 @@ class FutureTradeMonitor:
             return False
 
         now_local = datetime.now(zone)
+        if now_local.weekday() >= 5:
+            return True
+
         t = (now_local.hour, now_local.minute)
         return t < (oh, om) or t >= (ch, cm)
 
