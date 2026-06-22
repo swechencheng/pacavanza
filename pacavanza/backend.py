@@ -265,7 +265,9 @@ def create_app(
                 await redis_client.publish(channel, json.dumps(test_msg))
 
             while True:
-                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=60.0)
+                msg = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=60.0
+                )
                 if msg is None:
                     # Timeout reached without messages. Send a ping to keep connection alive.
                     try:
@@ -559,12 +561,35 @@ def create_app(
             return
         ib = ibkr_trading.ib
         LOGGER.info("Starting IBKR event pump task")
+        retry_delay = 5
+        max_delay = 300
         try:
             while True:
                 try:
-                    ib.sleep(0)  # process pending IB events without blocking
+                    if not ib.isConnected():
+                        LOGGER.warning(
+                            f"IBKR connection lost, reconnecting in {retry_delay}s..."
+                        )
+                        await asyncio.sleep(retry_delay)
+                        try:
+                            ib.disconnect()
+                        except Exception:
+                            pass
+                        await asyncio.sleep(1)
+                        await ib.connectAsync("127.0.0.1", IBKR_PORT, clientId=51)
+                        await ib.qualifyContractsAsync(ibkr_trading.contract)
+                        LOGGER.info("IBKR reconnected successfully.")
+                        retry_delay = 5  # reset on success
+                        if hasattr(ibkr_trading, "_setup_trade_subscription"):
+                            ibkr_trading._setup_trade_subscription(
+                                on_change_callback=_on_order_change
+                            )
+                    else:
+                        ib.sleep(0)  # process pending IB events without blocking
                 except Exception as e:
-                    LOGGER.debug(f"IBKR event pump error: {e}")
+                    LOGGER.debug(f"IBKR event pump/reconnect error: {e}")
+                    if not ib.isConnected():
+                        retry_delay = min(retry_delay * 2, max_delay)
                 await asyncio.sleep(0.1)  # 100ms cycle
         except asyncio.CancelledError:
             LOGGER.info("IBKR event pump task cancelled (normal shutdown)")
@@ -576,6 +601,7 @@ def create_app(
 
         # Suppress noisy asyncio websocket ConnectionClosedError in shielded futures
         loop = asyncio.get_event_loop()
+
         def custom_exception_handler(loop, context):
             msg = context.get("message", "")
             if "ConnectionClosedError exception in shielded future" in msg:
@@ -584,6 +610,7 @@ def create_app(
             if exc and "keepalive ping timeout" in str(exc):
                 return
             loop.default_exception_handler(context)
+
         loop.set_exception_handler(custom_exception_handler)
 
         # Connect IBKR async inside the correct event loop

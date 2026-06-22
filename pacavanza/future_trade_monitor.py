@@ -669,6 +669,29 @@ class FutureTradeMonitor:
                 f"Failed to connect to IBKR – position info unavailable: {exc}"
             )
 
+        async def _ibkr_monitor():
+            retry_delay = 5
+            max_delay = 300
+            while not self._shutting_down:
+                if self._ib is not None and not self._ib.isConnected():
+                    LOGGER.warning(
+                        f"IBKR connection lost, reconnecting in {retry_delay}s..."
+                    )
+                    await asyncio.sleep(retry_delay)
+                    try:
+                        self._ib.disconnect()
+                        await asyncio.sleep(1)
+                        await self._connect_ibkr()
+                        retry_delay = 5  # reset on success
+                    except Exception as e:
+                        LOGGER.error(f"IBKR reconnect failed: {e}")
+                        retry_delay = min(retry_delay * 2, max_delay)
+                else:
+                    await asyncio.sleep(1)
+
+        # Start the background monitor task
+        asyncio.create_task(_ibkr_monitor())
+
         try:
             while not self._shutting_down:
                 try:
