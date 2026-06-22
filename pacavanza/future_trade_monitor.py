@@ -92,19 +92,31 @@ def _lowest_low(bars: List[Dict[str, Any]], lookback: int) -> float:
     return min(float(b["low"]) for b in window)
 
 
-def _last_bear_bar_low(bars: List[Dict[str, Any]]) -> Optional[float]:
-    """Return the low of the most-recent bear bar, or None if there is none."""
+def _lowest_low_of_bear_bars(bars: List[Dict[str, Any]], count: int) -> Optional[float]:
+    """Return the lowest low of the most-recent `count` bear bars."""
+    bear_lows = []
     for b in reversed(bars):
         if _is_bear_bar(b):
-            return float(b["low"])
+            bear_lows.append(float(b["low"]))
+            if len(bear_lows) == count:
+                break
+    if bear_lows:
+        return min(bear_lows)
     return None
 
 
-def _last_bull_bar_high(bars: List[Dict[str, Any]]) -> Optional[float]:
-    """Return the high of the most-recent bull bar, or None if there is none."""
+def _highest_high_of_bull_bars(
+    bars: List[Dict[str, Any]], count: int
+) -> Optional[float]:
+    """Return the highest high of the most-recent `count` bull bars."""
+    bull_highs = []
     for b in reversed(bars):
         if _is_bull_bar(b):
-            return float(b["high"])
+            bull_highs.append(float(b["high"]))
+            if len(bull_highs) == count:
+                break
+    if bull_highs:
+        return max(bull_highs)
     return None
 
 
@@ -467,20 +479,20 @@ class FutureTradeMonitor:
             self._pullback_count[instrument_id] = count
 
             if count >= PULLBACK_TRIGGER_COUNT:
-                low = _last_bear_bar_low(bars)
+                low = _lowest_low_of_bear_bars(bars, count)
                 if low is not None:
                     stop_price = round(low - TICK_SIZE, 2)
                     LOGGER.info(
                         f"[{instrument_id}] Long: pullback counter reached {count}. "
                         f"Placing SELL STOP at {stop_price} "
-                        f"(last bear low={low} – 1 tick)."
+                        f"(lowest low of last {count} bear bars={low} – 1 tick)."
                     )
                     await self._place_sell_stop(stop_price)
                     # Reset counter so we don't re-place on every subsequent bar
                     self._pullback_count[instrument_id] = 0
                 else:
                     LOGGER.warning(
-                        f"[{instrument_id}] Long: pullback counter={count} but no bear bar found."
+                        f"[{instrument_id}] Long: pullback counter={count} but not enough bear bars found."
                     )
 
         else:
@@ -496,20 +508,20 @@ class FutureTradeMonitor:
             self._pullback_count[instrument_id] = count
 
             if count >= PULLBACK_TRIGGER_COUNT:
-                high = _last_bull_bar_high(bars)
+                high = _highest_high_of_bull_bars(bars, count)
                 if high is not None:
                     stop_price = round(high + TICK_SIZE, 2)
                     LOGGER.info(
                         f"[{instrument_id}] Short: pullback counter reached {count}. "
                         f"Placing BUY STOP at {stop_price} "
-                        f"(last bull high={high} + 1 tick)."
+                        f"(highest high of last {count} bull bars={high} + 1 tick)."
                     )
                     await self._place_buy_stop(stop_price)
                     # Reset counter so we don't re-place on every subsequent bar
                     self._pullback_count[instrument_id] = 0
                 else:
                     LOGGER.warning(
-                        f"[{instrument_id}] Short: pullback counter={count} but no bull bar found."
+                        f"[{instrument_id}] Short: pullback counter={count} but not enough bull bars found."
                     )
 
     def _on_bar_update(self, instrument_id: str, bar: Dict[str, Any]) -> None:
