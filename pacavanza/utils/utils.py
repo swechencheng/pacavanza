@@ -159,3 +159,89 @@ def fetch_active_omxs30_future(roll_days_before_expiry: int = 5):
             },
         }
     }
+
+
+def is_outside_market_hours(
+    start_time, tz_name: str, open_str: str, close_str: str
+) -> bool:
+    """Return True if start_time (UTC datetime) falls before market open or at/after market close."""
+    from zoneinfo import ZoneInfo
+    from datetime import timezone
+
+    try:
+        zone = ZoneInfo(tz_name)
+    except Exception:
+        zone = timezone.utc
+
+    try:
+        oh, om = (int(x) for x in open_str.split(":"))
+        ch, cm = (int(x) for x in close_str.split(":"))
+    except Exception:
+        return False
+
+    local = start_time.astimezone(zone)
+    if local.weekday() >= 5:
+        return True
+    t = (local.hour, local.minute)
+    return t < (oh, om) or t >= (ch, cm)
+
+
+def fetch_avanza_chart_history(
+    orderbook_id: str,
+    interval_seconds: int = 300,
+    tz_name: str = "Europe/Stockholm",
+    open_str: str = "09:00",
+    close_str: str = "17:25",
+) -> list:
+    """
+    Fetch the price chart from Avanza for today, parse into our OHLC format,
+    and filter out bars outside of regular market hours.
+    Returns a list of dicts with datetime start_time/end_time.
+    """
+    try:
+        from curl_cffi import requests
+    except ImportError:
+        return []
+
+    from datetime import datetime, timezone, timedelta
+
+    interval_map = {
+        60: "minute",
+        120: "two_minutes",
+        300: "five_minutes",
+        600: "ten_minutes",
+        1800: "thirty_minutes",
+        3600: "hour",
+    }
+    resolution = interval_map.get(interval_seconds, "five_minutes")
+
+    url = f"https://www.avanza.se/_api/price-chart/stock/{orderbook_id}?timePeriod=today&resolution={resolution}"
+    try:
+        response = requests.get(url, impersonate="chrome110", timeout=10)
+        if response.status_code != 200:
+            return []
+        data = response.json()
+    except Exception:
+        return []
+
+    ohlc_data = data.get("ohlc", [])
+    new_bars = []
+
+    for row in ohlc_data:
+        start_time = datetime.fromtimestamp(row["timestamp"] / 1000.0, tz=timezone.utc)
+        if is_outside_market_hours(start_time, tz_name, open_str, close_str):
+            continue
+
+        end_time = start_time + timedelta(seconds=interval_seconds)
+        bar = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "open": float(row["open"]),
+            "high": float(row["high"]),
+            "low": float(row["low"]),
+            "close": float(row["close"]),
+            "volume": float(row["totalVolumeTraded"]),
+        }
+        new_bars.append(bar)
+
+    return new_bars

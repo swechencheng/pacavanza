@@ -240,13 +240,7 @@ class FutureMarketCollector(BaseMarketCollector):
         self._sync_avanza_history()
 
     def _sync_avanza_history(self):
-        try:
-            from curl_cffi import requests
-        except ImportError:
-            self.logger.warning("curl_cffi not installed, skipping Avanza history sync")
-            return
-
-        from datetime import timedelta
+        from pacavanza.utils.utils import fetch_avanza_chart_history
 
         for sid, sd in self.instrument_data.items():
             try:
@@ -258,62 +252,23 @@ class FutureMarketCollector(BaseMarketCollector):
                     )
                     continue
 
-                interval_map = {
-                    60: "minute",
-                    120: "two_minutes",
-                    300: "five_minutes",
-                    600: "ten_minutes",
-                    1800: "thirty_minutes",
-                    3600: "hour",
-                }
-                resolution = interval_map.get(self.interval_seconds, "five_minutes")
+                tz_name = info.get("timezone", "Europe/Stockholm")
+                open_str = info.get("market_open", "09:00")
+                close_str = info.get("market_close", "17:45")
 
-                url = f"https://www.avanza.se/_api/price-chart/stock/{orderbook_id}?timePeriod=today&resolution={resolution}"
-                response = requests.get(url, impersonate="chrome110")
-                if response.status_code != 200:
-                    self.logger.warning(
-                        f"[{sid}] Avanza history sync failed with status {response.status_code}: {response.text}"
-                    )
-                    continue
+                new_bars = fetch_avanza_chart_history(
+                    orderbook_id=str(orderbook_id),
+                    interval_seconds=self.interval_seconds,
+                    tz_name=tz_name,
+                    open_str=open_str,
+                    close_str=close_str,
+                )
 
-                data = response.json()
-                ohlc_data = data.get("ohlc", [])
-
-                if not ohlc_data:
+                if not new_bars:
                     self.logger.warning(
                         f"[{sid}] No Avanza history data for orderbookId {orderbook_id}"
                     )
                     continue
-
-                new_bars = []
-                skipped_pre_market = 0
-                for row in ohlc_data:
-                    start_time = datetime.fromtimestamp(
-                        row["timestamp"] / 1000.0, tz=timezone.utc
-                    )
-
-                    # Skip out-of-hours bars (pre-market or post-market)
-                    if self._is_outside_market_hours(start_time):
-                        skipped_pre_market += 1
-                        continue
-
-                    end_time = start_time + timedelta(seconds=self.interval_seconds)
-
-                    bar = {
-                        "start_time": start_time,
-                        "end_time": end_time,
-                        "open": float(row["open"]),
-                        "high": float(row["high"]),
-                        "low": float(row["low"]),
-                        "close": float(row["close"]),
-                        "volume": float(row["totalVolumeTraded"]),
-                    }
-                    new_bars.append(bar)
-
-                if skipped_pre_market:
-                    self.logger.info(
-                        f"[{sid}] Skipped {skipped_pre_market} out-of-hours bars from Avanza."
-                    )
 
                 with sd.lock:
                     local_bars = sd.completed_ohlc.get(sid, [])

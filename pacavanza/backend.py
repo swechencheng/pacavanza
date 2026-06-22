@@ -742,15 +742,50 @@ def create_app(
     async def get_history(instrument_id: str, limit: int = 3600):
         """
         Return the most recent completed_ohlc for instrument plus the current live bar.
-        This reads existing disk file (preferred) and appends the live bar from memory.
+        This fetches the latest today chart from Avanza, reads existing disk file (preferred),
+        merges them, and appends the live bar from memory.
         """
+        import asyncio
+        from pacavanza.utils.utils import fetch_avanza_chart_history
+        
+        info = instrument_list.get(instrument_id, {})
+        orderbook_id = info.get("orderbookId")
+        
+        avanza_bars = []
+        if orderbook_id:
+            loop = asyncio.get_running_loop()
+            interval_seconds = info.get("interval_seconds", 300)
+            tz_name = info.get("timezone", "Europe/Stockholm")
+            open_str = info.get("market_open", "09:00")
+            close_str = info.get("market_close", "17:45")
+            
+            avanza_bars_raw = await loop.run_in_executor(
+                None, 
+                fetch_avanza_chart_history, 
+                str(orderbook_id), 
+                interval_seconds, 
+                tz_name, 
+                open_str, 
+                close_str
+            )
+            for b in avanza_bars_raw:
+                # ISO format to match our JSON
+                b["start_time"] = b["start_time"].isoformat()
+                b["end_time"] = b["end_time"].isoformat()
+                avanza_bars.append(b)
+
         data_file = f"ohlc_{instrument_id}.json"
-        data = []
+        disk_data = []
         try:
             with open(data_file, "r") as f:
-                data = json.load(f)
+                disk_data = json.load(f)
         except FileNotFoundError:
             pass
+
+        # Merge disk data with Avanza data
+        merged_dict = {b["start_time"]: b for b in disk_data}
+        merged_dict.update({b["start_time"]: b for b in avanza_bars})
+        data = [merged_dict[k] for k in sorted(merged_dict.keys())]
 
         # Fetch the current live bar from in-memory recent_bars to append/update
         bars_lock = await _get_bars_lock_for(instrument_id)
