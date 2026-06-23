@@ -273,7 +273,21 @@ class FutureChartApp extends PACChartApp {
         const res = await this._callApi(endpoint, payload);
         if (res) {
           console.log("[ibkr] OK:", res);
+          if (endpoint.includes("stop") && !endpoint.includes("delete")) {
+            let msg = "Success";
+            if (res.status === "scheduled") msg = "Scheduled";
+            else if (res.status === "already_scheduled") msg = "Already Scheduled";
+            else if (res.status === "placed") msg = "Placed";
+            else if (res.cancelled === true) msg = "Cancelled";
+            this.showStatusMessage(`✅ ${msg}`);
+          } else if (endpoint.includes("delete")) {
+            this.showStatusMessage("✅ Deleted");
+          }
           this._refreshOrders();
+        } else {
+          if (endpoint.includes("stop")) {
+            this.showStatusMessage("❌ Failed");
+          }
         }
       });
     };

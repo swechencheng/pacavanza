@@ -200,6 +200,7 @@ class PACChartApp {
   }
 
   _updateCountdownDisplay() {
+    if (this._statusMessageActive) return;
     if (!this._countdownEndTime) return;
     const rem = this._countdownEndTime - Math.floor(Date.now() / 1000);
     const el = document.getElementById("status");
@@ -213,11 +214,30 @@ class PACChartApp {
     el.textContent = this.formatMMSS(rem);
   }
 
+  showStatusMessage(msg, durationMs = 3000) {
+    const el = document.getElementById("status");
+    if (!el) return;
+    el.textContent = msg;
+    this._statusMessageActive = true;
+    if (this._statusMessageTimeout) clearTimeout(this._statusMessageTimeout);
+    this._statusMessageTimeout = setTimeout(() => {
+      this._statusMessageActive = false;
+      // Force an immediate update so the countdown reappears instantly
+      if (!this._countdownEndTime) {
+        this.clearCountdown(true);
+      } else {
+        this._updateCountdownDisplay();
+      }
+    }, durationMs);
+  }
+
   startCountdownForBar(endUnixSeconds, sessionConfig) {
     if (!sessionConfig || !sessionConfig.sessionTZ) return;
     const now = Math.floor(Date.now() / 1000);
     if (!this.isTradingHoursForBar(now, sessionConfig)) {
-      document.getElementById("status").textContent = "Market closed";
+      if (!this._statusMessageActive) {
+        document.getElementById("status").textContent = "Market closed";
+      }
       return;
     }
     let end = Number(endUnixSeconds);
@@ -232,7 +252,7 @@ class PACChartApp {
   clearCountdown(setMarketMessage = true) {
     if (this._countdownTimerId) { clearInterval(this._countdownTimerId); this._countdownTimerId = null; }
     this._countdownEndTime = null;
-    if (setMarketMessage) {
+    if (setMarketMessage && !this._statusMessageActive) {
       const el = document.getElementById("status");
       const gs = this.getStatusChartManager().groupingState;
       if (gs.sessionTZ) {
