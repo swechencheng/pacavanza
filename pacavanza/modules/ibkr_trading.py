@@ -109,6 +109,43 @@ class IbkrTrading(BaseAvanzaTrading):
             tick = float(first_instrument.get("tick_size", 0.25))
         return round(price / tick) * tick
 
+    def _find_existing_sl_order(self, closing_action: str) -> Optional[Trade]:
+        """
+        Find an existing SL (stop) order that is part of a bracket or OCA group
+        and matches the given closing action (e.g., "SELL" for closing a long).
+
+        Only returns SL orders whose parent entry has already filled (or OCA
+        orders which have no parent). This avoids accidentally modifying an SL
+        that protects a pending, unfilled entry.
+
+        Returns the Trade object if found, None otherwise.
+        """
+        open_trades = self.ib.openTrades()
+        for t in open_trades:
+            if t.contract.conId != self.contract.conId or not t.isActive():
+                continue
+            order = t.order
+            if order.orderType != "STP":
+                continue
+            if order.action != closing_action:
+                continue
+            # Must belong to a bracket (parentId) or OCA group
+            parent_id = getattr(order, "parentId", 0)
+            oca_group = getattr(order, "ocaGroup", "")
+            if parent_id == 0 and not oca_group:
+                continue  # standalone order, not a bracket/OCA SL
+            # For bracket children, only consider SL whose parent is filled
+            if parent_id != 0:
+                parent_trade = next(
+                    (pt for pt in open_trades if pt.order.orderId == parent_id),
+                    None,
+                )
+                # Parent still active → SL protects a pending entry, skip
+                if parent_trade and parent_trade.isActive():
+                    continue
+            return t
+        return None
+
     def _sync_sl_tp_volume(self) -> None:
         """
         Synchronize the volume of all active SL and TP orders
@@ -434,6 +471,16 @@ class IbkrTrading(BaseAvanzaTrading):
 
         if signed_pos < 0 and abs(signed_pos) == volume:
             # Scenario 3: Close short — standalone stop only, no SL/TP
+            # Check if there is an existing SL order (from bracket/OCA) to adjust
+            existing_sl = self._find_existing_sl_order("BUY")
+            if existing_sl:
+                new_price = self._round_price(stop_price)
+                LOGGER.info(
+                    f"Buy stop: adjusting existing SL orderId="
+                    f"{existing_sl.order.orderId} price to {new_price}"
+                )
+                self.edit_order(existing_sl.order.orderId, price=new_price)
+                return
             LOGGER.info("Buy stop: closing short position (exact match)")
             order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
@@ -530,6 +577,16 @@ class IbkrTrading(BaseAvanzaTrading):
 
         if signed_pos > 0 and signed_pos == volume:
             # Scenario 3: Close long — standalone stop only, no SL/TP
+            # Check if there is an existing SL order (from bracket/OCA) to adjust
+            existing_sl = self._find_existing_sl_order("SELL")
+            if existing_sl:
+                new_price = self._round_price(stop_price)
+                LOGGER.info(
+                    f"Sell stop: adjusting existing SL orderId="
+                    f"{existing_sl.order.orderId} price to {new_price}"
+                )
+                self.edit_order(existing_sl.order.orderId, price=new_price)
+                return
             LOGGER.info("Sell stop: closing long position (exact match)")
             order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
