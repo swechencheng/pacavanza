@@ -36,21 +36,21 @@ class PACChartApp {
                   const realMoveTo = ctx.moveTo.bind(ctx);
                   const realLineTo = ctx.lineTo.bind(ctx);
                   const realStroke = ctx.stroke.bind(ctx);
-                  
+
                   ctx.strokeRect = (x, y, w, h) => {
                     realBeginPath();
                     realMoveTo(x, y);
                     realLineTo(x + w, y);
                     realStroke();
-                    
+
                     realBeginPath();
                     realMoveTo(x, y + h);
                     realLineTo(x + w, y + h);
                     realStroke();
                   };
-                  
+
                   origDrawImpl(scope);
-                  
+
                   ctx.strokeRect = realStrokeRect;
                 });
               }
@@ -584,6 +584,30 @@ class PACChartApp {
   async initialize() { throw new Error("initialize() not implemented"); }
   handleWsMessage(msg) { throw new Error("handleWsMessage() not implemented"); }
 
+  // ── Wake Lock ─────────────────────────────────────────────────────
+  async requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        this._wakeLock = await navigator.wakeLock.request('screen');
+        this._wakeLock.addEventListener('release', () => {
+          this._log('Screen Wake Lock was released');
+        });
+        this._log('Screen Wake Lock is active');
+      }
+    } catch (err) {
+      this._error(`Failed to acquire Wake Lock: ${err.name}, ${err.message}`);
+    }
+  }
+
+  setupWakeLock() {
+    this.requestWakeLock();
+    document.addEventListener('visibilitychange', () => {
+      if (this._wakeLock !== null && document.visibilityState === 'visible') {
+        this.requestWakeLock();
+      }
+    });
+  }
+
   // ── Entry Point ───────────────────────────────────────────────────
   async run() {
     try {
@@ -592,6 +616,7 @@ class PACChartApp {
         document.getElementById("status").textContent = "Chart lib N/A";
         return;
       }
+      this.setupWakeLock();
       await this.initialize();
       this.setupWS();
     } catch (e) {
