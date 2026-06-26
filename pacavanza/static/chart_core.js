@@ -607,23 +607,56 @@ class PACChartApp {
   // ── Wake Lock ─────────────────────────────────────────────────────
   async requestWakeLock() {
     try {
-      if ('wakeLock' in navigator) {
-        this._wakeLock = await navigator.wakeLock.request('screen');
-        this._wakeLock.addEventListener('release', () => {
-          this._log('Screen Wake Lock was released');
-        });
-        this._log('Screen Wake Lock is active');
-      }
+      if (!('wakeLock' in navigator)) return false;
+      // If we already have an active lock, wrap it up
+      if (this._wakeLock && this._wakeLock.released === false) return true;
+
+      this._wakeLock = await navigator.wakeLock.request('screen');
+      this._log('Screen Wake Lock is active');
+
+      this._wakeLock.addEventListener('release', () => {
+        this._log('Screen Wake Lock was released');
+        // Re-arm gesture listener when mobile OS drops the lock
+        this._armWakeLockGesture();
+      });
+
+      return true;
     } catch (err) {
-      this._error(`Failed to acquire Wake Lock: ${err.name}, ${err.message}`);
+      this._log(`Wake Lock not granted: ${err.name} – ${err.message}`);
+      return false;
     }
   }
 
+  _armWakeLockGesture() {
+    if (this._hasWakeLockGestureListener) return;
+
+    const onGesture = async () => {
+      const success = await this.requestWakeLock();
+      if (success) {
+        document.removeEventListener('click', onGesture, { capture: true });
+        this._hasWakeLockGestureListener = false;
+      }
+    };
+
+    this._hasWakeLockGestureListener = true;
+    // 'click' handles desktop clicks and completed mobile taps safely
+    document.addEventListener('click', onGesture, { capture: true });
+  }
+
   setupWakeLock() {
-    this.requestWakeLock();
+    // 1. Try immediately (works on desktop Chrome without a gesture)
+    this.requestWakeLock().then(success => {
+      if (!success) this._armWakeLockGesture();
+    });
+
+    // 2. Handle tab visibility switching
     document.addEventListener('visibilitychange', () => {
-      if (this._wakeLock !== null && document.visibilityState === 'visible') {
-        this.requestWakeLock();
+      if (document.visibilityState === 'visible') {
+        this.requestWakeLock().then(success => {
+          // Mobile will almost always fail here, so we immediately
+          // prep the app to steal the very next tap.
+          if (!success) this._armWakeLockGesture();
+        });
       }
     });
   }
