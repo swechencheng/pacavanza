@@ -25,6 +25,7 @@ class FutureChartApp extends PACChartApp {
     this._lastOrders = [];
     this._isSnapping = false;
     this.tickSize = 0.25;
+    this._fillMarkers = [];  // persisted fill markers for the chart
 
     if (this.chartFuture.drawingManager) {
       this.chartFuture.drawingManager.on("drawing:updated", (event) => this._handleDrawingUpdated(event));
@@ -127,6 +128,7 @@ class FutureChartApp extends PACChartApp {
     }
 
     await this.loadHistoryForInstrument(this.chartFuture, futureKey, this.instrumentMapFlat);
+    await this._loadFillMarkers();
     this.ensureMarketCountdown(this.chartFuture.groupingState);
   }
 
@@ -145,6 +147,12 @@ class FutureChartApp extends PACChartApp {
     // Handle order depth (tape) updates
     if (msg.type === "depth") {
       this._renderDepth(msg);
+      return;
+    }
+
+    // Handle real-time fill marker broadcasts
+    if (msg.type === "fill" && msg.fill) {
+      this._addFillMarker(msg.fill);
       return;
     }
 
@@ -221,6 +229,90 @@ class FutureChartApp extends PACChartApp {
       } catch (e) {
         updatedEl.textContent = msg.updated;
       }
+    }
+  }
+
+  // ── Fill Markers ──────────────────────────────────────────────────
+
+  /**
+   * Load persisted fills from backend and render as chart markers.
+   */
+  async _loadFillMarkers() {
+    try {
+      const res = await fetch("/ibkr/fills");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.fills && data.fills.length > 0) {
+        this._fillMarkers = data.fills;
+        this._renderFillMarkers();
+        this._remoteLog("INFO", `Loaded ${data.fills.length} fill markers`);
+      }
+    } catch (e) {
+      this._remoteLog("ERROR", `Failed to load fill markers: ${e}`);
+    }
+  }
+
+  /**
+   * Add a single fill marker (from real-time WS broadcast) and re-render.
+   */
+  _addFillMarker(fill) {
+    // Deduplicate by execId
+    if (fill.execId && this._fillMarkers.some(f => f.execId === fill.execId)) return;
+    this._fillMarkers.push(fill);
+    this._renderFillMarkers();
+    this._remoteLog("INFO", `Fill marker added: ${fill.side} @ ${fill.price}`);
+  }
+
+  /**
+   * Convert fills to lightweight-charts markers and apply to the candle series.
+   * Fill time is snapped to the containing bar's time for proper alignment.
+   */
+  _renderFillMarkers() {
+    if (!this.chartFuture || !this.chartFuture.series.candle) return;
+
+    const seriesData = this.chartFuture.series.candle.data();
+    if (!seriesData || seriesData.length === 0) return;
+    const validTimes = seriesData.map(d => d.time);
+    const lastValidTime = validTimes[validTimes.length - 1];
+
+    const markers = this._fillMarkers.map(fill => {
+      // Convert fill time to a lightweight-charts timestamp (seconds)
+      const fillTimeSec = Math.floor(Date.parse(fill.time) / 1000);
+
+      // Snap to the bar containing this fill (floor to interval boundary)
+      let barTime = fillTimeSec - (fillTimeSec % this.INTERVAL_SECONDS);
+
+      // Lightweight Charts drops markers if their time is not exactly in the series.
+      // If the exact bar hasn't been created yet (e.g. illiquid period or fresh tick),
+      // snap the marker to the closest available preceding bar.
+      if (!validTimes.includes(barTime)) {
+        let closest = lastValidTime;
+        for (let i = validTimes.length - 1; i >= 0; i--) {
+          if (validTimes[i] <= barTime) {
+            closest = validTimes[i];
+            break;
+          }
+        }
+        barTime = closest;
+      }
+
+      const isBuy = fill.side === "buy";
+      return {
+        time: barTime,
+        price: fill.price,
+        position: "atPriceMiddle",
+        color: isBuy ? "#2196F3" : "#9C27B0",
+        shape: "circle",
+        size: 0.5,
+      };
+    });
+    markers.sort((a, b) => a.time - b.time);
+
+    // In Lightweight Charts v5, setMarkers was moved to a plugin
+    if (!this._markersPlugin) {
+      this._markersPlugin = LightweightCharts.createSeriesMarkers(this.chartFuture.series.candle, markers);
+    } else {
+      this._markersPlugin.setMarkers(markers);
     }
   }
 

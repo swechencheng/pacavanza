@@ -127,6 +127,27 @@ def create_app(
     except Exception as e:
         LOGGER.warning("Could not fetch active future: %s", e)
 
+    # ── Fill markers persistence ──────────────────────────────────────────
+    FILLS_FILE = "fills.json"
+
+    def _load_fills() -> List[Dict[str, Any]]:
+        """Load persisted fills from disk."""
+        try:
+            with open(FILLS_FILE, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return []
+
+    def _save_fill(fill_record: Dict[str, Any]) -> None:
+        """Append a fill record to the persistent JSON file."""
+        fills = _load_fills()
+        # Deduplicate by execId
+        if any(f.get("execId") == fill_record.get("execId") for f in fills):
+            return
+        fills.append(fill_record)
+        with open(FILLS_FILE, "w") as f:
+            json.dump(fills, f, default=str)
+
     recent_bars = {sid: [] for sid in instrument_list.keys()}
 
     for sid in recent_bars:
@@ -582,7 +603,8 @@ def create_app(
                         retry_delay = 5  # reset on success
                         if hasattr(ibkr_trading, "_setup_trade_subscription"):
                             ibkr_trading._setup_trade_subscription(
-                                on_change_callback=_on_order_change
+                                on_change_callback=_on_order_change,
+                                on_fill_callback=_on_fill,
                             )
                     else:
                         ib.sleep(0)  # process pending IB events without blocking
@@ -635,7 +657,8 @@ def create_app(
                 )
                 if hasattr(ibkr_trading, "_setup_trade_subscription"):
                     ibkr_trading._setup_trade_subscription(
-                        on_change_callback=_on_order_change
+                        on_change_callback=_on_order_change,
+                        on_fill_callback=_on_fill,
                     )
             except Exception as e:
                 LOGGER.error(f"Failed to connect IBKR async: {e}")
@@ -1472,6 +1495,11 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
 
+    @app.get("/ibkr/fills")
+    async def ibkr_fills():
+        """Return all persisted fill records for chart markers."""
+        return JSONResponse(content={"fills": _load_fills()})
+
     # Setup trade event subscription to broadcast order changes via WebSocket
     def _on_order_change(orders_snapshot):
         """Broadcast order updates to all connected WebSocket clients."""
@@ -1494,6 +1522,24 @@ def create_app(
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(_broadcast())
+        except RuntimeError:
+            pass
+
+    def _on_fill(fill_record):
+        """Persist fill to disk and broadcast to WebSocket clients."""
+        _save_fill(fill_record)
+
+        async def _broadcast_fill():
+            await manager.broadcast(
+                {
+                    "type": "fill",
+                    "fill": fill_record,
+                }
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_broadcast_fill())
         except RuntimeError:
             pass
 

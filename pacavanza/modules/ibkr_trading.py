@@ -949,12 +949,14 @@ class IbkrTrading(BaseAvanzaTrading):
     # Trade event subscription & order lifecycle tracking
     # --------------------------------------------------------------------------
 
-    def _setup_trade_subscription(self, on_change_callback=None):
+    def _setup_trade_subscription(self, on_change_callback=None, on_fill_callback=None):
         """
         Subscribe to IBKR trade events for order lifecycle tracking.
         Calls on_change_callback(orders_snapshot) whenever an order changes.
+        Calls on_fill_callback(fill_record) whenever an order is filled.
         """
         self._on_change_callback = on_change_callback
+        self._on_fill_callback = on_fill_callback
 
         self.ib.orderStatusEvent += self._on_order_status
         self.ib.newOrderEvent += self._on_new_order
@@ -1030,6 +1032,23 @@ class IbkrTrading(BaseAvanzaTrading):
         # SL/TP quantity check (totalQuantity != abs_pos) to always be False and
         # silently skip the update.  Instead we call _sync_sl_tp_volume from
         # _on_position, which fires only after ib.positions() is up to date.
+
+        # Notify fill callback for chart markers
+        if self._on_fill_callback and _fill:
+            try:
+                exec_obj = _fill.execution
+                fill_record = {
+                    "side": "buy" if exec_obj.side == "BOT" else "sell",
+                    "price": float(exec_obj.price),
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "quantity": float(exec_obj.shares),
+                    "orderId": trade.order.orderId,
+                    "execId": exec_obj.execId,
+                }
+                LOGGER.info(f"Fill detected: {fill_record}")
+                self._on_fill_callback(fill_record)
+            except Exception as e:
+                LOGGER.error(f"Error extracting fill data: {e}")
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())

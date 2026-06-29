@@ -10,3 +10,5 @@ scratch/
 .temp
 temp_*.py
 ohlc_*.json
+
+fills.json
