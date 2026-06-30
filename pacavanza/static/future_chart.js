@@ -282,6 +282,9 @@ class FutureChartApp extends PACChartApp {
       // Snap to the bar containing this fill (floor to interval boundary)
       let barTime = fillTimeSec - (fillTimeSec % this.INTERVAL_SECONDS);
 
+      // Ignore fills that occurred before the available chart history starts
+      if (barTime < validTimes[0]) return null;
+
       // Lightweight Charts drops markers if their time is not exactly in the series.
       // If the exact bar hasn't been created yet (e.g. illiquid period or fresh tick),
       // snap the marker to the closest available preceding bar.
@@ -305,7 +308,7 @@ class FutureChartApp extends PACChartApp {
         shape: "circle",
         size: 0.5,
       };
-    });
+    }).filter(Boolean);
     markers.sort((a, b) => a.time - b.time);
 
     // In Lightweight Charts v5, setMarkers was moved to a plugin
