@@ -956,13 +956,14 @@ class IbkrTrading(BaseAvanzaTrading):
     # Auto-OCA helpers
     # --------------------------------------------------------------------------
 
-    def _is_standalone_limit_order(self, trade: Trade) -> bool:
+    def _is_standalone_entry_order(self, trade: Trade) -> bool:
         """
-        Return True if the trade is a standalone limit order (i.e. an entry),
+        Return True if the trade is a standalone entry order (LMT or MKT),
         not a child of a bracket and not part of an OCA group.
+        MKT orders are included so that market-order fills also trigger auto-OCA.
         """
         order = trade.order
-        if order.orderType != "LMT":
+        if order.orderType not in ("LMT", "MKT"):
             return False
         # Has a parent → bracket child (TP)
         parent_id = getattr(order, "parentId", 0)
@@ -1003,7 +1004,7 @@ class IbkrTrading(BaseAvanzaTrading):
                 continue
             if t.order.orderId == exclude_order_id:
                 continue
-            if self._is_standalone_limit_order(t):
+            if self._is_standalone_entry_order(t):
                 result.append(t)
         return result
 
@@ -1265,7 +1266,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
         # Queue standalone limit fills for auto-OCA processing
         # (will be processed in _on_position once ib.positions() is updated)
-        if _fill and self._is_standalone_limit_order(trade):
+        if _fill and self._is_standalone_entry_order(trade):
             try:
                 exec_obj = _fill.execution
                 # Capture the position BEFORE the fill (ib.positions() has not
