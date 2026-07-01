@@ -15,6 +15,10 @@ LOGGER = logging.getLogger("ibkr_trading")
 # IBKR uses the maximum 64-bit signed integer value (2^63 - 1) to indicate uninitialized/unset integer fields (like parentId or parentPermId).
 IB_UNSET_INT = 9223372036854775807
 
+# Auto-OCA: when a standalone limit order fills, place an OCA bracket
+# with TP and SL this many points away from the fill price.
+AUTO_OCA_OFFSET = 30
+
 
 class IbkrTrading(BaseAvanzaTrading):
     """
@@ -60,6 +64,9 @@ class IbkrTrading(BaseAvanzaTrading):
         self.order_placed_times = {}
         self.perm_id_to_parent_perm_id = {}
         self.perm_id_to_oca_group = {}
+        # Queue of fills from standalone limit orders awaiting position update
+        # to trigger auto-OCA.  Each entry: {price, side, volume, orderId}
+        self._pending_limit_fills: List[Dict[str, Any]] = []
 
         # Subscribe to position updates from IBKR so that ib.positions()
         # is automatically populated and updated.
@@ -946,6 +953,99 @@ class IbkrTrading(BaseAvanzaTrading):
         }
 
     # --------------------------------------------------------------------------
+    # Auto-OCA helpers
+    # --------------------------------------------------------------------------
+
+    def _is_standalone_limit_order(self, trade: Trade) -> bool:
+        """
+        Return True if the trade is a standalone limit order (i.e. an entry),
+        not a child of a bracket and not part of an OCA group.
+        """
+        order = trade.order
+        if order.orderType != "LMT":
+            return False
+        # Has a parent → bracket child (TP)
+        parent_id = getattr(order, "parentId", 0)
+        if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
+            return False
+        parent_perm = getattr(order, "parentPermId", 0)
+        if parent_perm and parent_perm != 0 and parent_perm != IB_UNSET_INT:
+            return False
+        # Part of an OCA group → OCA TP
+        if getattr(order, "ocaGroup", ""):
+            return False
+        return True
+
+    def _has_active_oca_or_bracket(self) -> bool:
+        """
+        Return True if there are any active OCA or bracket orders for this
+        contract.  Used to avoid stacking multiple auto-OCA brackets.
+        """
+        for t in self.ib.openTrades():
+            if t.contract.conId != self.contract.conId or not t.isActive():
+                continue
+            order = t.order
+            if getattr(order, "ocaGroup", ""):
+                return True
+            parent_id = getattr(order, "parentId", 0)
+            if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
+                return True
+        return False
+
+    def _process_pending_limit_fills(self) -> None:
+        """
+        Called from _on_position after ib.positions() is updated.
+        For each queued standalone-limit fill, place an OCA bracket if
+        there isn't one already.
+        """
+        if not self._pending_limit_fills:
+            return
+
+        # Drain the queue
+        fills = list(self._pending_limit_fills)
+        self._pending_limit_fills.clear()
+
+        pos = self._get_signed_position()
+        if pos == 0:
+            LOGGER.info("Auto-OCA: position is flat after fill, skipping OCA.")
+            return
+
+        if self._has_active_oca_or_bracket():
+            LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
+            return
+
+        # Use the most recent fill for pricing
+        fill = fills[-1]
+        fill_price = fill["price"]
+        volume = abs(pos)  # match current position size
+
+        if pos > 0:
+            # Long position → exit is SELL
+            tp_price = fill_price + AUTO_OCA_OFFSET
+            sl_price = fill_price - AUTO_OCA_OFFSET
+            action = "SELL"
+        else:
+            # Short position → exit is BUY
+            tp_price = fill_price - AUTO_OCA_OFFSET
+            sl_price = fill_price + AUTO_OCA_OFFSET
+            action = "BUY"
+
+        LOGGER.info(
+            f"Auto-OCA: placing bracket after limit fill @ {fill_price}. "
+            f"action={action}, volume={volume}, TP={tp_price}, SL={sl_price}"
+        )
+        try:
+            result = self.place_oca_bracket(
+                action=action,
+                volume=volume,
+                limit_price=tp_price,
+                stop_price=sl_price,
+            )
+            LOGGER.info(f"Auto-OCA: bracket placed successfully: {result}")
+        except Exception as e:
+            LOGGER.error(f"Auto-OCA: failed to place bracket: {e}")
+
+    # --------------------------------------------------------------------------
     # Trade event subscription & order lifecycle tracking
     # --------------------------------------------------------------------------
 
@@ -1009,6 +1109,14 @@ class IbkrTrading(BaseAvanzaTrading):
             self._sync_sl_tp_volume()
         except Exception as e:
             LOGGER.error(f"Error syncing SL/TP volume on position update: {e}")
+
+        # Process any pending limit fills for auto-OCA bracket placement.
+        # Position is now up to date, so place_oca_bracket validation will pass.
+        try:
+            self._process_pending_limit_fills()
+        except Exception as e:
+            LOGGER.error(f"Auto-OCA: error processing pending fills: {e}")
+
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
 
@@ -1049,6 +1157,24 @@ class IbkrTrading(BaseAvanzaTrading):
                 self._on_fill_callback(fill_record)
             except Exception as e:
                 LOGGER.error(f"Error extracting fill data: {e}")
+
+        # Queue standalone limit fills for auto-OCA processing
+        # (will be processed in _on_position once ib.positions() is updated)
+        if _fill and self._is_standalone_limit_order(trade):
+            try:
+                exec_obj = _fill.execution
+                self._pending_limit_fills.append({
+                    "price": float(exec_obj.price),
+                    "side": "buy" if exec_obj.side == "BOT" else "sell",
+                    "volume": int(exec_obj.shares),
+                    "orderId": trade.order.orderId,
+                })
+                LOGGER.info(
+                    f"Auto-OCA: queued standalone limit fill orderId={trade.order.orderId} "
+                    f"@ {exec_obj.price} for auto-OCA processing"
+                )
+            except Exception as e:
+                LOGGER.error(f"Auto-OCA: error queuing fill: {e}")
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
