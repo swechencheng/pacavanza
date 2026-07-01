@@ -1034,6 +1034,17 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Auto-OCA: position is flat after fill, skipping OCA.")
             return
 
+        # Only trigger auto-OCA when a position already existed before the fill.
+        # If the fill itself opened the position from flat (pre_fill_pos == 0),
+        # skip — this prevents auto-OCA on pure entry orders.
+        pre_fill_pos = fill.get("pre_fill_pos", None)
+        if pre_fill_pos is not None and pre_fill_pos == 0:
+            LOGGER.info(
+                f"Auto-OCA: pre-fill position was flat; this fill opened a new position. "
+                f"Skipping auto-OCA."
+            )
+            return
+
         if self._has_active_oca_or_bracket():
             LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
             return
@@ -1257,15 +1268,19 @@ class IbkrTrading(BaseAvanzaTrading):
         if _fill and self._is_standalone_limit_order(trade):
             try:
                 exec_obj = _fill.execution
+                # Capture the position BEFORE the fill (ib.positions() has not
+                # been updated yet at this point — that happens via positionEvent).
+                pre_fill_pos = self._get_signed_position()
                 self._pending_limit_fills.append({
                     "price": float(exec_obj.price),
                     "side": "buy" if exec_obj.side == "BOT" else "sell",
                     "volume": int(exec_obj.shares),
                     "orderId": trade.order.orderId,
+                    "pre_fill_pos": pre_fill_pos,
                 })
                 LOGGER.info(
                     f"Auto-OCA: queued standalone limit fill orderId={trade.order.orderId} "
-                    f"@ {exec_obj.price} for auto-OCA processing"
+                    f"@ {exec_obj.price} (pre-fill position={pre_fill_pos}) for auto-OCA processing"
                 )
             except Exception as e:
                 LOGGER.error(f"Auto-OCA: error queuing fill: {e}")
