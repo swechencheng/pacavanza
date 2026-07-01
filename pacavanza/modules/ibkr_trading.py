@@ -1065,8 +1065,9 @@ class IbkrTrading(BaseAvanzaTrading):
         opposite_dir = []
         for t in other_limits:
             action = t.order.action  # "BUY" or "SELL"
-            if (fill_side == "buy" and action == "BUY") or \
-               (fill_side == "sell" and action == "SELL"):
+            if (fill_side == "buy" and action == "BUY") or (
+                fill_side == "sell" and action == "SELL"
+            ):
                 same_dir.append(t)
             else:
                 opposite_dir.append(t)
@@ -1108,12 +1109,20 @@ class IbkrTrading(BaseAvanzaTrading):
         # Determine TP and SL prices
         if pos > 0:
             # Long: TP is above, SL is below
-            tp_price = nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
-            sl_price = nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
+            tp_price = (
+                nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
+            )
+            sl_price = (
+                nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
+            )
         else:
             # Short: TP is below, SL is above
-            tp_price = nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
-            sl_price = nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
+            tp_price = (
+                nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
+            )
+            sl_price = (
+                nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
+            )
 
         # Cancel the opposite-direction orders that we're consuming for OCA prices
         orders_to_cancel = []
@@ -1272,13 +1281,15 @@ class IbkrTrading(BaseAvanzaTrading):
                 # Capture the position BEFORE the fill (ib.positions() has not
                 # been updated yet at this point — that happens via positionEvent).
                 pre_fill_pos = self._get_signed_position()
-                self._pending_limit_fills.append({
-                    "price": float(exec_obj.price),
-                    "side": "buy" if exec_obj.side == "BOT" else "sell",
-                    "volume": int(exec_obj.shares),
-                    "orderId": trade.order.orderId,
-                    "pre_fill_pos": pre_fill_pos,
-                })
+                self._pending_limit_fills.append(
+                    {
+                        "price": float(exec_obj.price),
+                        "side": "buy" if exec_obj.side == "BOT" else "sell",
+                        "volume": int(exec_obj.shares),
+                        "orderId": trade.order.orderId,
+                        "pre_fill_pos": pre_fill_pos,
+                    }
+                )
                 LOGGER.info(
                     f"Auto-OCA: queued standalone limit fill orderId={trade.order.orderId} "
                     f"@ {exec_obj.price} (pre-fill position={pre_fill_pos}) for auto-OCA processing"
