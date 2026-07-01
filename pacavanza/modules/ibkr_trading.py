@@ -992,11 +992,35 @@ class IbkrTrading(BaseAvanzaTrading):
                 return True
         return False
 
+    def _get_standalone_limit_trades(self, exclude_order_id: int = 0) -> List[Trade]:
+        """
+        Return all active standalone limit orders for this contract,
+        excluding a specific orderId (e.g. the one that just filled).
+        """
+        result = []
+        for t in self.ib.openTrades():
+            if t.contract.conId != self.contract.conId or not t.isActive():
+                continue
+            if t.order.orderId == exclude_order_id:
+                continue
+            if self._is_standalone_limit_order(t):
+                result.append(t)
+        return result
+
     def _process_pending_limit_fills(self) -> None:
         """
         Called from _on_position after ib.positions() is updated.
-        For each queued standalone-limit fill, place an OCA bracket if
-        there isn't one already.
+
+        Logic:
+        1. Find all other standalone limit orders.
+        2. Cancel same-direction orders (e.g. other BUYs when a BUY filled).
+        3. For opposite-direction orders:
+           - Nearest price ABOVE fill → TP (for long) or SL (for short)
+           - Nearest price BELOW fill → SL (for long) or TP (for short)
+           Cancel those orders and use their prices for the OCA bracket.
+        4. If no opposite-direction orders exist, use ±AUTO_OCA_OFFSET.
+        5. If only one opposite-direction order exists (above or below),
+           use its price for one side and ±AUTO_OCA_OFFSET for the other.
         """
         if not self._pending_limit_fills:
             return
@@ -1017,18 +1041,88 @@ class IbkrTrading(BaseAvanzaTrading):
         # Use the most recent fill for pricing
         fill = fills[-1]
         fill_price = fill["price"]
-        volume = abs(pos)  # match current position size
+        fill_order_id = fill.get("orderId", 0)
+        fill_side = fill["side"]  # "buy" or "sell"
+        volume = abs(pos)
 
+        # Gather all other standalone limit orders
+        other_limits = self._get_standalone_limit_trades(exclude_order_id=fill_order_id)
+
+        # Partition into same-direction and opposite-direction
+        same_dir = []
+        opposite_dir = []
+        for t in other_limits:
+            action = t.order.action  # "BUY" or "SELL"
+            if (fill_side == "buy" and action == "BUY") or \
+               (fill_side == "sell" and action == "SELL"):
+                same_dir.append(t)
+            else:
+                opposite_dir.append(t)
+
+        # Cancel same-direction limit orders
+        for t in same_dir:
+            try:
+                self.ib.cancelOrder(t.order)
+                LOGGER.info(
+                    f"Auto-OCA: cancelled same-direction limit order "
+                    f"orderId={t.order.orderId} ({t.order.action} @ {t.order.lmtPrice})"
+                )
+            except Exception as e:
+                LOGGER.error(f"Auto-OCA: failed to cancel order {t.order.orderId}: {e}")
+
+        # Determine TP/SL prices from opposite-direction orders
+        # For a BUY fill:  exit action = SELL, TP is above fill, SL is below fill
+        # For a SELL fill: exit action = BUY,  TP is below fill, SL is above fill
         if pos > 0:
-            # Long position → exit is SELL
-            tp_price = fill_price + AUTO_OCA_OFFSET
-            sl_price = fill_price - AUTO_OCA_OFFSET
             action = "SELL"
         else:
-            # Short position → exit is BUY
-            tp_price = fill_price - AUTO_OCA_OFFSET
-            sl_price = fill_price + AUTO_OCA_OFFSET
             action = "BUY"
+
+        above_orders = []  # opposite-direction orders with price > fill_price
+        below_orders = []  # opposite-direction orders with price < fill_price
+        for t in opposite_dir:
+            price = t.order.lmtPrice
+            if price is None:
+                continue
+            if price > fill_price:
+                above_orders.append((price, t))
+            elif price < fill_price:
+                below_orders.append((price, t))
+
+        # Find nearest above and below
+        nearest_above = min(above_orders, key=lambda x: x[0]) if above_orders else None
+        nearest_below = max(below_orders, key=lambda x: x[0]) if below_orders else None
+
+        # Determine TP and SL prices
+        if pos > 0:
+            # Long: TP is above, SL is below
+            tp_price = nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
+            sl_price = nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
+        else:
+            # Short: TP is below, SL is above
+            tp_price = nearest_below[0] if nearest_below else fill_price - AUTO_OCA_OFFSET
+            sl_price = nearest_above[0] if nearest_above else fill_price + AUTO_OCA_OFFSET
+
+        # Cancel the opposite-direction orders that we're consuming for OCA prices
+        orders_to_cancel = []
+        if nearest_above:
+            orders_to_cancel.append(nearest_above[1])
+        if nearest_below:
+            orders_to_cancel.append(nearest_below[1])
+        # Also cancel any remaining opposite-direction orders not used
+        for price, t in above_orders + below_orders:
+            if t not in orders_to_cancel:
+                orders_to_cancel.append(t)
+
+        for t in orders_to_cancel:
+            try:
+                self.ib.cancelOrder(t.order)
+                LOGGER.info(
+                    f"Auto-OCA: cancelled opposite-direction limit order "
+                    f"orderId={t.order.orderId} ({t.order.action} @ {t.order.lmtPrice})"
+                )
+            except Exception as e:
+                LOGGER.error(f"Auto-OCA: failed to cancel order {t.order.orderId}: {e}")
 
         LOGGER.info(
             f"Auto-OCA: placing bracket after limit fill @ {fill_price}. "
