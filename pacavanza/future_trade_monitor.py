@@ -393,11 +393,16 @@ class FutureTradeMonitor:
     # ------------------------------------------------------------------
 
     def _update_extremes(
-        self, instrument_id: str, bar: Dict[str, Any], signed_pos: int
+        self,
+        instrument_id: str,
+        bar: Dict[str, Any],
+        signed_pos: int,
+        is_completed: bool = False,
     ) -> None:
         """
         Track the highest-high and lowest-low since the position was entered.
-        If a new extreme is found mid-bar or at completion, the pullback counter is reset to 0.
+        If a new extreme is found on a completed bar (based on close price),
+        the pullback counter is reset to 0.
         """
         current_dir = 1 if signed_pos > 0 else (-1 if signed_pos < 0 else 0)
         last_dir = self._current_direction.get(instrument_id, 0)
@@ -414,29 +419,38 @@ class FutureTradeMonitor:
 
         current_high = float(bar["high"])
         current_low = float(bar["low"])
+        current_close = float(bar["close"])
 
         # Initialize if not set (this is the entry bar)
         if instrument_id not in self._highest_since_entry:
-            self._highest_since_entry[instrument_id] = float("-inf")
-            self._lowest_since_entry[instrument_id] = float("inf")
+            self._highest_since_entry[instrument_id] = current_high
+            self._lowest_since_entry[instrument_id] = current_low
 
         if current_dir > 0:
-            if current_high > self._highest_since_entry[instrument_id]:
-                LOGGER.info(
-                    f"[{instrument_id}] Long: new high since entry ({current_high} > "
-                    f"{self._highest_since_entry[instrument_id]}). Resetting pullback counter."
-                )
-                self._highest_since_entry[instrument_id] = current_high
-                self._pullback_count[instrument_id] = 0
+            if is_completed:
+                if current_close > self._highest_since_entry[instrument_id]:
+                    LOGGER.info(
+                        f"[{instrument_id}] Long: completed bar close ({current_close}) > "
+                        f"previous highest-high ({self._highest_since_entry[instrument_id]}). Resetting pullback counter."
+                    )
+                    self._pullback_count[instrument_id] = 0
+
+                # Update the highest-high tracker for the next bar
+                if current_high > self._highest_since_entry[instrument_id]:
+                    self._highest_since_entry[instrument_id] = current_high
 
         elif current_dir < 0:
-            if current_low < self._lowest_since_entry[instrument_id]:
-                LOGGER.info(
-                    f"[{instrument_id}] Short: new low since entry ({current_low} < "
-                    f"{self._lowest_since_entry[instrument_id]}). Resetting pullback counter."
-                )
-                self._lowest_since_entry[instrument_id] = current_low
-                self._pullback_count[instrument_id] = 0
+            if is_completed:
+                if current_close < self._lowest_since_entry[instrument_id]:
+                    LOGGER.info(
+                        f"[{instrument_id}] Short: completed bar close ({current_close}) < "
+                        f"previous lowest-low ({self._lowest_since_entry[instrument_id]}). Resetting pullback counter."
+                    )
+                    self._pullback_count[instrument_id] = 0
+
+                # Update the lowest-low tracker for the next bar
+                if current_low < self._lowest_since_entry[instrument_id]:
+                    self._lowest_since_entry[instrument_id] = current_low
 
     async def _on_bar_completed(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
@@ -456,7 +470,7 @@ class FutureTradeMonitor:
             bars.append(bar)
 
         signed_pos = self._get_signed_position()
-        self._update_extremes(instrument_id, bar, signed_pos)
+        self._update_extremes(instrument_id, bar, signed_pos, is_completed=True)
 
         if signed_pos == 0:
             LOGGER.debug(f"[{instrument_id}] Flat position – no action.")
