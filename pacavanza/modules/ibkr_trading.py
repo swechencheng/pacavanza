@@ -6,11 +6,23 @@ from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 from datetime import datetime, timezone
 
-from ib_async import IB, Future, MarketOrder, StopOrder, LimitOrder, Trade, UNSET_INTEGER
+from ib_async import (
+    IB,
+    Future,
+    MarketOrder,
+    StopOrder,
+    LimitOrder,
+    Trade,
+)
+
 
 from .base_trading import BaseAvanzaTrading, PROFIT_LOSS_RATIO
 
 LOGGER = logging.getLogger("ibkr_trading")
+
+# IBKR uses the maximum 32-bit signed integer value (2^31 -1) or 64-bit signed integer value (2^63 - 1) to indicate uninitialized/unset integer fields (like parentId or parentPermId).
+IB_UNSET_INT = 2147483647
+IB_UNSET_LONG = 9223372036854775807
 
 # Auto-OCA: when a standalone limit order fills, place an OCA bracket
 # with TP and SL this many points away from the fill price.
@@ -135,11 +147,11 @@ class IbkrTrading(BaseAvanzaTrading):
                 continue
             # Must belong to a bracket (parentId/parentPermId) or OCA group
             parent_id = getattr(order, "parentId", 0)
-            if parent_id == UNSET_INTEGER:
+            if parent_id == IB_UNSET_INT:
                 parent_id = 0
 
             parent_perm = getattr(order, "parentPermId", 0)
-            if parent_perm == UNSET_INTEGER:
+            if parent_perm in (IB_UNSET_INT, IB_UNSET_LONG):
                 parent_perm = 0
 
             oca_group = getattr(order, "ocaGroup", "")
@@ -180,11 +192,11 @@ class IbkrTrading(BaseAvanzaTrading):
                 continue
 
             parent_id = getattr(t.order, "parentId", 0)
-            if parent_id == UNSET_INTEGER:
+            if parent_id == IB_UNSET_INT:
                 parent_id = 0
 
             parent_perm = getattr(t.order, "parentPermId", 0)
-            if parent_perm == UNSET_INTEGER:
+            if parent_perm in (IB_UNSET_INT, IB_UNSET_LONG):
                 parent_perm = 0
 
             # Identify if this is a closing SL or TP.
@@ -991,10 +1003,14 @@ class IbkrTrading(BaseAvanzaTrading):
             return False
         # Has a parent → bracket child (TP)
         parent_id = getattr(order, "parentId", 0)
-        if parent_id and parent_id != 0 and parent_id != UNSET_INTEGER:
+        if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
             return False
         parent_perm = getattr(order, "parentPermId", 0)
-        if parent_perm and parent_perm != 0 and parent_perm != UNSET_INTEGER:
+        if (
+            parent_perm
+            and parent_perm != 0
+            and parent_perm not in (IB_UNSET_INT, IB_UNSET_LONG)
+        ):
             return False
         # Part of an OCA group → OCA TP
         if getattr(order, "ocaGroup", ""):
@@ -1013,7 +1029,7 @@ class IbkrTrading(BaseAvanzaTrading):
             if getattr(order, "ocaGroup", ""):
                 return True
             parent_id = getattr(order, "parentId", 0)
-            if parent_id and parent_id != 0 and parent_id != UNSET_INTEGER:
+            if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
                 return True
         return False
 
@@ -1351,13 +1367,13 @@ class IbkrTrading(BaseAvanzaTrading):
         def get_parent_perm_id(order):
             # 1. Try parentId mapped to permId
             p_id = getattr(order, "parentId", 0)
-            if p_id and p_id != UNSET_INTEGER:
+            if p_id and p_id != IB_UNSET_INT:
                 mapped = order_id_to_perm_id.get(p_id)
                 if mapped:
                     return mapped
             # 2. Fall back to parentPermId
             parent_perm = getattr(order, "parentPermId", 0)
-            if parent_perm and parent_perm != UNSET_INTEGER:
+            if parent_perm and parent_perm not in (IB_UNSET_INT, IB_UNSET_LONG):
                 return parent_perm
             return 0
 
