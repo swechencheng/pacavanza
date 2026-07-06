@@ -6,16 +6,16 @@ Subscribes to the OMXS30 future real-time stream (Redis channel
 
   Long position:
     - Counts consecutive bear-bar pullbacks.
-    - While any bar creates a new highest-high over the last 20 bars, resets
+    - While any bar closes a new highest-high over the last 20 bars, resets
       the counter to zero (but still increments if the completed bar is a bear).
-    - When the counter reaches 3, places a SELL STOP order 1 tick (0.25) below
+    - When the counter reaches 5, places a SELL STOP order 1 tick (0.25) below
       the low of the most-recent bear bar.
 
   Short position:
     - Counts consecutive bull-bar pullbacks.
-    - While any bar creates a new lowest-low over the last 20 bars, resets
+    - While any bar closes a new lowest-low over the last 20 bars, resets
       the counter to zero (but still increments if the completed bar is a bull).
-    - When the counter reaches 3, places a BUY STOP order 1 tick (0.25) above
+    - When the counter reaches 5, places a BUY STOP order 1 tick (0.25) above
       the high of the most-recent bull bar.
 
 Order placement uses IbkrTrading (ibkr_trading.py).
@@ -53,7 +53,7 @@ BACKEND_URL = "http://localhost:8001"
 TICK_SIZE = 0.25
 
 # Pullback counter threshold before placing stop order
-PULLBACK_TRIGGER_COUNT = 3
+PULLBACK_TRIGGER_COUNT = 5
 
 # Number of historical bars used for higher-high / lower-low detection
 LOOKBACK_BARS = 20
