@@ -6,17 +6,19 @@ Subscribes to the OMXS30 future real-time stream (Redis channel
 
   Long position:
     - Counts consecutive bear-bar pullbacks.
-    - While any bar closes a new highest-high over the last 20 bars, resets
-      the counter to zero (but still increments if the completed bar is a bear).
-    - When the counter reaches 5, places a SELL STOP order 1 tick (0.25) below
-      the low of the most-recent bear bar.
+    - If a completed bar closes higher than the absolute highest-high reached
+      since the position was entered (excluding the current bar), the counter
+      is reset to zero (but still increments if the completed bar is a bear).
+    - When the counter reaches PULLBACK_TRIGGER_COUNT (e.g. 5), places a SELL STOP order
+      1 tick (0.25) below the lowest-low of the last 5 bear bars.
 
   Short position:
     - Counts consecutive bull-bar pullbacks.
-    - While any bar closes a new lowest-low over the last 20 bars, resets
-      the counter to zero (but still increments if the completed bar is a bull).
-    - When the counter reaches 5, places a BUY STOP order 1 tick (0.25) above
-      the high of the most-recent bull bar.
+    - If a completed bar closes lower than the absolute lowest-low reached
+      since the position was entered (excluding the current bar), the counter
+      is reset to zero (but still increments if the completed bar is a bull).
+    - When the counter reaches PULLBACK_TRIGGER_COUNT (e.g. 5), places a BUY STOP order
+      1 tick (0.25) above the highest-high of the last 5 bull bars.
 
 Order placement uses IbkrTrading (ibkr_trading.py).
 
@@ -55,9 +57,6 @@ TICK_SIZE = 0.25
 # Pullback counter threshold before placing stop order
 PULLBACK_TRIGGER_COUNT = 5
 
-# Number of historical bars used for higher-high / lower-low detection
-LOOKBACK_BARS = 20
-
 # IBKR connection settings (TWS paper-trading port; adjust for live: 7496)
 # Used only for position queries — order management goes through the backend API.
 IBKR_HOST = "127.0.0.1"
@@ -78,18 +77,6 @@ def _is_bear_bar(bar: Dict[str, Any]) -> bool:
 def _is_bull_bar(bar: Dict[str, Any]) -> bool:
     """Return True when the bar closed above its open (bull bar)."""
     return float(bar["close"]) > float(bar["open"])
-
-
-def _highest_high(bars: List[Dict[str, Any]], lookback: int) -> float:
-    """Return the highest 'high' of the last *lookback* bars."""
-    window = bars[-lookback:]
-    return max(float(b["high"]) for b in window)
-
-
-def _lowest_low(bars: List[Dict[str, Any]], lookback: int) -> float:
-    """Return the lowest 'low' of the last *lookback* bars."""
-    window = bars[-lookback:]
-    return min(float(b["low"]) for b in window)
 
 
 def _lowest_low_of_bear_bars(bars: List[Dict[str, Any]], count: int) -> Optional[float]:
