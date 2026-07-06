@@ -181,16 +181,27 @@ class IbkrTrading(BaseAvanzaTrading):
         """
         Synchronize the volume of all active SL and TP orders
         to match the current position size.
+
+        When position is 0 (flat), cancels ALL orphaned SL/TP orders.
+        When position is non-zero, adjusts SL/TP volume to match.
         """
         signed_pos = self._get_signed_position()
         abs_pos = abs(signed_pos)
         closing_action = "SELL" if signed_pos > 0 else "BUY"
 
         open_trades = self.ib.openTrades()
-        for t in open_trades:
-            if t.contract.conId != self.contract.conId or not t.isActive():
-                continue
+        contract_trades = [
+            t
+            for t in open_trades
+            if t.contract.conId == self.contract.conId and t.isActive()
+        ]
+        LOGGER.info(
+            f"Sync: signed_pos={signed_pos}, abs_pos={abs_pos}, "
+            f"active_contract_trades={len(contract_trades)}"
+        )
 
+        cancelled_count = 0
+        for t in contract_trades:
             parent_id = getattr(t.order, "parentId", 0)
             if parent_id == IB_UNSET_INT:
                 parent_id = 0
@@ -208,7 +219,17 @@ class IbkrTrading(BaseAvanzaTrading):
                 is_sl_tp = True
 
             if not is_sl_tp:
+                LOGGER.debug(
+                    f"Sync: Skipping orderId={t.order.orderId} "
+                    f"(not SL/TP: oca='{t.order.ocaGroup}', parentId={parent_id}, parentPerm={parent_perm})"
+                )
                 continue
+
+            LOGGER.debug(
+                f"Sync: Examining SL/TP orderId={t.order.orderId}, "
+                f"action={t.order.action}, type={t.order.orderType}, "
+                f"oca='{t.order.ocaGroup}', parentId={parent_id}, parentPerm={parent_perm}"
+            )
 
             # Check if this child's parent is still active. If so, it protects an unfilled entry,
             # NOT the current position. Do not sync or cancel it yet.
@@ -232,9 +253,12 @@ class IbkrTrading(BaseAvanzaTrading):
             # If position is 0, cancel all SL/TP
             if abs_pos == 0:
                 LOGGER.info(
-                    f"Sync: Position is 0, cancelling SL/TP orderId={t.order.orderId}"
+                    f"Sync: Position is FLAT, cancelling orphaned SL/TP "
+                    f"orderId={t.order.orderId} action={t.order.action} "
+                    f"type={t.order.orderType} oca='{t.order.ocaGroup}'"
                 )
                 self.ib.cancelOrder(t.order)
+                cancelled_count += 1
                 continue
 
             # If position is non-zero, check direction
@@ -243,6 +267,7 @@ class IbkrTrading(BaseAvanzaTrading):
                     f"Sync: Wrong direction, cancelling SL/TP orderId={t.order.orderId}"
                 )
                 self.ib.cancelOrder(t.order)
+                cancelled_count += 1
                 continue
 
             # Right direction, update volume if different
@@ -256,6 +281,11 @@ class IbkrTrading(BaseAvanzaTrading):
                     LOGGER.error(
                         f"Sync: Failed to update orderId={t.order.orderId}: {e}"
                     )
+
+        if abs_pos == 0 and cancelled_count > 0:
+            LOGGER.info(
+                f"Sync: Cancelled {cancelled_count} orphaned SL/TP orders (position is FLAT)"
+            )
 
     # --------------------------------------------------------------------------
     # Bear swing leg calculation (symmetric to bull leg in base)
@@ -1229,10 +1259,19 @@ class IbkrTrading(BaseAvanzaTrading):
             f"Order status event: orderId={trade.order.orderId}, "
             f"status={trade.orderStatus.status}"
         )
-        # We do not perform reactive auto-cancellations here, as IBKR TWS handles
-        # parent-child bracket cancellations natively, and transient 'Cancelled' states
-        # triggered by warnings (like TIFDAY preset error 10349) would cause premature
-        # cancellation of child orders. Explicit cancellations are handled in cancel_order().
+        # Safety-net: when an order fills and we detect position is now flat,
+        # proactively cancel orphaned SL/TP. This covers cases where
+        # positionEvent might not fire or fires with stale data.
+        if trade.orderStatus.status == "Filled":
+            try:
+                signed_pos = self._get_signed_position()
+                if signed_pos == 0:
+                    LOGGER.info(
+                        "Order filled and position is FLAT — running safety-net SL/TP cleanup"
+                    )
+                    self._sync_sl_tp_volume()
+            except Exception as e:
+                LOGGER.error(f"Safety-net sync after fill failed: {e}")
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
@@ -1282,6 +1321,32 @@ class IbkrTrading(BaseAvanzaTrading):
         LOGGER.debug(f"Open order event: orderId={trade.order.orderId}")
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
+
+    def _schedule_delayed_sync(self) -> None:
+        """
+        Schedule a delayed _sync_sl_tp_volume call after 1.5 seconds.
+
+        This is a tertiary safety net: after any fill, we wait for position
+        data to stabilize, then verify and cancel any orphaned SL/TP orders.
+        Multiple rapid fills will each schedule their own delayed check,
+        but _sync_sl_tp_volume is idempotent so this is safe.
+        """
+
+        async def _delayed_sync():
+            await asyncio.sleep(1.5)
+            try:
+                LOGGER.debug("Delayed sync: running _sync_sl_tp_volume safety check")
+                self._sync_sl_tp_volume()
+                if self._on_change_callback:
+                    self._on_change_callback(self.get_open_orders())
+            except Exception as e:
+                LOGGER.error(f"Delayed sync: error in safety check: {e}")
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_delayed_sync())
+        except RuntimeError:
+            LOGGER.debug("Delayed sync: no running event loop, skipping")
 
     def _on_exec_details(self, trade: Trade, _fill: Any):
         """Handle execution details (fills)."""
@@ -1336,6 +1401,11 @@ class IbkrTrading(BaseAvanzaTrading):
                 )
             except Exception as e:
                 LOGGER.error(f"Auto-OCA: error queuing fill: {e}")
+
+        # Schedule a delayed safety-net check: after 1.5s, verify position
+        # and cancel any orphaned SL/TP. This covers edge cases where
+        # positionEvent doesn't fire or fires before ib.positions() is updated.
+        self._schedule_delayed_sync()
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
