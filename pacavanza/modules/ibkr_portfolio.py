@@ -220,6 +220,9 @@ class IbkrPortfolio:
 
         exchange_rates = {}
         for av in merged_values:
+            if av.account == "All":
+                continue
+
             tag = (
                 av.tag.replace("$LEDGER-", "")
                 if av.tag.startswith("$LEDGER-")
@@ -231,13 +234,22 @@ class IbkrPortfolio:
                 except (ValueError, TypeError):
                     pass
 
+        seen_cash_balances = set()
         for av in merged_values:
+            if av.account == "All":
+                continue
+
             tag = (
                 av.tag.replace("$LEDGER-", "")
                 if av.tag.startswith("$LEDGER-")
                 else av.tag
             )
             if tag == "CashBalance" and av.currency not in ("", "BASE"):
+                cache_key = (av.account, av.currency)
+                if cache_key in seen_cash_balances:
+                    continue
+                seen_cash_balances.add(cache_key)
+
                 try:
                     cash_val = float(av.value)
                     if cash_val != 0:
