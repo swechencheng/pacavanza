@@ -16,7 +16,8 @@ const state = {
   orders: [],
   executions: [],
   pnl: {},
-  connected: false,
+  wsConnected: false,
+  ibkrConnected: null,
   lastUpdate: null,
   sortConfig: {
     positions: { key: 'marketValue', dir: 'desc' },
@@ -199,7 +200,8 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     console.log('WebSocket connected');
-    setConnectionStatus(true);
+    state.wsConnected = true;
+    updateConnectionBadge();
     // Cancel reconnect timer if any
     if (wsReconnectTimer) {
       clearTimeout(wsReconnectTimer);
@@ -218,12 +220,14 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     console.log('WebSocket disconnected');
-    setConnectionStatus(false);
+    state.wsConnected = false;
+    updateConnectionBadge();
     scheduleReconnect();
   };
 
   ws.onerror = () => {
-    setConnectionStatus(false);
+    state.wsConnected = false;
+    updateConnectionBadge();
   };
 }
 
@@ -264,19 +268,25 @@ function handleWsMessage(msg) {
     }
     state.lastUpdate = new Date();
     updateLastUpdated();
+  } else if (msg.type === 'ibkr_status') {
+    state.ibkrConnected = msg.connected;
+    updateConnectionBadge();
   }
 }
 
-function setConnectionStatus(connected) {
-  state.connected = connected;
+function updateConnectionBadge() {
   const badge = document.getElementById('connectionBadge');
   const text = document.getElementById('connectionText');
-  if (connected) {
+
+  if (!state.wsConnected) {
+    badge.className = 'connection-badge disconnected';
+    text.textContent = 'Backend Disconnected';
+  } else if (state.ibkrConnected === false) {
+    badge.className = 'connection-badge disconnected';
+    text.textContent = 'IBKR Disconnected';
+  } else {
     badge.className = 'connection-badge connected';
     text.textContent = 'Connected';
-  } else {
-    badge.className = 'connection-badge disconnected';
-    text.textContent = 'Disconnected';
   }
 }
 
