@@ -37,8 +37,10 @@ class IbkrPortfolio:
         # ib.accountValues() and ib.portfolio() are populated.
         # This is a streaming subscription — data arrives asynchronously.
         try:
-            self.ib.reqAccountUpdates()
-            LOGGER.info("Subscribed to IBKR account updates")
+            # We must use the *Async variants so they do not block the active Uvicorn event loop
+            self.ib.reqAccountUpdatesAsync("")
+            self.ib.reqAccountSummaryAsync()
+            LOGGER.info("Subscribed to IBKR account updates and summary")
         except Exception as e:
             LOGGER.warning(f"Failed to subscribe to account updates: {e}")
 
@@ -58,7 +60,13 @@ class IbkrPortfolio:
         We prefer "BASE" or empty-currency entries; if none exist for a
         tag we fall back to the first currency-specific entry.
         """
-        values = self.ib.accountValues()
+        # Merge accountValues and accountSummary to support IB Gateway (Paper Trading)
+        # where some values (CashBalance, PnL) only appear in accountSummary as $LEDGER- tags.
+        # We access the wrapper dictionaries directly to avoid calling blocking methods
+        # like ib.accountSummary() which would raise RuntimeError in the Uvicorn asyncio loop.
+        account_values = list(self.ib.wrapper.accountValues.values())
+        account_summary = list(self.ib.wrapper.acctSummary.values())
+        values = account_values + account_summary
         if not values:
             return {}
 
@@ -92,26 +100,30 @@ class IbkrPortfolio:
             if account_id is None:
                 account_id = av.account
 
+            tag = av.tag
+            if tag.startswith("$LEDGER-"):
+                tag = tag.replace("$LEDGER-", "")
+
             # Detect the account's base currency from NetLiquidation
-            if av.tag == "NetLiquidation" and av.currency not in ("", "BASE"):
+            if tag == "NetLiquidation" and av.currency not in ("", "BASE"):
                 if base_currency is None:
                     base_currency = av.currency
 
-            if av.tag not in WANTED_TAGS:
+            if tag not in WANTED_TAGS:
                 continue
 
-            if av.tag not in tag_values:
-                tag_values[av.tag] = {}
+            if tag not in tag_values:
+                tag_values[tag] = {}
 
             if av.currency in ("", "BASE"):
-                tag_values[av.tag][0] = (av.value, av.currency)
+                tag_values[tag][0] = (av.value, av.currency)
             elif base_currency and av.currency == base_currency:
                 # Prefer the base currency over other currencies
-                if 1 not in tag_values[av.tag]:
-                    tag_values[av.tag][1] = (av.value, av.currency)
+                if 1 not in tag_values[tag]:
+                    tag_values[tag][1] = (av.value, av.currency)
             else:
-                if 2 not in tag_values[av.tag]:
-                    tag_values[av.tag][2] = (av.value, av.currency)
+                if 2 not in tag_values[tag]:
+                    tag_values[tag][2] = (av.value, av.currency)
 
         summary: Dict[str, Any] = {}
 
@@ -202,17 +214,30 @@ class IbkrPortfolio:
             )
 
         # Also include Cash balances as positions (like IBKR TWS)
-        account_values = self.ib.accountValues()
+        account_values = list(self.ib.wrapper.accountValues.values())
+        account_summary = list(self.ib.wrapper.acctSummary.values())
+        merged_values = account_values + account_summary
+
         exchange_rates = {}
-        for av in account_values:
-            if av.tag == "ExchangeRate" and av.currency not in ("", "BASE"):
+        for av in merged_values:
+            tag = (
+                av.tag.replace("$LEDGER-", "")
+                if av.tag.startswith("$LEDGER-")
+                else av.tag
+            )
+            if tag == "ExchangeRate" and av.currency not in ("", "BASE"):
                 try:
                     exchange_rates[av.currency] = float(av.value)
                 except (ValueError, TypeError):
                     pass
 
-        for av in account_values:
-            if av.tag == "CashBalance" and av.currency not in ("", "BASE"):
+        for av in merged_values:
+            tag = (
+                av.tag.replace("$LEDGER-", "")
+                if av.tag.startswith("$LEDGER-")
+                else av.tag
+            )
+            if tag == "CashBalance" and av.currency not in ("", "BASE"):
                 try:
                     cash_val = float(av.value)
                     if cash_val != 0:
