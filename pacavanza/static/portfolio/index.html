@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IBKR Portfolio — PACavanza</title>
+  <meta name="description"
+    content="Interactive Brokers portfolio dashboard with real-time positions, P&L, orders and executions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-page: #050508;
+      --bg-card: #0c0e14;
+      --bg-card-alt: #10131b;
+      --bg-header: #141825;
+      --bg-row-hover: #1a1f30;
+      --bg-input: #0a0d14;
+      --border: #1e2336;
+      --border-focus: #3b4a6b;
+      --text-primary: #e8eaf0;
+      --text-secondary: #8b90a0;
+      --text-dim: #5a5f72;
+      --green: #22c55e;
+      --green-dim: #166534;
+      --green-bg: rgba(34, 197, 94, 0.08);
+      --red: #ef4444;
+      --red-dim: #991b1b;
+      --red-bg: rgba(239, 68, 68, 0.08);
+      --blue: #3b82f6;
+      --blue-dim: #1e40af;
+      --amber: #f59e0b;
+      --amber-dim: #92400e;
+      --cyan: #06b6d4;
+      --purple: #a855f7;
+      --radius: 8px;
+      --radius-sm: 6px;
+      --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--border);
+      --transition: 180ms ease;
+    }
+
+    html,
+    body {
+      height: 100%;
+      background: var(--bg-page);
+      color: var(--text-primary);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────── */
+    .page-container {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 16px 20px 40px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    .page-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+
+    .page-header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .page-header h1 .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--blue), var(--purple));
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .connection-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .connection-badge.connected {
+      background: var(--green-bg);
+      color: var(--green);
+      border: 1px solid var(--green-dim);
+    }
+
+    .connection-badge.disconnected {
+      background: var(--red-bg);
+      color: var(--red);
+      border: 1px solid var(--red-dim);
+    }
+
+    .connection-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .connected .connection-dot {
+      background: var(--green);
+    }
+
+    .disconnected .connection-dot {
+      background: var(--red);
+      animation: none;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.4;
+      }
+    }
+
+    .refresh-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: inherit;
+      transition: all var(--transition);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .refresh-btn:hover {
+      background: var(--bg-header);
+      color: var(--text-primary);
+      border-color: var(--border-focus);
+    }
+
+    .refresh-btn.loading {
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .refresh-btn .spinner {
+      display: none;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--text-dim);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .refresh-btn.loading .spinner {
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .last-updated {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* ── Account Summary Bar ──────────────────────────────────── */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .summary-card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      box-shadow: var(--shadow-card);
+      transition: transform var(--transition), box-shadow var(--transition);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .summary-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+
+    .summary-card.accent-blue::before {
+      background: linear-gradient(90deg, var(--blue), var(--cyan));
+    }
+
+    .summary-card.accent-green::before {
+      background: linear-gradient(90deg, var(--green), #10b981);
+    }
+
+    .summary-card.accent-red::before {
+      background: linear-gradient(90deg, var(--red), #f97316);
+    }
+
+    .summary-card.accent-amber::before {
+      background: linear-gradient(90deg, var(--amber), #eab308);
+    }
+
+    .summary-card.accent-purple::before {
+      background: linear-gradient(90deg, var(--purple), #ec4899);
+    }
+
+    .summary-card.accent-cyan::before {
+      background: linear-gradient(90deg, var(--cyan), var(--blue));
+    }
+
+    .summary-card:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-card), 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .summary-card .label {
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    .summary-card .value {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 17px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    .summary-card .value.positive {
+      color: var(--green);
+    }
+
+    .summary-card .value.negative {
+      color: var(--red);
+    }
+
+    .summary-card .sub {
+      font-size: 10.5px;
+      color: var(--text-dim);
+      margin-top: 3px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ── Stat row (secondary metrics) ─────────────────────────── */
+    .stat-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .stat-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 12px;
+    }
+
+    .stat-pill .stat-label {
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+
+    .stat-pill .stat-value {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .stat-pill .stat-value.positive {
+      color: var(--green);
+    }
+
+    .stat-pill .stat-value.negative {
+      color: var(--red);
+    }
+
+    /* ── Sections (tables) ─────────────────────────────────────── */
+    .section {
+      margin-bottom: 24px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--bg-header);
+      border: 1px solid var(--border);
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+
+    .section-header h2 {
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-header .badge {
+      background: var(--bg-card-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .table-wrapper {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 var(--radius) var(--radius);
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 700px;
+    }
+
+    thead th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      transition: color var(--transition);
+      position: sticky;
+      top: 0;
+      background: var(--bg-card);
+      z-index: 1;
+    }
+
+    thead th:hover {
+      color: var(--text-secondary);
+    }
+
+    thead th.sorted-asc::after {
+      content: ' ▲';
+      font-size: 9px;
+    }
+
+    thead th.sorted-desc::after {
+      content: ' ▼';
+      font-size: 9px;
+    }
+
+    thead th.align-right {
+      text-align: right;
+    }
+
+    tbody td {
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+      white-space: nowrap;
+      transition: background var(--transition);
+    }
+
+    tbody tr:hover td {
+      background: var(--bg-row-hover);
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    td.mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    td.align-right,
+    th.align-right+td,
+    td:has(+ .align-right) {
+      text-align: right;
+    }
+
+    /* Override: all numeric tds should be right-aligned */
+    td.num {
+      text-align: right;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+    }
+
+    .positive {
+      color: var(--green);
+    }
+
+    .negative {
+      color: var(--red);
+    }
+
+    .neutral {
+      color: var(--text-secondary);
+    }
+
+    .buy-tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: var(--green-bg);
+      color: var(--green);
+      border: 1px solid var(--green-dim);
+    }
+
+    .sell-tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10.5px;
+      font-weight: 700;
+      background: var(--red-bg);
+      color: var(--red);
+      border: 1px solid var(--red-dim);
+    }
+
+    .order-type-tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10.5px;
+      font-weight: 600;
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--blue);
+      border: 1px solid var(--blue-dim);
+    }
+
+    .status-tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+
+    .status-active {
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--blue);
+      border: 1px solid var(--blue-dim);
+    }
+
+    .status-submitted {
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--amber);
+      border: 1px solid var(--amber-dim);
+    }
+
+    .status-filled {
+      background: var(--green-bg);
+      color: var(--green);
+      border: 1px solid var(--green-dim);
+    }
+
+    .status-cancelled {
+      background: rgba(100, 100, 120, 0.1);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    /* ── Cancel button in order rows ──────────────────────────── */
+    .cancel-btn {
+      background: transparent;
+      border: 1px solid var(--red-dim);
+      color: var(--red);
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 10.5px;
+      font-weight: 600;
+      font-family: inherit;
+      transition: all var(--transition);
+    }
+
+    .cancel-btn:hover {
+      background: var(--red-bg);
+      border-color: var(--red);
+    }
+
+    /* ── P&L value change flash animation ─────────────────────── */
+    @keyframes flash-green {
+      0% {
+        background: rgba(34, 197, 94, 0.25);
+      }
+
+      100% {
+        background: transparent;
+      }
+    }
+
+    @keyframes flash-red {
+      0% {
+        background: rgba(239, 68, 68, 0.25);
+      }
+
+      100% {
+        background: transparent;
+      }
+    }
+
+    .flash-positive {
+      animation: flash-green 0.8s ease-out;
+    }
+
+    .flash-negative {
+      animation: flash-red 0.8s ease-out;
+    }
+
+    /* ── Empty state ───────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    .empty-state .empty-icon {
+      font-size: 28px;
+      margin-bottom: 10px;
+      opacity: 0.3;
+    }
+
+    /* ── Two-column layout for bottom sections ─────────────────── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 1000px) {
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ── Position bar sparkline ─────────────────────────────────── */
+    .pnl-bar {
+      display: inline-block;
+      height: 4px;
+      border-radius: 2px;
+      min-width: 2px;
+      max-width: 60px;
+      vertical-align: middle;
+      margin-left: 6px;
+    }
+
+    .pnl-bar.positive {
+      background: var(--green);
+    }
+
+    .pnl-bar.negative {
+      background: var(--red);
+    }
+
+    /* ── Scrollbar ──────────────────────────────────────────────── */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--border-focus);
+    }
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .page-container {
+        padding: 10px 12px 30px;
+      }
+
+      .summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .summary-card .value {
+        font-size: 15px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="page-container">
+
+    <!-- Header -->
+    <header class="page-header">
+      <h1>
+        <span class="logo-icon">IB</span>
+        Portfolio
+      </h1>
+      <div class="header-right">
+        <span class="last-updated" id="lastUpdated"></span>
+        <button class="refresh-btn" id="refreshBtn" onclick="refreshAll()">
+          <span class="spinner"></span>
+          ↻ Refresh
+        </button>
+        <div class="connection-badge disconnected" id="connectionBadge">
+          <span class="connection-dot"></span>
+          <span id="connectionText">Connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Account Summary -->
+    <div class="summary-grid" id="summaryGrid">
+      <!-- Filled by JS -->
+    </div>
+
+    <!-- Stat Pills -->
+    <div class="stat-row" id="statRow">
+      <!-- Filled by JS -->
+    </div>
+
+    <!-- Positions Table -->
+    <div class="section" id="positionsSection">
+      <div class="section-header">
+        <h2>
+          📊 Positions
+          <span class="badge" id="positionCount">0</span>
+        </h2>
+      </div>
+      <div class="table-wrapper">
+        <table id="positionsTable">
+          <thead>
+            <tr>
+              <th data-sort="symbol">Symbol</th>
+              <th data-sort="secType">Type</th>
+              <th data-sort="position" class="align-right">Position</th>
+              <th data-sort="marketPrice" class="align-right">Mkt Price</th>
+              <th data-sort="avgPrice" class="align-right">Avg Price</th>
+              <th data-sort="marketValue" class="align-right">Mkt Value</th>
+              <th data-sort="unrealizedPnL" class="align-right">Unrealized P&L</th>
+              <th data-sort="realizedPnL" class="align-right">Realized P&L</th>
+              <th data-sort="pnlPercent" class="align-right">P&L %</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody">
+            <tr>
+              <td colspan="9" class="empty-state">
+                <div class="empty-icon">📭</div>No positions
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Open Orders -->
+    <div class="section" id="ordersSection">
+      <div class="section-header">
+        <h2>
+          📋 Open Orders
+          <span class="badge" id="orderCount">0</span>
+        </h2>
+      </div>
+      <div class="table-wrapper">
+        <table id="ordersTable">
+          <thead>
+            <tr>
+              <th data-sort="symbol">Symbol</th>
+              <th data-sort="action">Side</th>
+              <th data-sort="orderType">Type</th>
+              <th data-sort="totalQuantity" class="align-right">Qty</th>
+              <th data-sort="price" class="align-right">Price</th>
+              <th data-sort="status">Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="ordersBody">
+            <tr>
+              <td colspan="7" class="empty-state">
+                <div class="empty-icon">📭</div>No open orders
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Recent Executions -->
+    <div class="section" id="executionsSection">
+      <div class="section-header">
+        <h2>
+          ⚡ Recent Executions
+          <span class="badge" id="execCount">0</span>
+        </h2>
+      </div>
+      <div class="table-wrapper">
+        <table id="executionsTable">
+          <thead>
+            <tr>
+              <th data-sort="time">Time</th>
+              <th data-sort="symbol">Symbol</th>
+              <th data-sort="side">Side</th>
+              <th data-sort="quantity" class="align-right">Qty</th>
+              <th data-sort="price" class="align-right">Price</th>
+              <th data-sort="commission" class="align-right">Comm</th>
+              <th data-sort="realizedPnL" class="align-right">Realized P&L</th>
+            </tr>
+          </thead>
+          <tbody id="executionsBody">
+            <tr>
+              <td colspan="7" class="empty-state">
+                <div class="empty-icon">📭</div>No executions
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/portfolio/portfolio.js"></script>
+</body>
+
+</html>

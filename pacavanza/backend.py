@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent  # pacavanza/
 STATIC_DIR = ROOT / "static"
 STATIC_HTML = STATIC_DIR / "chart.html"
 STATIC_AVA_HTML = STATIC_DIR / "ava/chart.html"
+STATIC_PORTFOLIO_HTML = STATIC_DIR / "portfolio/index.html"
 
 from .indicators.indicators import (
     incremental_ema_update,
@@ -195,6 +196,7 @@ def create_app(
     # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
     # so that Avanza SSE price updates don't corrupt IBKR bar data.
     ibkr_trading = None
+    ibkr_portfolio = None
     if ibkr_conn is not None:
         try:
             from pacavanza.modules.ibkr_trading import IbkrTrading
@@ -619,7 +621,7 @@ def create_app(
     # Lifespan context manager: start subscriber on startup and close on shutdown
     @asynccontextmanager
     async def lifespan(app) -> AsyncIterator[None]:
-        nonlocal ibkr_trading
+        nonlocal ibkr_trading, ibkr_portfolio
 
         # Suppress noisy asyncio websocket ConnectionClosedError in shielded futures
         loop = asyncio.get_event_loop()
@@ -660,6 +662,15 @@ def create_app(
                         on_change_callback=_on_order_change,
                         on_fill_callback=_on_fill,
                     )
+
+                # Create portfolio data provider (read-only, shares the IB conn)
+                try:
+                    from pacavanza.modules.ibkr_portfolio import IbkrPortfolio
+
+                    ibkr_portfolio = IbkrPortfolio(ib)
+                    LOGGER.info("IbkrPortfolio instance created")
+                except Exception as e:
+                    LOGGER.warning(f"Failed to create IbkrPortfolio: {e}")
             except Exception as e:
                 LOGGER.error(f"Failed to connect IBKR async: {e}")
 
@@ -770,10 +781,10 @@ def create_app(
         """
         import asyncio
         from pacavanza.utils.utils import fetch_avanza_chart_history
-        
+
         info = instrument_list.get(instrument_id, {})
         orderbook_id = info.get("orderbookId")
-        
+
         avanza_bars = []
         if orderbook_id:
             loop = asyncio.get_running_loop()
@@ -781,15 +792,15 @@ def create_app(
             tz_name = info.get("timezone", "Europe/Stockholm")
             open_str = info.get("market_open", "09:00")
             close_str = info.get("market_close", "17:45")
-            
+
             avanza_bars_raw = await loop.run_in_executor(
-                None, 
-                fetch_avanza_chart_history, 
-                str(orderbook_id), 
-                interval_seconds, 
-                tz_name, 
-                open_str, 
-                close_str
+                None,
+                fetch_avanza_chart_history,
+                str(orderbook_id),
+                interval_seconds,
+                tz_name,
+                open_str,
+                close_str,
             )
             for b in avanza_bars_raw:
                 # ISO format to match our JSON
@@ -1499,6 +1510,67 @@ def create_app(
     async def ibkr_fills():
         """Return all persisted fill records for chart markers."""
         return JSONResponse(content={"fills": _load_fills()})
+
+    # ══════════════════════════════════════════════════════════════════════
+    # IBKR Portfolio endpoints (prefixed /ibkr/portfolio/)
+    # Read-only portfolio data from the IbkrPortfolio module.
+    # ══════════════════════════════════════════════════════════════════════
+
+    @app.get("/ibkr/portfolio/summary")
+    async def ibkr_portfolio_summary():
+        """Return account summary metrics (NLV, cash, margins, cushion)."""
+        if ibkr_portfolio is None:
+            return JSONResponse(content={})
+        try:
+            summary = ibkr_portfolio.get_account_summary()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content=summary)
+
+    @app.get("/ibkr/portfolio/positions")
+    async def ibkr_portfolio_positions():
+        """Return all portfolio positions with market values and P&L."""
+        if ibkr_portfolio is None:
+            return JSONResponse(content={"positions": [], "pnl": {}})
+        try:
+            positions = ibkr_portfolio.get_portfolio_positions()
+            pnl = ibkr_portfolio.get_pnl_summary()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"positions": positions, "pnl": pnl})
+
+    @app.get("/ibkr/portfolio/orders")
+    async def ibkr_portfolio_orders():
+        """Return all open/active orders across all contracts."""
+        if ibkr_portfolio is None:
+            return JSONResponse(content={"orders": []})
+        try:
+            orders = ibkr_portfolio.get_open_orders()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"orders": orders})
+
+    @app.get("/ibkr/portfolio/executions")
+    async def ibkr_portfolio_executions():
+        """Return recent executions/fills from the current session."""
+        if ibkr_portfolio is None:
+            return JSONResponse(content={"executions": []})
+        try:
+            executions = ibkr_portfolio.get_executions()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"executions": executions})
+
+    @app.get("/portfolio")
+    async def portfolio_index():
+        """Serve the IBKR portfolio dashboard page."""
+        try:
+            with open(str(STATIC_PORTFOLIO_HTML), "r", encoding="utf-8") as f:
+                return HTMLResponse(f.read())
+        except Exception:
+            return JSONResponse(
+                {"status": "error", "note": "Portfolio static file not available"}
+            )
 
     # Setup trade event subscription to broadcast order changes via WebSocket
     def _on_order_change(orders_snapshot):
