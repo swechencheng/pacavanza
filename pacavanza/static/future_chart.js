@@ -134,6 +134,11 @@ class FutureChartApp extends PACChartApp {
 
   // ── WebSocket message handler ─────────────────────────────────────
   handleWsMessage(msg) {
+    if (msg.type === "ibkr_status") {
+      this._updateIbkrStatus(msg.connected);
+      return;
+    }
+
     // Handle order update broadcasts from backend
     if (msg.type === "order_update" && msg.orders) {
       if (msg.position !== undefined) {
@@ -170,6 +175,29 @@ class FutureChartApp extends PACChartApp {
       this.ensureMarketCountdown(this.chartFuture.groupingState);
     }
     this._applyEMAFromMsg(this.chartFuture, msg);
+  }
+
+  _updateIbkrStatus(connected) {
+    window.IBKR_CONNECTED = connected;
+    if (this.chartFuture) {
+      const tt = this.chartFuture.toolTipElement;
+      if (!connected) {
+        if (tt) tt.innerHTML = '<span style="color:#f44336; font-weight:bold;">IBKR disconnected</span>';
+      } else {
+        if (tt) tt.innerHTML = '';
+      }
+    }
+    const controls = document.querySelectorAll('.trading-controls button, .trading-controls input, .trading-controls select');
+    controls.forEach(ctrl => {
+      ctrl.disabled = !connected;
+      if (!connected) {
+        ctrl.style.opacity = '0.5';
+        ctrl.style.cursor = 'not-allowed';
+      } else {
+        ctrl.style.opacity = '1';
+        ctrl.style.cursor = ctrl.tagName === 'INPUT' ? 'text' : (ctrl.tagName === 'SELECT' ? 'pointer' : 'pointer');
+      }
+    });
   }
 
   // ── Order Depth (Tape) Rendering ───────────────────────────────────

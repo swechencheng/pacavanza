@@ -114,6 +114,10 @@ class PACChartApp {
     chart.subscribeCrosshairMove((param) => {
       const tt = state.toolTipElement;
       if (!tt) return;
+      if (window.IBKR_CONNECTED === false) {
+        tt.innerHTML = '<span style="color:#f44336; font-weight:bold;">IBKR disconnected</span>';
+        return;
+      }
       const empty = [`<span style="color:#ddd">O:-</span>`, `<span style="color:#4caf50">H:-</span>`,
         `<span style="color:#f44336">L:-</span>`, `<span style="color:#ddd">C:-</span>`,
         `<span style="color:#ff9900">Bar -</span>`].join(" ");

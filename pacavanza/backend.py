@@ -586,10 +586,18 @@ def create_app(
         LOGGER.info("Starting IBKR event pump task")
         retry_delay = 5
         max_delay = 300
+        last_conn_state = None
         try:
             while True:
                 try:
-                    if not ib.isConnected():
+                    curr_conn_state = ib.isConnected()
+                    if curr_conn_state != last_conn_state:
+                        last_conn_state = curr_conn_state
+                        await manager.broadcast(
+                            {"type": "ibkr_status", "connected": curr_conn_state}
+                        )
+
+                    if not curr_conn_state:
                         LOGGER.warning(
                             f"IBKR connection lost, reconnecting in {retry_delay}s..."
                         )
@@ -852,6 +860,18 @@ def create_app(
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
         await manager.connect(ws)
+
+        # Send initial IBKR status
+        is_ibkr_connected = False
+        if ibkr_trading is not None and ibkr_trading.ib is not None:
+            is_ibkr_connected = ibkr_trading.ib.isConnected()
+        try:
+            await ws.send_text(
+                json.dumps({"type": "ibkr_status", "connected": is_ibkr_connected})
+            )
+        except Exception:
+            pass
+
         try:
             # client may send subscription messages in future; for now we just broadcast all
             while True:
