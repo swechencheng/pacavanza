@@ -201,6 +201,46 @@ class IbkrPortfolio:
                 }
             )
 
+        # Also include Cash balances as positions (like IBKR TWS)
+        account_values = self.ib.accountValues()
+        exchange_rates = {}
+        for av in account_values:
+            if av.tag == "ExchangeRate" and av.currency not in ("", "BASE"):
+                try:
+                    exchange_rates[av.currency] = float(av.value)
+                except (ValueError, TypeError):
+                    pass
+
+        for av in account_values:
+            if av.tag == "CashBalance" and av.currency not in ("", "BASE"):
+                try:
+                    cash_val = float(av.value)
+                    if cash_val != 0:
+                        rate = exchange_rates.get(av.currency, 1.0)
+                        market_value = cash_val * rate
+                        positions.append(
+                            {
+                                "conId": 0,
+                                "symbol": av.currency,
+                                "localSymbol": f"{av.currency}.CASH",
+                                "secType": "CASH",
+                                "exchange": "",
+                                "currency": av.currency,
+                                "multiplier": 1.0,
+                                "position": cash_val,
+                                "marketPrice": round(rate, 4),
+                                "marketValue": round(market_value, 2),
+                                "avgCost": 0.0,
+                                "avgPrice": 0.0,
+                                "unrealizedPnL": 0.0,
+                                "realizedPnL": 0.0,
+                                "pnlPercent": 0.0,
+                                "account": av.account or "",
+                            }
+                        )
+                except (ValueError, TypeError):
+                    pass
+
         # Sort by absolute market value descending
         positions.sort(key=lambda p: abs(p["marketValue"]), reverse=True)
         return positions
