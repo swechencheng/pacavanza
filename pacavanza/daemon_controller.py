@@ -113,7 +113,7 @@ def main():
         "-P",
         "--ibkr-port",
         type=int,
-        default=7497,
+        default=int(os.environ.get("PACAVANZA_IBKR_PORT", 7497)),
         help="IBKR gateway live trading port (e.g. 4001)",
     )
     args, _ = parser.parse_known_args()
