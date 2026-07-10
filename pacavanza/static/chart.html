@@ -294,7 +294,7 @@
         width: 260px;
         flex-shrink: 0;
         border-top: none;
-        border-right: 1px solid #21262d;
+        border-left: 1px solid #21262d;
       }
     }
 
@@ -304,11 +304,11 @@
       }
 
       .side-panels>.order-panel {
-        border-top: 1px solid #21262d;
+        border-top: none;
       }
 
       .side-panels>.tape-panel {
-        border-top: none;
+        border-top: 1px solid #21262d;
       }
 
       .trading-controls {
@@ -655,6 +655,14 @@
       <div id="chart-future" class="chart-container"></div>
       <!-- Side panels: Orders + Tape -->
       <div class="side-panels">
+        <!-- Order Lifecycle Panel -->
+        <div id="order-panel" class="order-panel">
+          <div class="order-panel-header">
+            <span>📋 Active Orders</span>
+            <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
+          </div>
+          <div id="order-list" class="order-list"></div>
+        </div>
         <!-- Order Depth / Tape Panel -->
         <div id="tape-panel" class="tape-panel">
           <div class="tape-panel-header">
@@ -664,14 +672,6 @@
           <div id="tape-content">
             <div class="tape-empty">Waiting for depth data…</div>
           </div>
-        </div>
-        <!-- Order Lifecycle Panel -->
-        <div id="order-panel" class="order-panel">
-          <div class="order-panel-header">
-            <span>📋 Active Orders</span>
-            <button id="btn-refresh-orders" style="font-size:10px; padding:2px 6px;">🔄</button>
-          </div>
-          <div id="order-list" class="order-list"></div>
         </div>
       </div>
     </div>

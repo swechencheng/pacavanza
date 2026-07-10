@@ -588,7 +588,6 @@ class FutureChartApp extends PACChartApp {
       const actionCls = o.action === "BUY" ? "tag-buy" : "tag-sell";
       const priceVal = o.price != null ? o.price : "";
       const isMkt = o.orderType === "MKT";
-      const parentInfo = o.parentId ? `<span style="color:#555;">P:${o.parentId}</span>` : "";
       const ocaInfo = o.ocaGroup ? `<span style="color:#555;">OCA</span>` : "";
 
       const isFulfilled = !!o.fulfilled;
@@ -604,7 +603,7 @@ class FutureChartApp extends PACChartApp {
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
           `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
         <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
-        ${parentInfo}${ocaInfo}
+        ${ocaInfo}
         <span style="flex:1;"></span>
         ${(!isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrder(${o.orderId}, this)">✏️</button>` : ""}
         ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
