@@ -577,6 +577,21 @@ def create_app(
             # Order depth (tape) or trades — pass through to WebSocket clients, no storage
             await manager.broadcast(payload)
 
+    def check_daily_loss_limit(portfolio) -> bool:
+        if not portfolio:
+            return False
+        executions = portfolio.get_executions()
+        today_utc = datetime.now(timezone.utc).date()
+        losing_order_ids = set()
+        for ex in executions:
+            if ex.get("time"):
+                ex_date = datetime.fromisoformat(ex["time"]).date()
+                if ex_date == today_utc:
+                    rpnl = ex.get("realizedPnL")
+                    if rpnl is not None and rpnl < 0:
+                        losing_order_ids.add(ex["orderId"])
+        return len(losing_order_ids) >= 2
+
     # Background task: pump ib_async event loop so openTrades()/events stay current
     async def _ibkr_event_pump():
         """Periodically pump ib_async event loop to process TWS messages."""
@@ -587,14 +602,21 @@ def create_app(
         retry_delay = 5
         max_delay = 300
         last_conn_state = None
+        last_trading_disabled = None
         try:
             while True:
                 try:
                     curr_conn_state = ib.isConnected()
-                    if curr_conn_state != last_conn_state:
+                    curr_trading_disabled = check_daily_loss_limit(ibkr_portfolio)
+                    if curr_conn_state != last_conn_state or curr_trading_disabled != last_trading_disabled:
                         last_conn_state = curr_conn_state
+                        last_trading_disabled = curr_trading_disabled
                         await manager.broadcast(
-                            {"type": "ibkr_status", "connected": curr_conn_state}
+                            {
+                                "type": "ibkr_status", 
+                                "connected": curr_conn_state,
+                                "trading_disabled": curr_trading_disabled
+                            }
                         )
 
                     if not curr_conn_state:

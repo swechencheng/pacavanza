@@ -136,7 +136,7 @@ class FutureChartApp extends PACChartApp {
   // ── WebSocket message handler ─────────────────────────────────────
   handleWsMessage(msg) {
     if (msg.type === "ibkr_status") {
-      this._updateIbkrStatus(msg.connected);
+      this._updateIbkrStatus(msg.connected, msg.trading_disabled);
       return;
     }
 
@@ -188,20 +188,24 @@ class FutureChartApp extends PACChartApp {
     this._applyEMAFromMsg(this.chartFuture, msg);
   }
 
-  _updateIbkrStatus(connected) {
+  _updateIbkrStatus(connected, tradingDisabled) {
     window.IBKR_CONNECTED = connected;
+    window.TRADING_DISABLED = tradingDisabled;
     if (this.chartFuture) {
       const tt = this.chartFuture.toolTipElement;
       if (!connected) {
         if (tt) tt.innerHTML = '<span style="color:#f44336; font-weight:bold;">IBKR disconnected</span>';
+      } else if (tradingDisabled) {
+        if (tt) tt.innerHTML = '<span style="color:#ff9800; font-weight:bold; font-size:14px; background:#331d00; padding:4px 8px; border-radius:4px;">Daily Loss Limit Reached</span>';
       } else {
         if (tt) tt.innerHTML = '';
       }
     }
-    const controls = document.querySelectorAll('.trading-controls button, .trading-controls input, .trading-controls select');
+    const disableInput = !connected || tradingDisabled;
+    const controls = document.querySelectorAll('.trading-controls button, .trading-controls input, .trading-controls select, .order-panel button');
     controls.forEach(ctrl => {
-      ctrl.disabled = !connected;
-      if (!connected) {
+      ctrl.disabled = disableInput;
+      if (disableInput) {
         ctrl.style.opacity = '0.5';
         ctrl.style.cursor = 'not-allowed';
       } else {
@@ -654,6 +658,10 @@ class FutureChartApp extends PACChartApp {
         ${!isDone ? `<button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>` : ""}
       </div>`;
     }).join("");
+
+    if (window.TRADING_DISABLED) {
+      this._updateIbkrStatus(window.IBKR_CONNECTED, window.TRADING_DISABLED);
+    }
   }
 
   _updateOrderDrawings(orders) {
