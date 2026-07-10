@@ -182,8 +182,15 @@ class IbkrTrading(BaseAvanzaTrading):
         Synchronize the volume of all active SL and TP orders
         to match the current position size.
 
-        When position is 0 (flat), cancels ALL orphaned SL/TP orders.
-        When position is non-zero, adjusts SL/TP volume to match.
+        When position is 0 (flat), cancels orphaned orders while protecting
+        any pending bracket entries (active parents and their children).
+        This handles position reversals where position momentarily hits 0
+        between closing the old position and filling the new entry.
+        After bracket/OCA modifications, IBKR may strip group/parent metadata,
+        so detection must be robust.
+
+        When position is non-zero, selectively identifies SL/TP orders via
+        ocaGroup/parentId/parentPermId and adjusts their volume.
         """
         signed_pos = self._get_signed_position()
         abs_pos = abs(signed_pos)
@@ -200,6 +207,53 @@ class IbkrTrading(BaseAvanzaTrading):
             f"active_contract_trades={len(contract_trades)}"
         )
 
+        # ── Position is FLAT: cancel orphaned orders but protect pending entries ──
+        if abs_pos == 0:
+            # Build a set of order IDs that are part of a pending bracket entry.
+            # These are: (a) active parent entry orders, and (b) their children.
+            # During a position reversal (e.g., close LONG + enter SHORT),
+            # position momentarily hits 0 after the close leg fills. We must
+            # NOT cancel the bracket entry for the new direction.
+            protected_ids: set = set()
+            for t in contract_trades:
+                # An active parent entry order: its children reference its orderId.
+                # Check if any other trade's parentId points to this order.
+                is_parent = any(
+                    getattr(ct.order, "parentId", 0) == t.order.orderId
+                    for ct in contract_trades
+                    if ct is not t
+                )
+                if is_parent:
+                    protected_ids.add(t.order.orderId)
+                    # Also protect all children of this parent
+                    for ct in contract_trades:
+                        if getattr(ct.order, "parentId", 0) == t.order.orderId:
+                            protected_ids.add(ct.order.orderId)
+
+            cancelled_count = 0
+            for t in contract_trades:
+                if t.order.orderId in protected_ids:
+                    LOGGER.info(
+                        f"Sync: Position is FLAT but PROTECTING pending bracket "
+                        f"orderId={t.order.orderId} action={t.order.action} "
+                        f"type={t.order.orderType}"
+                    )
+                    continue
+                LOGGER.info(
+                    f"Sync: Position is FLAT, cancelling orderId={t.order.orderId} "
+                    f"action={t.order.action} type={t.order.orderType} "
+                    f"oca='{getattr(t.order, 'ocaGroup', '')}'"
+                )
+                self.ib.cancelOrder(t.order)
+                cancelled_count += 1
+            if cancelled_count > 0:
+                LOGGER.info(
+                    f"Sync: Cancelled {cancelled_count} orders (position is FLAT, "
+                    f"protected {len(protected_ids)} pending bracket orders)"
+                )
+            return
+
+        # ── Position is non-zero: selectively sync SL/TP orders ──
         cancelled_count = 0
         for t in contract_trades:
             parent_id = getattr(t.order, "parentId", 0)
@@ -250,17 +304,6 @@ class IbkrTrading(BaseAvanzaTrading):
                 )
                 continue
 
-            # If position is 0, cancel all SL/TP
-            if abs_pos == 0:
-                LOGGER.info(
-                    f"Sync: Position is FLAT, cancelling orphaned SL/TP "
-                    f"orderId={t.order.orderId} action={t.order.action} "
-                    f"type={t.order.orderType} oca='{t.order.ocaGroup}'"
-                )
-                self.ib.cancelOrder(t.order)
-                cancelled_count += 1
-                continue
-
             # If position is non-zero, check direction
             if t.order.action != closing_action:
                 LOGGER.info(
@@ -281,11 +324,6 @@ class IbkrTrading(BaseAvanzaTrading):
                     LOGGER.error(
                         f"Sync: Failed to update orderId={t.order.orderId}: {e}"
                     )
-
-        if abs_pos == 0 and cancelled_count > 0:
-            LOGGER.info(
-                f"Sync: Cancelled {cancelled_count} orphaned SL/TP orders (position is FLAT)"
-            )
 
     # --------------------------------------------------------------------------
     # Bear swing leg calculation (symmetric to bull leg in base)
