@@ -215,6 +215,7 @@ class IbkrTrading(BaseAvanzaTrading):
             # position momentarily hits 0 after the close leg fills. We must
             # NOT cancel the bracket entry for the new direction.
             protected_ids: set = set()
+            now = datetime.now(timezone.utc)
             for t in contract_trades:
                 # An active parent entry order: its children reference its orderId.
                 # Check if any other trade's parentId points to this order.
@@ -229,6 +230,25 @@ class IbkrTrading(BaseAvanzaTrading):
                     for ct in contract_trades:
                         if getattr(ct.order, "parentId", 0) == t.order.orderId:
                             protected_ids.add(ct.order.orderId)
+                
+                # Check if this is a child whose parent was RECENTLY filled.
+                # During a reversal, the close order might drop position to 0 
+                # exactly as the parent fills, so the parent is no longer active.
+                # We protect the children for 2 seconds to allow the final position
+                # update to arrive. If position stays 0, the delayed sync will cancel them.
+                parent_id = getattr(t.order, "parentId", 0)
+                if parent_id != 0:
+                    parent_trade = next(
+                        (pt for pt in self.ib.trades() if pt.order.orderId == parent_id), None
+                    )
+                    if parent_trade and parent_trade.orderStatus.status == "Filled":
+                        for entry in reversed(parent_trade.log):
+                            if entry.status == "Filled":
+                                if (now - entry.time).total_seconds() < 2.0:
+                                    protected_ids.add(t.order.orderId)
+                                    # Ensure we check again after the 2-second protection expires
+                                    self._schedule_delayed_sync()
+                                break
 
             cancelled_count = 0
             for t in contract_trades:
