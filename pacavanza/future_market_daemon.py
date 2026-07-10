@@ -45,6 +45,7 @@ class FutureMarketCollector(BaseMarketCollector):
 
     sse_base_url = "https://www.avanza.se/_push/quote-web-push/"
     depth_sse_base_url = "https://www.avanza.se/_push/order-depth-web-push/"
+    trade_sse_base_url = "https://www.avanza.se/_push/trade-web-push/"
     default_redis_channel = "pacavanza:future_updates"
     logger_name = "future_market_daemon"
 
@@ -190,6 +191,30 @@ class FutureMarketCollector(BaseMarketCollector):
                     )
         except Exception as e:
             self.logger.exception(f"[{instrument_id}] Exception in depth callback: {e}")
+
+    async def _trade_sse_callback(self, instrument_id, _id, event, data):
+        """
+        Async callback for trade-web-push SSE events.
+        Publishes trade events directly to Redis.
+        """
+        try:
+            if not isinstance(data, dict):
+                return
+
+            if "price" not in data or "volume" not in data:
+                return
+
+            msg = {"type": "trade", "instrument": instrument_id, "data": data}
+
+            if self._redis is not None:
+                try:
+                    await self._redis.publish(self.redis_channel, json.dumps(msg))
+                except Exception as e:
+                    self.logger.error(
+                        f"[{instrument_id}] Failed to publish trade to Redis: {e}"
+                    )
+        except Exception as e:
+            self.logger.exception(f"[{instrument_id}] Exception in trade callback: {e}")
 
     # ── Market hours helper ──────────────────────────────────────────
 

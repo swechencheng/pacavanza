@@ -44,6 +44,7 @@ class BaseMarketCollector:
     # ── override in subclass ──────────────────────────────────────────
     sse_base_url: str = ""
     depth_sse_base_url: str = ""
+    trade_sse_base_url: str = ""
     default_instrument_list_path: str = ""
     default_redis_channel: str = ""
     logger_name: str = "base_market_collector"
@@ -103,6 +104,7 @@ class BaseMarketCollector:
         self._tasks = []
         self._sse_clients = {}
         self._depth_sse_clients = {}
+        self._trade_sse_clients = {}
         self._avanza = None
         self._shutting_down = False
         self._loop = None
@@ -135,7 +137,15 @@ class BaseMarketCollector:
         raise NotImplementedError
 
     async def _depth_sse_callback(self, instrument_id, _id, event, data):
-        """Override: depth SSE event handler. Called for order-depth-web-push events."""
+        """
+        Subclasses should override this method to process depth SSE events.
+        """
+        pass
+
+    async def _trade_sse_callback(self, instrument_id, _id, event, data):
+        """
+        Subclasses should override this method to process trade SSE events.
+        """
         pass  # no-op by default; subclass overrides
 
     # ── Market-hours helpers ──────────────────────────────────────────
@@ -598,6 +608,21 @@ class BaseMarketCollector:
                             )
                         )
                         self._tasks.append(dt)
+
+                    # Launch trade SSE client if trade URL is configured
+                    if self.trade_sse_base_url:
+                        tt = asyncio.create_task(
+                            self._run_sse_client_loop(
+                                avanza,
+                                sid,
+                                obid,
+                                sse_url=self.trade_sse_base_url + obid,
+                                callback=partial(self._trade_sse_callback, sid),
+                                client_registry=self._trade_sse_clients,
+                                label="Trade-SSE",
+                            )
+                        )
+                        self._tasks.append(tt)
 
                 await asyncio.gather(*self._tasks)
             except Exception as e:

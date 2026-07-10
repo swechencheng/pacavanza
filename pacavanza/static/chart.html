@@ -296,6 +296,13 @@
         border-top: none;
         border-left: 1px solid #21262d;
       }
+
+      .side-panels>.trades-panel {
+        width: 260px;
+        flex-shrink: 0;
+        border-top: none;
+        border-left: 1px solid #21262d;
+      }
     }
 
     @media (max-width: 768px) {
@@ -308,6 +315,10 @@
       }
 
       .side-panels>.tape-panel {
+        border-top: 1px solid #21262d;
+      }
+
+      .side-panels>.trades-panel {
         border-top: 1px solid #21262d;
       }
 
@@ -461,11 +472,37 @@
       background: rgba(106, 27, 154, 0.05) !important;
     }
 
-    .order-empty {
+    .order-empty,
+    .tape-empty,
+    .trades-empty {
       padding: 8px;
       color: #484f58;
       text-align: center;
       font-style: italic;
+    }
+
+    /* ── Trades Panel ───────────────────────────── */
+    .trades-panel {
+      background: #0d1117;
+      height: 190px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: #333 #0d1117;
+    }
+
+    .trades-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      background: #161b22;
+      font-size: 11px;
+      font-weight: 600;
+      color: #8b949e;
+      border-bottom: 1px solid #21262d;
+      position: sticky;
+      top: 0;
+      z-index: 1;
     }
 
     /* ── Tape / Order Depth Panel ───────────────────────────── */
@@ -671,6 +708,15 @@
           </div>
           <div id="tape-content">
             <div class="tape-empty">Waiting for depth data…</div>
+          </div>
+        </div>
+        <!-- Trades Panel -->
+        <div id="trades-panel" class="trades-panel">
+          <div class="trades-panel-header">
+            <span>⚡ Trades</span>
+          </div>
+          <div id="trades-content">
+            <div class="trades-empty">Waiting for trades…</div>
           </div>
         </div>
       </div>

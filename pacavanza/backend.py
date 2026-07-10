@@ -573,8 +573,8 @@ def create_app(
             }
             await manager.broadcast(out)
 
-        elif mtype == "depth":
-            # Order depth (tape) — pass through to WebSocket clients, no storage
+        elif mtype in ("depth", "trade"):
+            # Order depth (tape) or trades — pass through to WebSocket clients, no storage
             await manager.broadcast(payload)
 
     # Background task: pump ib_async event loop so openTrades()/events stay current

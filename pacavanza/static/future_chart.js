@@ -13,6 +13,7 @@ class FutureChartApp extends PACChartApp {
     this._orderPollTimer = null;
     this._orderDrawingIds = [];
     this._currentPosition = null;
+    this._recentTrades = [];
 
     // Global error trackers for remote backend logging
     window.addEventListener("error", (e) => {
@@ -155,6 +156,16 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
+    // Handle completed trades stream
+    if (msg.type === "trade" && msg.data) {
+      this._recentTrades.unshift(msg.data);
+      if (this._recentTrades.length > 50) {
+        this._recentTrades.pop();
+      }
+      this._renderTrades();
+      return;
+    }
+
     // Handle real-time fill marker broadcasts
     if (msg.type === "fill" && msg.fill) {
       this._addFillMarker(msg.fill);
@@ -261,7 +272,40 @@ class FutureChartApp extends PACChartApp {
   }
 
   // ── Fill Markers ──────────────────────────────────────────────────
+  // ── Trades Rendering ───────────────────────────────────────────
+  _renderTrades() {
+    const content = document.getElementById("trades-content");
+    if (!content) return;
 
+    if (!this._recentTrades || this._recentTrades.length === 0) {
+      content.innerHTML = '<div class="trades-empty">No trades yet</div>';
+      return;
+    }
+
+    let html = '<table class="tape-table"><thead><tr>';
+    html += '<th>Time</th><th>Price</th><th>Vol</th>';
+    html += '</tr></thead><tbody>';
+
+    for (const trade of this._recentTrades) {
+      let timeStr = "";
+      if (trade.dealTime) {
+        const d = new Date(trade.dealTime);
+        timeStr = d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      }
+
+      const p = trade.price != null ? trade.price.toFixed(2) : '—';
+      const v = trade.volume != null ? trade.volume : '—';
+
+      html += `<tr>`;
+      html += `<td style="text-align: center; color: #8b949e;">${timeStr}</td>`;
+      html += `<td style="text-align: center; color: #ddd;">${p}</td>`;
+      html += `<td style="text-align: center; color: #8b949e;">${v}</td>`;
+      html += `</tr>`;
+    }
+
+    html += '</tbody></table>';
+    content.innerHTML = html;
+  }
   /**
    * Load persisted fills from backend and render as chart markers.
    */
