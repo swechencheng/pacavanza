@@ -116,8 +116,27 @@ def create_app(
     # Completely independent of ava_mini_future_list.json.
     # active_future_info: { key, name, orderbookId, timezone, market_open, market_close }
     active_future_info: Dict[str, Any] = {}
+
+    ibkr_local_symbol = None
+    if ibkr_conn is not None:
+        try:
+            from pacavanza.config import IBKR_PORT
+            from ib_async import IB
+
+            temp_ib = IB()
+            temp_ib.connect("127.0.0.1", IBKR_PORT, clientId=198, timeout=2.0)
+            temp_ib.qualifyContracts(ibkr_conn[1])
+            ibkr_local_symbol = ibkr_conn[1].localSymbol
+            temp_ib.disconnect()
+        except Exception as e:
+            LOGGER.warning(f"Could not qualify IBKR contract in create_app: {e}")
+            try:
+                temp_ib.disconnect()
+            except:
+                pass
+
     try:
-        raw_active = fetch_active_omxs30_future()
+        raw_active = fetch_active_omxs30_future(target_name=ibkr_local_symbol)
         flat_active = flatten_instrument_list(raw_active)
         if flat_active:
             key, meta = next(iter(flat_active.items()))
@@ -577,13 +596,15 @@ def create_app(
             # Order depth (tape) or trades — pass through to WebSocket clients, no storage
             await manager.broadcast(payload)
 
-    def check_daily_loss_limit(portfolio) -> bool:
-        if not portfolio:
+    def check_daily_loss_limit(portfolio, target_local_symbol: str) -> bool:
+        if not portfolio or not target_local_symbol:
             return False
         executions = portfolio.get_executions()
         today_utc = datetime.now(timezone.utc).date()
         losing_order_ids = set()
         for ex in executions:
+            if ex.get("localSymbol") != target_local_symbol:
+                continue
             if ex.get("time"):
                 ex_date = datetime.fromisoformat(ex["time"]).date()
                 if ex_date == today_utc:
@@ -607,15 +628,25 @@ def create_app(
             while True:
                 try:
                     curr_conn_state = ib.isConnected()
-                    curr_trading_disabled = check_daily_loss_limit(ibkr_portfolio)
-                    if curr_conn_state != last_conn_state or curr_trading_disabled != last_trading_disabled:
+                    target_local_symbol = (
+                        ibkr_trading.contract.localSymbol
+                        if (ibkr_trading and getattr(ibkr_trading, "contract", None))
+                        else None
+                    )
+                    curr_trading_disabled = check_daily_loss_limit(
+                        ibkr_portfolio, target_local_symbol
+                    )
+                    if (
+                        curr_conn_state != last_conn_state
+                        or curr_trading_disabled != last_trading_disabled
+                    ):
                         last_conn_state = curr_conn_state
                         last_trading_disabled = curr_trading_disabled
                         await manager.broadcast(
                             {
-                                "type": "ibkr_status", 
+                                "type": "ibkr_status",
                                 "connected": curr_conn_state,
-                                "trading_disabled": curr_trading_disabled
+                                "trading_disabled": curr_trading_disabled,
                             }
                         )
 
@@ -770,7 +801,7 @@ def create_app(
     async def get_active_future():
         if not active_future_info:
             try:
-                raw_active = fetch_active_omxs30_future()
+                raw_active = fetch_active_omxs30_future(target_name=ibkr_local_symbol)
                 flat_active = flatten_instrument_list(raw_active)
                 if flat_active:
                     key, meta = next(iter(flat_active.items()))

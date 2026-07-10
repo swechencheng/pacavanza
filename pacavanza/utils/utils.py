@@ -78,7 +78,9 @@ def find_key_by_orderbook_id(data, target_id):
     return None
 
 
-def fetch_active_omxs30_future(roll_days_before_expiry: int = 5):
+def fetch_active_omxs30_future(
+    roll_days_before_expiry: int = 5, target_name: str = None
+):
     """
     Fetch the active OMXS30 future from Avanza.
 
@@ -90,6 +92,8 @@ def fetch_active_omxs30_future(roll_days_before_expiry: int = 5):
     Args:
         roll_days_before_expiry: Number of calendar days before expiry at which
             we consider the front month "rolled".  Default is 5.
+        target_name: Optional explicit contract name (e.g. "OMXS306G"). If provided,
+            this exact contract will be selected instead of applying the roll logic.
     """
     from curl_cffi import requests
     from datetime import datetime, timedelta
@@ -139,12 +143,22 @@ def fetch_active_omxs30_future(roll_days_before_expiry: int = 5):
     # Sort by endDate ascending (nearest first)
     valid_futures.sort(key=lambda x: x["endDate"])
 
-    # Apply roll-window: if the front month expires within roll_days_before_expiry
-    # days, skip it and use the next contract (the back month).
-    active_future = valid_futures[0]
-    front_expiry = datetime.strptime(active_future["endDate"], "%Y-%m-%d").date()
-    if front_expiry <= roll_cutoff and len(valid_futures) > 1:
-        active_future = valid_futures[1]
+    active_future = None
+    if target_name:
+        for f in valid_futures:
+            if f["name"].upper() == target_name.upper():
+                active_future = f
+                break
+        if not active_future:
+            # Fallback if target_name not found
+            active_future = valid_futures[0]
+    else:
+        # Apply roll-window: if the front month expires within roll_days_before_expiry
+        # days, skip it and use the next contract (the back month).
+        active_future = valid_futures[0]
+        front_expiry = datetime.strptime(active_future["endDate"], "%Y-%m-%d").date()
+        if front_expiry <= roll_cutoff and len(valid_futures) > 1:
+            active_future = valid_futures[1]
 
     return {
         "OMXS30": {
