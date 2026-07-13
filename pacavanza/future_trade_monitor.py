@@ -37,9 +37,6 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 import redis.asyncio as aioredis
-from ib_async import IB, ContFuture, StopOrder
-
-from pacavanza.config import IBKR_PORT
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("future_trade_monitor")
@@ -149,38 +146,40 @@ class FutureTradeMonitor:
         # track start_time of the last bar we processed to avoid double-counting
         self._last_processed_bar_start: Dict[str, Optional[str]] = {}
 
-        # IBKR connection (used only for position queries)
-        self._ib: Optional[IB] = None
-        self._contract = None
+        # The local symbol of the active contract (e.g. OMXS30F5)
+        self._contract_local_symbol: Optional[str] = None
 
         # shutdown flag
         self._shutting_down = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ------------------------------------------------------------------
-    # IBKR helpers
+    # Position helpers
     # ------------------------------------------------------------------
 
-    async def _connect_ibkr(self) -> None:
-        """Connect asynchronously to TWS / IB Gateway and qualify the contract."""
-        self._ib = IB()
-        await self._ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
-        self._contract = ContFuture("OMXS30", "OMS")
-        await self._ib.qualifyContractsAsync(self._contract)
-        # Ensure position data is streamed
-        self._ib.client.reqPositions()
-        LOGGER.info(
-            f"IBKR connected: contract={self._contract.localSymbol}, "
-            f"conId={self._contract.conId}"
-        )
+    def _init_contract(self, meta: Dict[str, Any]) -> None:
+        """Initialise the active contract local symbol."""
+        local_symbol = meta.get("ibkr_localSymbol")
+        if local_symbol and local_symbol != self._contract_local_symbol:
+            self._contract_local_symbol = local_symbol
+            LOGGER.info(f"Active contract identified: {self._contract_local_symbol}")
 
-    def _get_signed_position(self) -> int:
-        """Return the signed position for the OMXS30 future. Positive=long, negative=short."""
-        if self._ib is None or self._contract is None:
+    async def _get_signed_position(self) -> int:
+        """Return the signed position for the active OMXS30 future. Positive=long, negative=short."""
+        if not self._contract_local_symbol:
             return 0
-        for pos in self._ib.positions():
-            if pos.contract.conId == self._contract.conId:
-                return int(pos.position)
+        try:
+            async with self._http.get(
+                f"{self._backend_url}/ibkr/portfolio/positions",
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for pos in data.get("positions", []):
+                        if pos.get("localSymbol") == self._contract_local_symbol:
+                            return int(pos.get("position", 0))
+        except Exception as exc:
+            LOGGER.warning(f"Failed to fetch positions from backend: {exc}")
         return 0
 
     async def _get_backend_open_orders(self) -> List[Dict[str, Any]]:
@@ -346,7 +345,7 @@ class FutureTradeMonitor:
             return
 
         # No existing stop – place fresh
-        signed_pos = self._get_signed_position()
+        signed_pos = await self._get_signed_position()
         volume = abs(signed_pos) if signed_pos > 0 else 1
         await self._place_stop_via_backend("SELL", rounded, volume)
 
@@ -380,7 +379,7 @@ class FutureTradeMonitor:
             return
 
         # No existing stop – place fresh
-        signed_pos = self._get_signed_position()
+        signed_pos = await self._get_signed_position()
         volume = abs(signed_pos) if signed_pos < 0 else 1
         await self._place_stop_via_backend("BUY", rounded, volume)
 
@@ -465,7 +464,7 @@ class FutureTradeMonitor:
         else:
             bars.append(bar)
 
-        signed_pos = self._get_signed_position()
+        signed_pos = await self._get_signed_position()
         self._update_extremes(instrument_id, bar, signed_pos, is_completed=True)
 
         if signed_pos == 0:
@@ -549,7 +548,7 @@ class FutureTradeMonitor:
             if len(bars) > 1500:
                 bars[:] = bars[-1500:]
 
-        signed_pos = self._get_signed_position()
+        signed_pos = await self._get_signed_position()
         self._update_extremes(instrument_id, bar, signed_pos)
 
     # ------------------------------------------------------------------
@@ -683,41 +682,11 @@ class FutureTradeMonitor:
         # Open a shared aiohttp session for backend HTTP calls
         self._http = aiohttp.ClientSession()
 
-        # Connect IBKR asynchronously (used for position queries only)
-        try:
-            await self._connect_ibkr()
-        except Exception as exc:
-            LOGGER.error(
-                f"Failed to connect to IBKR – position info unavailable: {exc}"
-            )
-
-        async def _ibkr_monitor():
-            retry_delay = 5
-            max_delay = 300
-            while not self._shutting_down:
-                if self._ib is not None and not self._ib.isConnected():
-                    LOGGER.warning(
-                        f"IBKR connection lost, reconnecting in {retry_delay}s..."
-                    )
-                    await asyncio.sleep(retry_delay)
-                    try:
-                        self._ib.disconnect()
-                        await asyncio.sleep(1)
-                        await self._connect_ibkr()
-                        retry_delay = 5  # reset on success
-                    except Exception as e:
-                        LOGGER.error(f"IBKR reconnect failed: {e}")
-                        retry_delay = min(retry_delay * 2, max_delay)
-                else:
-                    await asyncio.sleep(1)
-
-        # Start the background monitor task
-        asyncio.create_task(_ibkr_monitor())
-
         try:
             while not self._shutting_down:
                 try:
                     meta = await self._fetch_metadata()
+                    self._init_contract(meta)
                 except Exception as exc:
                     LOGGER.warning(f"Failed to fetch metadata: {exc}")
                     meta = {}
@@ -756,11 +725,6 @@ class FutureTradeMonitor:
             except Exception:
                 pass
             self._http = None
-        if self._ib is not None:
-            try:
-                self._ib.disconnect()
-            except Exception:
-                pass
         loop = asyncio.get_event_loop()
         for task in asyncio.all_tasks(loop):
             if task is asyncio.current_task():
