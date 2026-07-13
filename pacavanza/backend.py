@@ -1492,6 +1492,34 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
 
+    @app.post("/ibkr/place_stop_order")
+    async def ibkr_place_stop_order(req: Request):
+        """
+        Place a standalone protective stop order.
+        Accepts: { action: str, volume: int, stopPrice: float, orderRef: str }
+        """
+        _require_ibkr()
+        body = await req.json()
+        action = body.get("action")
+        volume = body.get("volume")
+        stop_price = body.get("stopPrice")
+        order_ref = body.get("orderRef", "")
+        if not action or volume is None or stop_price is None:
+            raise HTTPException(
+                status_code=400,
+                detail="action, volume, and stopPrice required",
+            )
+        try:
+            result = ibkr_trading.place_stop_order(
+                action=action,
+                volume=int(volume),
+                stop_price=float(stop_price),
+                order_ref=str(order_ref),
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
     @app.post("/ibkr/place_oca_bracket")
     async def ibkr_place_oca_bracket(req: Request):
         """

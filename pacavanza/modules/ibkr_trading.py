@@ -230,16 +230,21 @@ class IbkrTrading(BaseAvanzaTrading):
                     for ct in contract_trades:
                         if getattr(ct.order, "parentId", 0) == t.order.orderId:
                             protected_ids.add(ct.order.orderId)
-                
+
                 # Check if this is a child whose parent was RECENTLY filled.
-                # During a reversal, the close order might drop position to 0 
+                # During a reversal, the close order might drop position to 0
                 # exactly as the parent fills, so the parent is no longer active.
                 # We protect the children for 2 seconds to allow the final position
                 # update to arrive. If position stays 0, the delayed sync will cancel them.
                 parent_id = getattr(t.order, "parentId", 0)
                 if parent_id != 0:
                     parent_trade = next(
-                        (pt for pt in self.ib.trades() if pt.order.orderId == parent_id), None
+                        (
+                            pt
+                            for pt in self.ib.trades()
+                            if pt.order.orderId == parent_id
+                        ),
+                        None,
                     )
                     if parent_trade and parent_trade.orderStatus.status == "Filled":
                         for entry in reversed(parent_trade.log):
@@ -1073,6 +1078,27 @@ class IbkrTrading(BaseAvanzaTrading):
             "orderType": "LMT",
             "totalQuantity": volume,
             "price": price,
+            "status": trade.orderStatus.status,
+        }
+
+    def place_stop_order(
+        self, action: str, volume: int, stop_price: float, order_ref: str = ""
+    ) -> Dict[str, Any]:
+        """Place a standalone stop order via IBKR."""
+        order = StopOrder(action, volume, self._round_price(stop_price), tif="DAY")
+        if order_ref:
+            order.orderRef = order_ref
+        trade = self.ib.placeOrder(self.contract, order)
+        LOGGER.info(
+            f"Placed standalone STOP order via IBKR: "
+            f"orderId={trade.order.orderId}, action={action}, stopPrice={stop_price}, volume={volume}, ref={order_ref}"
+        )
+        return {
+            "orderId": trade.order.orderId,
+            "action": action,
+            "orderType": "STP",
+            "totalQuantity": volume,
+            "price": stop_price,
             "status": trade.orderStatus.status,
         }
 

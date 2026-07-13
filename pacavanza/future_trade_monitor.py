@@ -289,23 +289,32 @@ class FutureTradeMonitor:
         self, action: str, stop_price: float, volume: int
     ) -> bool:
         """
-        Place a brand-new standalone STOP order via the backend.
-        Uses /ibkr/edit_order would not work for new orders, so we fall back
-        to placing it directly through our own IB connection as a standalone
-        protective stop.  This only fires when no existing stop was found at all.
+        Place a brand-new standalone STOP order via the backend endpoint.
         """
-        if self._ib is None or self._contract is None:
-            LOGGER.warning(f"Cannot place {action} STOP – IBKR not connected.")
+        try:
+            url = f"{BACKEND_URL}/ibkr/place_stop_order"
+            payload = {
+                "action": action,
+                "volume": volume,
+                "stopPrice": stop_price,
+                "orderRef": "PullbackSL",
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as resp:
+                    body = await resp.text()
+                    if resp.status == 200:
+                        LOGGER.info(
+                            f"Backend successfully placed {action} STOP: {body}"
+                        )
+                        return True
+                    else:
+                        LOGGER.error(
+                            f"Backend /ibkr/place_stop_order failed (HTTP {resp.status}): {body}"
+                        )
+                        return False
+        except Exception as exc:
+            LOGGER.error(f"HTTP call to /ibkr/place_stop_order failed: {exc}")
             return False
-        rounded = round(round(stop_price / TICK_SIZE) * TICK_SIZE, 2)
-        order = StopOrder(action, volume, rounded, tif="DAY")
-        order.orderRef = "PullbackSL"
-        trade = self._ib.placeOrder(self._contract, order)
-        LOGGER.info(
-            f"Placed new {action} STOP via own IB connection: "
-            f"orderId={trade.order.orderId}, stopPrice={rounded}, volume={volume}"
-        )
-        return True
 
     async def _place_sell_stop(self, stop_price: float) -> None:
         """
