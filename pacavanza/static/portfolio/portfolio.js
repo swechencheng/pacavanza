@@ -20,7 +20,7 @@ const state = {
   ibkrConnected: null,
   lastUpdate: null,
   sortConfig: {
-    positions: { key: 'marketValue', dir: 'desc' },
+    positions: { key: 'symbol', dir: 'asc' },
     orders: { key: 'placedTime', dir: 'desc' },
     executions: { key: 'time', dir: 'desc' },
   },
