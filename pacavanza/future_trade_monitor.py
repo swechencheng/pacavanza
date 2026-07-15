@@ -533,7 +533,7 @@ class FutureTradeMonitor:
                         f"[{instrument_id}] Short: pullback counter={count} but not enough bull bars found."
                     )
 
-    def _on_bar_update(self, instrument_id: str, bar: Dict[str, Any]) -> None:
+    async def _on_bar_update(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
         Called on every in-progress bar update (type='update').
         """
@@ -602,7 +602,7 @@ class FutureTradeMonitor:
                             pass
 
                 if msg_type == "update":
-                    self._on_bar_update(instrument_id, bar)
+                    await self._on_bar_update(instrument_id, bar)
 
                 elif msg_type == "completed":
                     bar_start = bar.get("start_time")
