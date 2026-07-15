@@ -315,6 +315,52 @@ class FutureTradeMonitor:
             LOGGER.error(f"HTTP call to /ibkr/place_stop_order failed: {exc}")
             return False
 
+    async def _cancel_all_orders_via_backend(self) -> None:
+        """Cancel all active IBKR orders."""
+        orders = await self._get_backend_open_orders()
+        for order in orders:
+            order_id = order.get("orderId")
+            if order_id:
+                try:
+                    url = f"{BACKEND_URL}/ibkr/cancel_order"
+                    payload = {"orderId": str(order_id)}
+                    async with self._http.post(url, json=payload) as resp:
+                        if resp.status == 200:
+                            LOGGER.info(f"Successfully cancelled order {order_id}")
+                        else:
+                            LOGGER.error(
+                                f"Failed to cancel order {order_id}: HTTP {resp.status}"
+                            )
+                except Exception as exc:
+                    LOGGER.error(f"Error cancelling order {order_id}: {exc}")
+
+    async def _flatten_position_via_backend(
+        self, signed_pos: int, instrument_id: str = "OMXS30"
+    ) -> None:
+        """Flatten current position by placing a market order in the opposite direction."""
+        if signed_pos == 0:
+            return
+        action = "market_sell" if signed_pos > 0 else "market_buy"
+        volume = abs(signed_pos)
+        try:
+            url = f"{BACKEND_URL}/ibkr/{action}"
+            payload = {
+                "instrumentId": instrument_id,
+                "percentage": volume,  # Used as number_of_contracts
+            }
+            async with self._http.post(url, json=payload) as resp:
+                body = await resp.text()
+                if resp.status == 200:
+                    LOGGER.info(
+                        f"Successfully flattened position via {action} of {volume} contracts."
+                    )
+                else:
+                    LOGGER.error(
+                        f"Failed to flatten position via {action} (HTTP {resp.status}): {body}"
+                    )
+        except Exception as exc:
+            LOGGER.error(f"Error flattening position: {exc}")
+
     async def _place_sell_stop(self, stop_price: float) -> None:
         """
         Protect a long position with a SELL STOP at *stop_price*.
@@ -681,6 +727,41 @@ class FutureTradeMonitor:
         """Top-level async runner with reconnect loop."""
         # Open a shared aiohttp session for backend HTTP calls
         self._http = aiohttp.ClientSession()
+
+        async def _eod_flatten_monitor():
+            """Monitor time and force close all positions at 16:55 CEST."""
+            last_flattened_date = None
+            while not self._shutting_down:
+                try:
+                    meta = await self._fetch_metadata()
+                    tz_name = meta.get("timezone", "Europe/Stockholm")
+                    try:
+                        zone = ZoneInfo(tz_name)
+                    except Exception:
+                        zone = timezone.utc
+
+                    now_local = datetime.now(zone)
+                    # Check if it's 16:55
+                    if now_local.hour == 16 and now_local.minute == 55:
+                        current_date = now_local.date()
+                        if last_flattened_date != current_date:
+                            LOGGER.info(
+                                "EOD Flattening Triggered: Cancelling all orders and flattening position..."
+                            )
+                            last_flattened_date = current_date
+
+                            await self._cancel_all_orders_via_backend()
+                            signed_pos = await self._get_signed_position()
+                            if signed_pos != 0:
+                                await self._flatten_position_via_backend(signed_pos)
+                except Exception as exc:
+                    LOGGER.error(f"Error in EOD flatten monitor: {exc}")
+
+                # Sleep for 30 seconds to avoid high CPU and check frequently enough
+                await asyncio.sleep(30)
+
+        # Start the EOD flatten background task
+        asyncio.create_task(_eod_flatten_monitor())
 
         try:
             while not self._shutting_down:

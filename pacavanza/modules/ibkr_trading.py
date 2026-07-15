@@ -548,6 +548,65 @@ class IbkrTrading(BaseAvanzaTrading):
     # Position-aware logic for buy stop and sell stop.
     # --------------------------------------------------------------------------
 
+    async def place_market_buy(
+        self,
+        instrument_id: str,
+        percentage: Optional[float] = None,
+        number_of_contracts: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Override base_trading.py to support explicit contract sizes for IBKR."""
+        info = self._get_instrument_info(instrument_id)
+        if number_of_contracts is not None:
+            volume = number_of_contracts
+        elif percentage is not None:
+            price = await self._get_market_buy_price(instrument_id)
+            if price is None:
+                raise Exception("No price data available")
+            volume = self._calculate_volume_size(instrument_id, price, percentage)
+        else:
+            raise ValueError(
+                "Either percentage or number_of_contracts must be provided"
+            )
+
+        order = {
+            "side": "buy",
+            "type": "market",
+            "instrument": instrument_id,
+            "volume": volume,
+            "note": "ibkr market buy",
+        }
+        trade = self._execute_market_buy_order(instrument_id, info, 0.0, volume)
+        order["broker_order_id"] = str(trade.order.orderId)
+        order["timestamp"] = datetime.now(timezone.utc).isoformat()
+        self._log_order(order)
+        return order
+
+    async def place_market_sell(
+        self, instrument_id: str, number_of_contracts: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Override base_trading.py to support IBKR specifically."""
+        info = self._get_instrument_info(instrument_id)
+        if number_of_contracts is not None:
+            volume = number_of_contracts
+        else:
+            signed_pos = self._get_signed_position()
+            if signed_pos == 0:
+                raise Exception("No position found")
+            volume = abs(signed_pos)
+
+        order = {
+            "side": "sell",
+            "type": "market",
+            "instrument": instrument_id,
+            "volume": volume,
+            "note": "ibkr market sell",
+        }
+        trade = self._execute_market_sell_order(instrument_id, info, 0.0, volume)
+        order["broker_order_id"] = str(trade.order.orderId)
+        order["timestamp"] = datetime.now(timezone.utc).isoformat()
+        self._log_order(order)
+        return order
+
     def _execute_market_buy_order(
         self, instrument_id: str, info: Dict[str, Any], price: float, volume: int
     ) -> Any:

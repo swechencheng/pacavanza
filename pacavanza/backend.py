@@ -1307,12 +1307,13 @@ def create_app(
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
-        if not instrument_id or percentage is None:
-            raise HTTPException(
-                status_code=400, detail="instrumentId and percentage required"
-            )
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
         try:
-            order = await ibkr_trading.place_market_buy(instrument_id, percentage)
+            num_contracts = int(percentage) if percentage is not None else None
+            order = await ibkr_trading.place_market_buy(
+                instrument_id, percentage=None, number_of_contracts=num_contracts
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
