@@ -874,39 +874,35 @@ def create_app(
                 b["end_time"] = b["end_time"].isoformat()
                 avanza_bars.append(b)
 
-        data_file = f"ohlc_{instrument_id}.json"
-        disk_data = []
-        try:
-            with open(data_file, "r") as f:
-                disk_data = json.load(f)
-        except FileNotFoundError:
-            pass
+        # Base data from Avanza (might be delayed or incomplete for recent bars)
+        merged_dict = {b["start_time"]: b for b in avanza_bars}
 
-        # Merge disk data with Avanza data
-        merged_dict = {b["start_time"]: b for b in disk_data}
-        merged_dict.update({b["start_time"]: b for b in avanza_bars})
-        data = [merged_dict[k] for k in sorted(merged_dict.keys())]
-
-        # Fetch the current live bar from in-memory recent_bars to append/update
+        # Override with our perfectly tracked in-memory bars (contains disk history + live updates)
         bars_lock = await _get_bars_lock_for(instrument_id)
         async with bars_lock:
-            live_bars = recent_bars.get(instrument_id)
-            if live_bars:
-                last_live = live_bars[-1]
-                last_live_start_str = last_live["start_time"].isoformat()
-                live_bar_dict = {
-                    "start_time": last_live_start_str,
-                    "end_time": last_live["end_time"].isoformat(),
-                    "open": last_live["open"],
-                    "high": last_live["high"],
-                    "low": last_live["low"],
-                    "close": last_live["close"],
-                    "volume": last_live.get("volume", 0),
+            live_bars = recent_bars.get(instrument_id, [])
+            for b in live_bars:
+                start_str = (
+                    b["start_time"].isoformat()
+                    if hasattr(b["start_time"], "isoformat")
+                    else b["start_time"]
+                )
+                end_str = (
+                    b["end_time"].isoformat()
+                    if hasattr(b["end_time"], "isoformat")
+                    else b["end_time"]
+                )
+                merged_dict[start_str] = {
+                    "start_time": start_str,
+                    "end_time": end_str,
+                    "open": b["open"],
+                    "high": b["high"],
+                    "low": b["low"],
+                    "close": b["close"],
+                    "volume": b.get("volume", 0),
                 }
-                if not data or last_live_start_str > data[-1]["start_time"]:
-                    data.append(live_bar_dict)
-                elif data and last_live_start_str == data[-1]["start_time"]:
-                    data[-1] = live_bar_dict
+
+        data = [merged_dict[k] for k in sorted(merged_dict.keys())]
 
         if not data:
             raise HTTPException(status_code=404, detail="no data")
