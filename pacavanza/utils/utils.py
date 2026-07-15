@@ -229,7 +229,16 @@ def fetch_avanza_chart_history(
     }
     resolution = interval_map.get(interval_seconds, "five_minutes")
 
-    url = f"https://www.avanza.se/_api/price-chart/stock/{orderbook_id}?timePeriod=today&resolution={resolution}"
+    from datetime import datetime, timezone, timedelta
+
+    today = datetime.now()
+    # Avanza only allows five minutes bar on two trading days range
+    from_date = today - timedelta(days=1)
+
+    today_str = today.strftime("%Y-%m-%d")
+    from_str = from_date.strftime("%Y-%m-%d")
+
+    url = f"https://www.avanza.se/_api/price-chart/stock/{orderbook_id}?from={from_str}&to={today_str}&resolution={resolution}"
     try:
         response = requests.get(url, impersonate="chrome110", timeout=10)
         if response.status_code != 200:
