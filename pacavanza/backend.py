@@ -148,24 +148,29 @@ def create_app(
         LOGGER.warning("Could not fetch active future: %s", e)
 
     # ── Fill markers persistence ──────────────────────────────────────────
-    FILLS_FILE = "fills.json"
+    def get_fills_file_path() -> str:
+        """Get the dynamic fills file path based on the active future."""
+        name = active_future_info.get("name", "unknown")
+        return f"fills_{name}.json"
 
     def _load_fills() -> List[Dict[str, Any]]:
-        """Load persisted fills from disk."""
+        """Load persisted fills from disk for the current contract."""
+        file_path = get_fills_file_path()
         try:
-            with open(FILLS_FILE, "r") as f:
+            with open(file_path, "r") as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
     def _save_fill(fill_record: Dict[str, Any]) -> None:
-        """Append a fill record to the persistent JSON file."""
+        """Append a fill record to the persistent JSON file for the current contract."""
         fills = _load_fills()
         # Deduplicate by execId
         if any(f.get("execId") == fill_record.get("execId") for f in fills):
             return
         fills.append(fill_record)
-        with open(FILLS_FILE, "w") as f:
+        file_path = get_fills_file_path()
+        with open(file_path, "w") as f:
             json.dump(fills, f, default=str)
 
     recent_bars = {sid: [] for sid in instrument_list.keys()}

@@ -11,4 +11,4 @@ scratch/
 temp_*.py
 ohlc_*.json
 
-fills.json
+fills*.json
