@@ -1248,6 +1248,9 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Auto-OCA: position is flat after fill, skipping OCA.")
             return
 
+        # Use the most recent fill for pricing and state checks
+        fill = fills[-1]
+
         # Only trigger auto-OCA when a position already existed before the fill.
         # If the fill itself opened the position from flat (pre_fill_pos == 0),
         # skip — this prevents auto-OCA on pure entry orders.
@@ -1263,8 +1266,6 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
             return
 
-        # Use the most recent fill for pricing
-        fill = fills[-1]
         fill_price = fill["price"]
         fill_order_id = fill.get("orderId", 0)
         fill_side = fill["side"]  # "buy" or "sell"
