@@ -176,7 +176,10 @@ class FutureTradeMonitor:
                 if resp.status == 200:
                     data = await resp.json()
                     for pos in data.get("positions", []):
-                        if pos.get("localSymbol") == self._contract_local_symbol:
+                        if (
+                            pos.get("localSymbol", "").upper()
+                            == self._contract_local_symbol.upper()
+                        ):
                             return int(pos.get("position", 0))
         except Exception as exc:
             LOGGER.warning(f"Failed to fetch positions from backend: {exc}")
@@ -335,7 +338,7 @@ class FutureTradeMonitor:
                     LOGGER.error(f"Error cancelling order {order_id}: {exc}")
 
     async def _flatten_position_via_backend(
-        self, signed_pos: int, instrument_id: str = "OMXS30"
+        self, signed_pos: int, instrument_id: str
     ) -> None:
         """Flatten current position by placing a market order in the opposite direction."""
         if signed_pos == 0:
@@ -752,8 +755,11 @@ class FutureTradeMonitor:
 
                             await self._cancel_all_orders_via_backend()
                             signed_pos = await self._get_signed_position()
-                            if signed_pos != 0:
-                                await self._flatten_position_via_backend(signed_pos)
+                            if signed_pos != 0 and self._contract_local_symbol:
+                                instrument_id = self._contract_local_symbol.lower()
+                                await self._flatten_position_via_backend(
+                                    signed_pos, instrument_id
+                                )
                 except Exception as exc:
                     LOGGER.error(f"Error in EOD flatten monitor: {exc}")
 

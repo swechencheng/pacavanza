@@ -1395,6 +1395,29 @@ class IbkrTrading(BaseAvanzaTrading):
         self.ib.positionEvent += self._on_position
         LOGGER.info("Subscribed to IBKR trade events")
 
+        # Process existing fills from before subscription
+        if self._on_fill_callback:
+            for fill in self.ib.fills():
+                if fill.contract.conId != self.contract.conId:
+                    continue
+                try:
+                    exec_obj = fill.execution
+                    fill_record = {
+                        "side": "buy" if exec_obj.side == "BOT" else "sell",
+                        "price": float(exec_obj.price),
+                        "time": (
+                            exec_obj.time.isoformat()
+                            if exec_obj.time
+                            else datetime.now(timezone.utc).isoformat()
+                        ),
+                        "quantity": float(exec_obj.shares),
+                        "orderId": exec_obj.orderId,
+                        "execId": exec_obj.execId,
+                    }
+                    self._on_fill_callback(fill_record)
+                except Exception as e:
+                    LOGGER.error(f"Error processing historical fill: {e}")
+
     def _on_order_status(self, trade: Trade):
         """Handle order status change events."""
         if trade.contract.conId != self.contract.conId:
