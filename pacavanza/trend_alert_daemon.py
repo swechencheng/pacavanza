@@ -11,7 +11,7 @@ import pandas as pd
 import mplfinance as mpf
 import redis.asyncio as aioredis
 
-from pacavanza.utils.utils import fetch_active_omxs30_future
+from pacavanza.utils.utils import fetch_active_omxs30_future, flatten_instrument_list
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("trend_bar_alert_daemon")
@@ -25,7 +25,10 @@ CHANNEL = "pacavanza:future_updates"
 
 class TrendBarAlertDaemon:
     def __init__(self):
-        self.instruments = fetch_active_omxs30_future()
+        raw_instruments = fetch_active_omxs30_future()
+        self.instruments = flatten_instrument_list(raw_instruments)
+        self.active_sid = list(self.instruments.keys())[0] if self.instruments else None
+
         self.history = {sid: [] for sid in self.instruments.keys()}
         self.bot_token = None
         self.chat_id = None
@@ -187,63 +190,84 @@ class TrendBarAlertDaemon:
 
     async def run(self):
         redis = aioredis.from_url(REDIS_URL)
-        pubsub = redis.pubsub()
-        await pubsub.subscribe(CHANNEL)
 
-        LOGGER.info(f"Subscribed to Redis channel: {CHANNEL}")
+        while True:
+            pubsub = redis.pubsub()
+            try:
+                await pubsub.subscribe(CHANNEL)
+                LOGGER.info(f"Subscribed to Redis channel: {CHANNEL}")
 
-        try:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        data = json.loads(message["data"])
-                        if data.get("type") == "completed":
-                            sid = data["instrument"]
-                            bar = data["bar"]
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            data = json.loads(message["data"])
+                            if data.get("type") == "completed":
+                                sid = data["instrument"]
 
-                            info = self.instruments.get(sid, {})
-                            tz = ZoneInfo(info.get("timezone", "Europe/Stockholm"))
-                            st = datetime.fromisoformat(bar["start_time"]).astimezone(
-                                tz
-                            )
+                                if self.active_sid and sid != self.active_sid:
+                                    continue
 
-                            if self.history.get(sid):
-                                last_bar_st = datetime.fromisoformat(
-                                    self.history[sid][-1]["start_time"]
+                                bar = data["bar"]
+
+                                info = self.instruments.get(sid, {})
+                                tz = ZoneInfo(info.get("timezone", "Europe/Stockholm"))
+                                st = datetime.fromisoformat(
+                                    bar["start_time"]
                                 ).astimezone(tz)
-                                if st.date() > last_bar_st.date():
-                                    LOGGER.info(
-                                        f"[{sid}] New day detected. Clearing history."
-                                    )
+
+                                if self.history.get(sid):
+                                    last_bar_st = datetime.fromisoformat(
+                                        self.history[sid][-1]["start_time"]
+                                    ).astimezone(tz)
+                                    if st.date() > last_bar_st.date():
+                                        LOGGER.info(
+                                            f"[{sid}] New day detected. Clearing history."
+                                        )
+                                        self.history[sid] = []
+
+                                if sid not in self.history:
                                     self.history[sid] = []
 
-                            if sid not in self.history:
-                                self.history[sid] = []
+                                if not any(
+                                    b["start_time"] == bar["start_time"]
+                                    for b in self.history[sid]
+                                ):
+                                    self.history[sid].append(bar)
 
-                            if not any(
-                                b["start_time"] == bar["start_time"]
-                                for b in self.history[sid]
-                            ):
-                                self.history[sid].append(bar)
+                                    is_trend, direction = self.check_trend_bar(sid, bar)
+                                    if is_trend:
+                                        LOGGER.info(
+                                            f"[{sid}] Trend bar detected! Direction: {direction}"
+                                        )
+                                        asyncio.create_task(
+                                            self.send_telegram_alert(sid, direction)
+                                        )
+                        except Exception as e:
+                            LOGGER.error(f"Error processing message: {e}")
+            except Exception as e:
+                if isinstance(e, asyncio.CancelledError):
+                    break
+                if "Timeout" not in str(e):
+                    LOGGER.warning(f"Redis listener error: {e}")
+                await asyncio.sleep(1)
+            finally:
+                try:
+                    await pubsub.unsubscribe(CHANNEL)
+                except Exception:
+                    pass
 
-                                is_trend, direction = self.check_trend_bar(sid, bar)
-                                if is_trend:
-                                    LOGGER.info(
-                                        f"[{sid}] Trend bar detected! Direction: {direction}"
-                                    )
-                                    asyncio.create_task(
-                                        self.send_telegram_alert(sid, direction)
-                                    )
-                    except Exception as e:
-                        LOGGER.error(f"Error processing message: {e}")
-        finally:
-            await pubsub.unsubscribe(CHANNEL)
-            await redis.aclose()
+        await redis.aclose()
 
 
 def main():
-    daemon = TrendBarAlertDaemon()
-    asyncio.run(daemon.run())
+    import sys
+
+    try:
+        daemon = TrendBarAlertDaemon()
+        asyncio.run(daemon.run())
+    except Exception as e:
+        LOGGER.exception(f"Fatal error in trend bar daemon: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
