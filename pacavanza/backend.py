@@ -153,9 +153,13 @@ def create_app(
         name = active_future_info.get("name", "unknown")
         return f"fills_{name}.json"
 
-    def _load_fills() -> List[Dict[str, Any]]:
-        """Load persisted fills from disk for the current contract."""
-        file_path = get_fills_file_path()
+    def _load_fills(instrument_id: str = None) -> List[Dict[str, Any]]:
+        """Load persisted fills from disk for the current contract or specified instrument."""
+        if instrument_id:
+            file_path = f"fills_{instrument_id.upper()}.json"
+        else:
+            file_path = get_fills_file_path()
+            
         try:
             with open(file_path, "r") as f:
                 return json.load(f)
@@ -846,6 +850,7 @@ def create_app(
         merges them, and appends the live bar from memory.
         """
         import asyncio
+        import os
         from pacavanza.utils.utils import fetch_avanza_chart_history
 
         info = instrument_list.get(instrument_id, {})
@@ -881,6 +886,19 @@ def create_app(
         bars_lock = await _get_bars_lock_for(instrument_id)
         async with bars_lock:
             live_bars = recent_bars.get(instrument_id, [])
+            if not live_bars and not avanza_bars:
+                # Fallback: try to load from disk if this is a historical future not in memory
+                data_file = f"ohlc_{instrument_id}.json"
+                if os.path.exists(data_file):
+                    try:
+                        with open(data_file, "r") as f:
+                            disk_data = json.load(f)
+                        for b in disk_data:
+                            # ensure format matches what frontend expects
+                            live_bars.append(b)
+                    except Exception as e:
+                        LOGGER.error(f"Failed to load historical file {data_file}: {e}")
+
             for b in live_bars:
                 start_str = (
                     b["start_time"].isoformat()
@@ -1629,9 +1647,31 @@ def create_app(
         return JSONResponse(content={"status": "ok", **result})
 
     @app.get("/ibkr/fills")
-    async def ibkr_fills():
+    async def ibkr_fills(instrument_id: str = None):
         """Return all persisted fill records for chart markers."""
-        return JSONResponse(content={"fills": _load_fills()})
+        return JSONResponse(content={"fills": _load_fills(instrument_id)})
+
+    @app.get("/ibkr/historical_futures")
+    async def ibkr_historical_futures():
+        """Return a list of available historical futures based on local JSON files."""
+        import glob
+        import os
+        
+        active_future = active_future_info.get("name")
+        files = glob.glob("ohlc_omxs*.json")
+        futures = []
+        for f in files:
+            # Exclude current and mini files
+            if "current" in f or "mini" in f:
+                continue
+            # Extract instrument ID (e.g. ohlc_omxs306h.json -> omxs306h)
+            base = os.path.basename(f)
+            if base.startswith("ohlc_") and base.endswith(".json"):
+                instr = base[5:-5].upper()
+                if instr not in futures:
+                    futures.append(instr)
+                    
+        return JSONResponse(content={"active": active_future, "history": futures})
 
     # ══════════════════════════════════════════════════════════════════════
     # IBKR Portfolio endpoints (prefixed /ibkr/portfolio/)

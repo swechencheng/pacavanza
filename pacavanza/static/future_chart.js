@@ -107,29 +107,71 @@ class FutureChartApp extends PACChartApp {
     };
 
     window.PAC_TRADING_STATE.futureInstrument = futureKey;
-    const labelEl = document.getElementById("label-future");
-    const originalText = info.name || futureKey;
-    labelEl.textContent = originalText;
+    const selectorEl = document.getElementById("future-selector");
 
-    const linkEl = labelEl.closest("a");
-    if (linkEl) {
-      linkEl.addEventListener("mouseenter", () => {
-        labelEl.textContent = "Go to AVA Mini's";
-      });
-      linkEl.addEventListener("mouseleave", () => {
-        labelEl.textContent = originalText;
-      });
-    } else {
-      labelEl.addEventListener("mouseenter", () => {
-        labelEl.textContent = "Go to AVA Mini's";
-      });
-      labelEl.addEventListener("mouseleave", () => {
-        labelEl.textContent = originalText;
-      });
+    // Fetch historical futures and populate dropdown
+    try {
+      const resp = await fetch("/ibkr/historical_futures");
+      if (resp.ok) {
+        const data = await resp.json();
+        const activeInstr = data.active || futureKey.toUpperCase();
+        window.ACTIVE_FUTURE_INSTR = activeInstr;
+        window.CURRENT_SELECTED_FUTURE = activeInstr;
+        window.HISTORICAL_VIEW_ACTIVE = false;
+
+        const options = [...data.history];
+        if (!options.includes(activeInstr)) {
+          options.unshift(activeInstr);
+        }
+
+        options.forEach(opt => {
+          const o = document.createElement("option");
+          o.value = opt.toLowerCase();
+          o.textContent = opt + (opt === activeInstr ? " (Active)" : "");
+          if (opt === activeInstr) o.selected = true;
+          selectorEl.appendChild(o);
+        });
+
+        selectorEl.addEventListener("change", async (e) => {
+          const selected = e.target.value.toUpperCase();
+          window.CURRENT_SELECTED_FUTURE = selected;
+          window.HISTORICAL_VIEW_ACTIVE = (selected !== window.ACTIVE_FUTURE_INSTR);
+
+          const controls = document.querySelector('.trading-controls');
+          if (window.HISTORICAL_VIEW_ACTIVE) {
+            if (controls) controls.style.display = 'none';
+          } else {
+            if (controls) controls.style.display = 'flex';
+          }
+
+          // Reload chart data
+          this.chartFuture.series.candle.setData([]);
+          this.chartFuture.data.clear();
+          if (this.chartFuture.series.ema20) this.chartFuture.series.ema20.setData([]);
+          this._fillMarkers = [];
+          if (this._markersPlugin) {
+            this._markersPlugin.setMarkers([]);
+          }
+
+          this._renderOrders([]);
+          this._renderDepth({ bids: [], asks: [] });
+          this._recentTrades = [];
+          this._renderTrades();
+
+          const fallbackMap = {
+            [selected.toLowerCase()]: this.instrumentMapFlat[futureKey]
+          };
+          await this.loadHistoryForInstrument(this.chartFuture, selected.toLowerCase(), fallbackMap);
+          await this._loadFillMarkers(selected.toLowerCase());
+          this.chartFuture.chart.timeScale().fitContent();
+        });
+      }
+    } catch (err) {
+      this._remoteLog("ERROR", `Failed to fetch historical futures: ${err}`);
     }
 
     await this.loadHistoryForInstrument(this.chartFuture, futureKey, this.instrumentMapFlat);
-    await this._loadFillMarkers();
+    await this._loadFillMarkers(futureKey);
     this.ensureMarketCountdown(this.chartFuture.groupingState);
   }
 
@@ -137,6 +179,10 @@ class FutureChartApp extends PACChartApp {
   handleWsMessage(msg) {
     if (msg.type === "ibkr_status") {
       this._updateIbkrStatus(msg.connected, msg.trading_disabled);
+      return;
+    }
+
+    if (window.HISTORICAL_VIEW_ACTIVE) {
       return;
     }
 
@@ -313,9 +359,10 @@ class FutureChartApp extends PACChartApp {
   /**
    * Load persisted fills from backend and render as chart markers.
    */
-  async _loadFillMarkers() {
+  async _loadFillMarkers(instrumentId) {
     try {
-      const res = await fetch("/ibkr/fills");
+      const url = instrumentId ? `/ibkr/fills?instrument_id=${instrumentId}` : "/ibkr/fills";
+      const res = await fetch(url);
       if (!res.ok) return;
       const data = await res.json();
       if (data.fills && data.fills.length > 0) {
