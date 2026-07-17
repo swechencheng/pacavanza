@@ -159,7 +159,12 @@ class FutureTradeMonitor:
 
     def _init_contract(self, meta: Dict[str, Any]) -> None:
         """Initialise the active contract local symbol."""
-        local_symbol = meta.get("ibkr_localSymbol")
+        local_symbol = None
+        for key, val in meta.items():
+            if isinstance(val, dict) and "name" in val:
+                local_symbol = val["name"]
+                break
+
         if local_symbol and local_symbol != self._contract_local_symbol:
             self._contract_local_symbol = local_symbol
             LOGGER.info(f"Active contract identified: {self._contract_local_symbol}")
@@ -328,6 +333,7 @@ class FutureTradeMonitor:
                     url = f"{BACKEND_URL}/ibkr/cancel_order"
                     payload = {"orderId": str(order_id)}
                     async with self._http.post(url, json=payload) as resp:
+                        await resp.read()
                         if resp.status == 200:
                             LOGGER.info(f"Successfully cancelled order {order_id}")
                         else:
@@ -755,10 +761,17 @@ class FutureTradeMonitor:
 
                             await self._cancel_all_orders_via_backend()
                             signed_pos = await self._get_signed_position()
+                            LOGGER.info(
+                                f"EOD Flattening: signed_pos={signed_pos}, local_symbol={self._contract_local_symbol}"
+                            )
                             if signed_pos != 0 and self._contract_local_symbol:
                                 instrument_id = self._contract_local_symbol.lower()
                                 await self._flatten_position_via_backend(
                                     signed_pos, instrument_id
+                                )
+                            else:
+                                LOGGER.info(
+                                    "EOD Flattening: signed_pos is 0 or local_symbol is missing. No market order placed."
                                 )
                 except Exception as exc:
                     LOGGER.error(f"Error in EOD flatten monitor: {exc}")

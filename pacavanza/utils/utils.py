@@ -116,7 +116,7 @@ def fetch_active_omxs30_future(
     }
 
     response = requests.post(
-        url, headers=headers, json=payload, impersonate="chrome110"
+        url, headers=headers, json=payload, impersonate="chrome110", timeout=10
     )
     response.raise_for_status()
     data = response.json()
