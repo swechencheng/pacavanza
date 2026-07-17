@@ -190,73 +190,83 @@ class TrendBarAlertDaemon:
 
     async def run(self):
         redis = aioredis.from_url(REDIS_URL)
+        pubsub = redis.pubsub()
+        await pubsub.subscribe(CHANNEL)
 
-        while True:
-            pubsub = redis.pubsub()
-            try:
-                await pubsub.subscribe(CHANNEL)
-                LOGGER.info(f"Subscribed to Redis channel: {CHANNEL}")
+        LOGGER.info(f"Subscribed to Redis channel: {CHANNEL}")
 
-                async for message in pubsub.listen():
-                    if message["type"] == "message":
-                        try:
-                            data = json.loads(message["data"])
-                            if data.get("type") == "completed":
-                                sid = data["instrument"]
+        try:
+            while True:
+                try:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=60.0
+                    )
+                except Exception as e:
+                    # Ignore occasional read timeouts from redis-py
+                    if "Timeout" in str(e):
+                        continue
+                    raise
 
-                                if self.active_sid and sid != self.active_sid:
-                                    continue
+                if message is None:
+                    # Timeout reached without messages. Send a ping to keep connection alive.
+                    try:
+                        await pubsub.ping()
+                    except Exception:
+                        pass
+                    continue
 
-                                bar = data["bar"]
+                if message["type"] == "message":
+                    try:
+                        data = json.loads(message["data"])
+                        if data.get("type") == "completed":
+                            sid = data["instrument"]
 
-                                info = self.instruments.get(sid, {})
-                                tz = ZoneInfo(info.get("timezone", "Europe/Stockholm"))
-                                st = datetime.fromisoformat(
-                                    bar["start_time"]
+                            if self.active_sid and sid != self.active_sid:
+                                continue
+
+                            bar = data["bar"]
+
+                            info = self.instruments.get(sid, {})
+                            tz = ZoneInfo(info.get("timezone", "Europe/Stockholm"))
+                            st = datetime.fromisoformat(bar["start_time"]).astimezone(
+                                tz
+                            )
+
+                            if self.history.get(sid):
+                                last_bar_st = datetime.fromisoformat(
+                                    self.history[sid][-1]["start_time"]
                                 ).astimezone(tz)
-
-                                if self.history.get(sid):
-                                    last_bar_st = datetime.fromisoformat(
-                                        self.history[sid][-1]["start_time"]
-                                    ).astimezone(tz)
-                                    if st.date() > last_bar_st.date():
-                                        LOGGER.info(
-                                            f"[{sid}] New day detected. Clearing history."
-                                        )
-                                        self.history[sid] = []
-
-                                if sid not in self.history:
+                                if st.date() > last_bar_st.date():
+                                    LOGGER.info(
+                                        f"[{sid}] New day detected. Clearing history."
+                                    )
                                     self.history[sid] = []
 
-                                if not any(
-                                    b["start_time"] == bar["start_time"]
-                                    for b in self.history[sid]
-                                ):
-                                    self.history[sid].append(bar)
+                            if sid not in self.history:
+                                self.history[sid] = []
 
-                                    is_trend, direction = self.check_trend_bar(sid, bar)
-                                    if is_trend:
-                                        LOGGER.info(
-                                            f"[{sid}] Trend bar detected! Direction: {direction}"
-                                        )
-                                        asyncio.create_task(
-                                            self.send_telegram_alert(sid, direction)
-                                        )
-                        except Exception as e:
-                            LOGGER.error(f"Error processing message: {e}")
-            except Exception as e:
-                if isinstance(e, asyncio.CancelledError):
-                    break
-                if "Timeout" not in str(e):
-                    LOGGER.warning(f"Redis listener error: {e}")
-                await asyncio.sleep(1)
-            finally:
-                try:
-                    await pubsub.unsubscribe(CHANNEL)
-                except Exception:
-                    pass
+                            if not any(
+                                b["start_time"] == bar["start_time"]
+                                for b in self.history[sid]
+                            ):
+                                self.history[sid].append(bar)
 
-        await redis.aclose()
+                                is_trend, direction = self.check_trend_bar(sid, bar)
+                                if is_trend:
+                                    LOGGER.info(
+                                        f"[{sid}] Trend bar detected! Direction: {direction}"
+                                    )
+                                    asyncio.create_task(
+                                        self.send_telegram_alert(sid, direction)
+                                    )
+                    except Exception as e:
+                        LOGGER.error(f"Error processing message: {e}")
+        finally:
+            try:
+                await pubsub.unsubscribe(CHANNEL)
+            except Exception:
+                pass
+            await redis.aclose()
 
 
 def main():
