@@ -507,6 +507,45 @@ class PACChartApp {
     const sorted = Array.from(cm.data.values()).sort((a, b) => a.time - b.time);
 
     if (sorted.length > 0) {
+      sorted.forEach((b) => this.processBarForGrouping(cm, b));
+
+      for (let i = 0; i < sorted.length; i++) {
+        const bar = sorted[i];
+
+        if (cm.groupingState.sessionTZ) {
+          const { hour } = this.getLocalParts(bar.time, cm.groupingState.sessionTZ);
+          if (hour >= 17) continue;
+        }
+
+        const barIndex = cm.barGroupMap.get(bar.time);
+        if (!barIndex || barIndex <= 6) continue;
+
+        const bodySize = Math.abs(bar.close - bar.open);
+        const barSize = bar.high - bar.low;
+        const isBull = bar.close > bar.open;
+        const cond1 = bodySize >= 0.9 * barSize;
+        const cond2 = isBull && bodySize >= 0.75 * barSize && bar.high === bar.close;
+        const cond3 = !isBull && bodySize >= 0.75 * barSize && bar.low === bar.close;
+
+        if (barSize > 0 && (cond1 || cond2 || cond3)) {
+          const lookback = Math.min(20, barIndex - 1);
+          let maxPrev = 0;
+          let count = 0;
+          for (let j = 1; j <= lookback; j++) {
+            if (i - j < 0) break;
+            const pBar = sorted[i - j];
+            const pBody = Math.abs(pBar.close - pBar.open);
+            if (pBody > maxPrev) maxPrev = pBody;
+            count++;
+          }
+          if (count === lookback && bodySize > maxPrev) {
+            bar.color = isBull ? "#0015ffff" : "#ffee00ff";
+            bar.wickColor = isBull ? "#0dff00ff" : "#ff0000ff";
+            bar.borderColor = isBull ? "#0dff00ff" : "#ff0000ff";
+          }
+        }
+      }
+
       cm.series.candle.setData(sorted);
       cm.lastBarTime = sorted[sorted.length - 1].time;
       if (sorted.length >= 20) {
@@ -517,7 +556,6 @@ class PACChartApp {
         if (last) { cm.lastEMAValue = last.value; cm.lastEMATime = last.time; }
       }
       this.calculateHistoryHighLow(cm, sorted);
-      sorted.forEach((b) => this.processBarForGrouping(cm, b));
       this._updateWhitespace(cm);
     }
   }
@@ -541,18 +579,65 @@ class PACChartApp {
   }
 
   // ── Helpers for WS message handling ──────────────────────────────
+  _checkTrendBar(cm, candleData) {
+    delete candleData.color;
+    delete candleData.wickColor;
+    delete candleData.borderColor;
+
+    if (!cm.groupingState.sessionTZ) return;
+    const { hour } = this.getLocalParts(candleData.time, cm.groupingState.sessionTZ);
+    if (hour >= 17) return;
+
+    const barIndex = cm.barGroupMap.get(candleData.time);
+    if (!barIndex || barIndex <= 6) return;
+
+    const bodySize = Math.abs(candleData.close - candleData.open);
+    const barSize = candleData.high - candleData.low;
+    const isBull = candleData.close > candleData.open;
+    const cond1 = bodySize >= 0.9 * barSize;
+    const cond2 = isBull && bodySize >= 0.75 * barSize && candleData.high === candleData.close;
+    const cond3 = !isBull && bodySize >= 0.75 * barSize && candleData.low === candleData.close;
+
+    if (barSize === 0 || !(cond1 || cond2 || cond3)) return;
+
+    const lookback = Math.min(20, barIndex - 1);
+
+    const sortedBars = Array.from(cm.data.values()).sort((a, b) => a.time - b.time);
+    let count = 0;
+    let maxPrevBodySize = 0;
+    for (let i = sortedBars.length - 1; i >= 0; i--) {
+      const prevBar = sortedBars[i];
+      if (prevBar.time >= candleData.time) continue;
+      const prevBodySize = Math.abs(prevBar.close - prevBar.open);
+      if (prevBodySize > maxPrevBodySize) maxPrevBodySize = prevBodySize;
+      count++;
+      if (count === lookback) break;
+    }
+
+    if (count === lookback && bodySize > maxPrevBodySize) {
+      const isBull = candleData.close > candleData.open;
+      candleData.color = isBull ? "#0015ffff" : "#ffee00ff";
+      candleData.wickColor = isBull ? "#0dff00ff" : "#ff0000ff";
+      candleData.borderColor = isBull ? "#0dff00ff" : "#ff0000ff";
+    }
+  }
+
   _applyBarUpdate(cm, candleData) {
     const t = candleData.time;
     if (cm.lastBarTime === null || t >= cm.lastBarTime) {
       cm.data.set(t, candleData);
-      cm.series.candle.update(candleData);
+
       this.updateEMA20Incremental(cm, candleData.close, t);
       this.updateHighLowIncremental(cm, candleData);
+
       if (t > cm.lastBarTime) {
         this.processBarForGrouping(cm, candleData);
         cm.lastBarTime = t;
         this._updateWhitespace(cm);
       }
+
+      this._checkTrendBar(cm, candleData);
+      cm.series.candle.update(candleData);
     }
   }
 
@@ -560,13 +645,18 @@ class PACChartApp {
     const t = candleData.time;
     if (cm.lastBarTime === null || t >= cm.lastBarTime) {
       cm.data.set(t, candleData);
-      cm.series.candle.update(candleData);
+
       this.updateEMA20Incremental(cm, candleData.close, t);
       this.updateHighLowIncremental(cm, candleData);
+
       if (t > cm.lastBarTime) {
+        this.processBarForGrouping(cm, candleData);
         cm.lastBarTime = t;
         this._updateWhitespace(cm);
       }
+
+      this._checkTrendBar(cm, candleData);
+      cm.series.candle.update(candleData);
     }
   }
 
