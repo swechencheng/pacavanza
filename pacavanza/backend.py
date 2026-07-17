@@ -917,11 +917,30 @@ def create_app(
 
         # Send initial IBKR status
         is_ibkr_connected = False
+        is_trading_disabled = False
         if ibkr_trading is not None and ibkr_trading.ib is not None:
             is_ibkr_connected = ibkr_trading.ib.isConnected()
+            target_local_symbol = (
+                ibkr_trading.contract.localSymbol
+                if getattr(ibkr_trading, "contract", None)
+                else None
+            )
+            try:
+                is_trading_disabled = check_daily_loss_limit(
+                    ibkr_portfolio, target_local_symbol
+                )
+            except Exception:
+                pass
+
         try:
             await ws.send_text(
-                json.dumps({"type": "ibkr_status", "connected": is_ibkr_connected})
+                json.dumps(
+                    {
+                        "type": "ibkr_status",
+                        "connected": is_ibkr_connected,
+                        "trading_disabled": is_trading_disabled,
+                    }
+                )
             )
         except Exception:
             pass
