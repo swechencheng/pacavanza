@@ -15,6 +15,7 @@ setuptools.setup(
         "uvicorn==0.49.0",
         "aiohttp==3.14.1",
         "ib-async==2.1.0",
+        "mplfinance==0.12.10b0",
     ],
     entry_points={
         "console_scripts": ["run-pacavanza = pacavanza.daemon_controller:main"]

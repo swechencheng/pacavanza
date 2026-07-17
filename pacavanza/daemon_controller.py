@@ -101,6 +101,7 @@ def stop_process(name):
 def stop_all():
     logger.info("Stopping all processes...")
     stop_process("future_market")
+    stop_process("trend_bar_alert")
     stop_process("future_trade_monitor")
     stop_process("monitor")
     stop_process("dashboard")
@@ -150,6 +151,16 @@ def main():
                     "pacavanza.future_market_daemon",
                 ):
                     time.sleep(1)
+
+                secret_file_path = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "../.tg_bot_secret.json")
+                )
+                if os.path.exists(secret_file_path):
+                    start_process(
+                        "trend_bar_alert",
+                        "pacavanza.trend_alert_daemon",
+                        "pacavanza.trend_alert_daemon",
+                    )
 
                 # 3. Market Daemon (Always ensure it is running)
                 if start_process(

@@ -12,3 +12,5 @@ temp_*.py
 ohlc_*.json
 
 fills*.json
+
+.tg_bot_secret.json
