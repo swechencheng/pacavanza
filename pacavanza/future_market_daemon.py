@@ -50,7 +50,7 @@ class FutureMarketCollector(BaseMarketCollector):
     logger_name = "future_market_daemon"
 
     def __init__(self, interval_seconds, **kwargs):
-        from pacavanza.config import IBKR_PORT
+        from pacavanza.config import IBKR_PORT, IBKR_HOST
         from ib_async import IB, ContFuture
 
         ibkr_local_symbol = None
@@ -58,7 +58,7 @@ class FutureMarketCollector(BaseMarketCollector):
         try:
             # Use a short timeout so it doesn't block forever if IBKR is offline
             # and use util.run() indirectly by calling connect() synchronously
-            ib.connect("127.0.0.1", IBKR_PORT, clientId=199, timeout=2.0)
+            ib.connect(IBKR_HOST, IBKR_PORT, clientId=199, timeout=2.0)
             c = ContFuture("OMXS30", "OMS")
             ib.qualifyContracts(c)
             ibkr_local_symbol = c.localSymbol

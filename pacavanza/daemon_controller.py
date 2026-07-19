@@ -110,18 +110,13 @@ def stop_all():
 
 def main():
     parser = argparse.ArgumentParser(description="Pacavanza Daemon Controller")
-    parser.add_argument(
-        "-P",
-        "--ibkr-port",
-        type=int,
-        default=int(os.environ.get("PACAVANZA_IBKR_PORT", 7497)),
-        help="IBKR gateway live trading port (e.g. 4001)",
-    )
     args, _ = parser.parse_known_args()
 
-    os.environ["PACAVANZA_IBKR_PORT"] = str(args.ibkr_port)
+    from pacavanza.config import IBKR_PORT, IBKR_HOST
 
-    logger.info(f"Daemon Controller Started. IBKR_PORT: {args.ibkr_port}")
+    logger.info(
+        f"Daemon Controller Started. IBKR_HOST: {IBKR_HOST}, IBKR_PORT: {IBKR_PORT}"
+    )
 
     def signal_handler(sig, _frame):
         logger.info(f"Received signal {sig}. Shutting down all processes.")

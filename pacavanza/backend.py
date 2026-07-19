@@ -13,7 +13,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
 from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
-from .config import IBKR_PORT
+from .config import IBKR_PORT, IBKR_HOST
 
 # compute pacavanza package root (pacavanza/)
 ROOT = Path(__file__).resolve().parent  # pacavanza/
@@ -120,11 +120,11 @@ def create_app(
     ibkr_local_symbol = None
     if ibkr_conn is not None:
         try:
-            from pacavanza.config import IBKR_PORT
+            from pacavanza.config import IBKR_PORT, IBKR_HOST
             from ib_async import IB
 
             temp_ib = IB()
-            temp_ib.connect("127.0.0.1", IBKR_PORT, clientId=198, timeout=2.0)
+            temp_ib.connect(IBKR_HOST, IBKR_PORT, clientId=198, timeout=2.0)
             temp_ib.qualifyContracts(ibkr_conn[1])
             ibkr_local_symbol = ibkr_conn[1].localSymbol
             temp_ib.disconnect()
@@ -159,7 +159,7 @@ def create_app(
             file_path = f"fills_{instrument_id.upper()}.json"
         else:
             file_path = get_fills_file_path()
-            
+
         try:
             with open(file_path, "r") as f:
                 return json.load(f)
@@ -669,7 +669,7 @@ def create_app(
                         except Exception:
                             pass
                         await asyncio.sleep(1)
-                        await ib.connectAsync("127.0.0.1", IBKR_PORT, clientId=51)
+                        await ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=51)
                         await ib.qualifyContractsAsync(ibkr_trading.contract)
                         LOGGER.info("IBKR reconnected successfully.")
                         retry_delay = 5  # reset on success
@@ -711,7 +711,7 @@ def create_app(
         if ibkr_conn is not None:
             ib, contract = ibkr_conn
             try:
-                await ib.connectAsync("127.0.0.1", IBKR_PORT, clientId=51)
+                await ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=51)
                 await ib.qualifyContractsAsync(contract)
                 LOGGER.info("IBKR async connected inside lifespan.")
 
@@ -1656,7 +1656,7 @@ def create_app(
         """Return a list of available historical futures based on local JSON files."""
         import glob
         import os
-        
+
         active_future = active_future_info.get("name")
         files = glob.glob("ohlc_omxs*.json")
         futures = []
@@ -1670,7 +1670,7 @@ def create_app(
                 instr = base[5:-5].upper()
                 if instr not in futures:
                     futures.append(instr)
-                    
+
         return JSONResponse(content={"active": active_future, "history": futures})
 
     # ══════════════════════════════════════════════════════════════════════
