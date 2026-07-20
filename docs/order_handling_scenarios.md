@@ -56,9 +56,11 @@ These are dynamic orders whose behavior heavily depends on the **current positio
 
   - **Scenario B4: Opposite Direction, Partial Match (Close + Enter Reverse)**
     - The user is long N contracts and clicks Sell Stop for M contracts (or short N and clicks Buy Stop for M), where M > N.
-    - Places **Two Distinct Orders**:
-      1. A Standalone Stop Order (N contracts) to close the existing position (`orderRef="CloseOnly"`).
-      2. A new Bracket Order (M - N contracts) to enter a net position in the opposite direction, complete with new SL and TP children.
+    - We first check if there is an existing bracket/OCA SL order for the position:
+      1. If found, we **modify** the existing SL order price with the new stop price (protecting the existing N contracts), and then place a **New Bracket Order** (M - N contracts) to enter a net position in the opposite direction.
+      2. If not found, we place **Two Distinct Orders**:
+         - A Standalone Stop Order (N contracts) to close the existing position (`orderRef="CloseOnly"`).
+         - A New Bracket Order (M - N contracts) to enter a net position in the opposite direction, complete with new SL and TP children.
 
 ### C. Manual OCA Bracket Orders (One-Cancels-All)
 

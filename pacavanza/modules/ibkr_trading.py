@@ -700,26 +700,32 @@ class IbkrTrading(BaseAvanzaTrading):
 
         if signed_pos < 0 and abs(signed_pos) < volume:
             # Scenario 4: Close short + enter long
-            # Two separate orders:
-            #   1. Standalone stop to close the existing short position
-            #   2. Bracket stop entry for the net new long position
             close_volume = abs(signed_pos)
             net_volume = volume - close_volume
             LOGGER.info(
                 f"Buy stop: close short ({close_volume}) + "
                 f"enter long ({net_volume})"
             )
-            # 1. Close existing short
-            close_order = StopOrder(
-                "BUY", close_volume, self._round_price(stop_price), tif="DAY"
-            )
-            close_order.orderRef = "CloseOnly"
-            close_trade = self.ib.placeOrder(self.contract, close_order)
-            LOGGER.info(
-                f"Placed buy STOP (close short) via IBKR: "
-                f"orderId={close_trade.order.orderId}, "
-                f"volume={close_volume}, stopPrice={stop_price}"
-            )
+            # 1. Close existing short or adjust existing SL
+            existing_sl = self._find_existing_sl_order("BUY")
+            if existing_sl:
+                new_price = self._round_price(stop_price)
+                LOGGER.info(
+                    f"Buy stop: adjusting existing SL orderId="
+                    f"{existing_sl.order.orderId} price to {new_price}"
+                )
+                self.edit_order(existing_sl.order.orderId, price=new_price)
+            else:
+                close_order = StopOrder(
+                    "BUY", close_volume, self._round_price(stop_price), tif="DAY"
+                )
+                close_order.orderRef = "CloseOnly"
+                close_trade = self.ib.placeOrder(self.contract, close_order)
+                LOGGER.info(
+                    f"Placed buy STOP (close short) via IBKR: "
+                    f"orderId={close_trade.order.orderId}, "
+                    f"volume={close_volume}, stopPrice={stop_price}"
+                )
             # 2. Enter new long with bracket SL/TP
             self._place_bracket_stop_entry(
                 action="BUY",
@@ -811,26 +817,32 @@ class IbkrTrading(BaseAvanzaTrading):
 
         if signed_pos > 0 and signed_pos < volume:
             # Scenario 4: Close long + enter short
-            # Two separate orders:
-            # 1. Standalone stop to close the existing long position
-            #   2. Bracket stop entry for the net new short position
             close_volume = signed_pos
             net_volume = volume - close_volume
             LOGGER.info(
                 f"Sell stop: close long ({close_volume}) + "
                 f"enter short ({net_volume})"
             )
-            # 1. Close existing long
-            close_order = StopOrder(
-                "SELL", close_volume, self._round_price(stop_price), tif="DAY"
-            )
-            close_order.orderRef = "CloseOnly"
-            close_trade = self.ib.placeOrder(self.contract, close_order)
-            LOGGER.info(
-                f"Placed sell STOP (close long) via IBKR: "
-                f"orderId={close_trade.order.orderId}, "
-                f"volume={close_volume}, stopPrice={stop_price}"
-            )
+            # 1. Close existing long or adjust existing SL
+            existing_sl = self._find_existing_sl_order("SELL")
+            if existing_sl:
+                new_price = self._round_price(stop_price)
+                LOGGER.info(
+                    f"Sell stop: adjusting existing SL orderId="
+                    f"{existing_sl.order.orderId} price to {new_price}"
+                )
+                self.edit_order(existing_sl.order.orderId, price=new_price)
+            else:
+                close_order = StopOrder(
+                    "SELL", close_volume, self._round_price(stop_price), tif="DAY"
+                )
+                close_order.orderRef = "CloseOnly"
+                close_trade = self.ib.placeOrder(self.contract, close_order)
+                LOGGER.info(
+                    f"Placed sell STOP (close long) via IBKR: "
+                    f"orderId={close_trade.order.orderId}, "
+                    f"volume={close_volume}, stopPrice={stop_price}"
+                )
             # 2. Enter new short with bracket SL/TP
             self._place_bracket_stop_entry(
                 action="SELL",
