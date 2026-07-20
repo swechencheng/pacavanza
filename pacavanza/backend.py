@@ -857,6 +857,7 @@ def create_app(
         orderbook_id = info.get("orderbookId")
 
         avanza_bars = []
+        completed_avanza = []
         if orderbook_id:
             loop = asyncio.get_running_loop()
             interval_seconds = info.get("interval_seconds", 300)
@@ -873,11 +874,17 @@ def create_app(
                 open_str,
                 close_str,
             )
+
+            now = datetime.now(timezone.utc)
             for b in avanza_bars_raw:
+                if b["end_time"] <= now:
+                    completed_avanza.append(b)
+
                 # ISO format to match our JSON
-                b["start_time"] = b["start_time"].isoformat()
-                b["end_time"] = b["end_time"].isoformat()
-                avanza_bars.append(b)
+                b_copy = b.copy()
+                b_copy["start_time"] = b["start_time"].isoformat()
+                b_copy["end_time"] = b["end_time"].isoformat()
+                avanza_bars.append(b_copy)
 
         # Base data from Avanza (might be delayed or incomplete for recent bars)
         merged_dict = {b["start_time"]: b for b in avanza_bars}
@@ -885,7 +892,10 @@ def create_app(
         # Override with our perfectly tracked in-memory bars (contains disk history + live updates)
         bars_lock = await _get_bars_lock_for(instrument_id)
         async with bars_lock:
-            live_bars = recent_bars.get(instrument_id, [])
+            if instrument_id not in recent_bars:
+                recent_bars[instrument_id] = []
+            live_bars = recent_bars[instrument_id]
+
             if not live_bars and not avanza_bars:
                 # Fallback: try to load from disk if this is a historical future not in memory
                 data_file = f"ohlc_{instrument_id}.json"
@@ -894,10 +904,40 @@ def create_app(
                         with open(data_file, "r") as f:
                             disk_data = json.load(f)
                         for b in disk_data:
-                            # ensure format matches what frontend expects
+                            # ensure format matches what in-memory expects (datetime)
+                            start = datetime.fromisoformat(b["start_time"])
+                            if start.tzinfo is None:
+                                start = start.replace(tzinfo=timezone.utc)
+                            b["start_time"] = start
+
+                            end = datetime.fromisoformat(b["end_time"])
+                            if end.tzinfo is None:
+                                end = end.replace(tzinfo=timezone.utc)
+                            b["end_time"] = end
+
                             live_bars.append(b)
                     except Exception as e:
                         LOGGER.error(f"Failed to load historical file {data_file}: {e}")
+
+            # Update in-memory data with completed avanza bars so they take priority
+            if completed_avanza:
+                live_bars_dict = {b["start_time"]: b for b in live_bars}
+                for cb in completed_avanza:
+                    live_bars_dict[cb["start_time"]] = {
+                        "start_time": cb["start_time"],
+                        "end_time": cb["end_time"],
+                        "open": cb["open"],
+                        "high": cb["high"],
+                        "low": cb["low"],
+                        "close": cb["close"],
+                        "volume": cb.get("volume", 0),
+                    }
+                new_live_bars = [
+                    live_bars_dict[k] for k in sorted(live_bars_dict.keys())
+                ]
+                if len(new_live_bars) > 1500:
+                    new_live_bars = new_live_bars[-1500:]
+                live_bars[:] = new_live_bars
 
             for b in live_bars:
                 start_str = (
