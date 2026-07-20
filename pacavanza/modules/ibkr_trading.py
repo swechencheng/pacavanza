@@ -17,6 +17,7 @@ from ib_async import (
 
 
 from .base_trading import BaseAvanzaTrading, PROFIT_LOSS_RATIO
+from pacavanza.config import IBKR_ACCOUNT
 
 LOGGER = logging.getLogger("ibkr_trading")
 
@@ -97,6 +98,20 @@ class IbkrTrading(BaseAvanzaTrading):
         return int(percentage)
 
     # --------------------------------------------------------------------------
+    # Order helper
+    # --------------------------------------------------------------------------
+    def _place_ib_order(self, order) -> Trade:
+        if IBKR_ACCOUNT:
+            order.account = IBKR_ACCOUNT
+        return self.ib.placeOrder(self.contract, order)
+
+    def _get_open_ib_trades(self) -> List[Trade]:
+        trades = self.ib.openTrades()
+        if IBKR_ACCOUNT:
+            trades = [t for t in trades if t.order.account == IBKR_ACCOUNT]
+        return trades
+
+    # --------------------------------------------------------------------------
     # Position helpers
     # --------------------------------------------------------------------------
 
@@ -107,6 +122,8 @@ class IbkrTrading(BaseAvanzaTrading):
         """
         positions = self.ib.positions()
         for pos in positions:
+            if IBKR_ACCOUNT and pos.account != IBKR_ACCOUNT:
+                continue
             if pos.contract.conId == self.contract.conId:
                 return int(pos.position)
         return 0
@@ -136,7 +153,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
         Returns the Trade object if found, None otherwise.
         """
-        open_trades = self.ib.openTrades()
+        open_trades = self._get_open_ib_trades()
         LOGGER.info(
             f"_find_existing_sl_order: looking for {closing_action} SL among {len(open_trades)} open trades"
         )
@@ -219,7 +236,7 @@ class IbkrTrading(BaseAvanzaTrading):
         abs_pos = abs(signed_pos)
         closing_action = "SELL" if signed_pos > 0 else "BUY"
 
-        open_trades = self.ib.openTrades()
+        open_trades = self._get_open_ib_trades()
         contract_trades = [
             t
             for t in open_trades
@@ -549,17 +566,17 @@ class IbkrTrading(BaseAvanzaTrading):
         sl_order.parentId = parent_id
         sl_order.transmit = True  # transmit all orders in the bracket
 
-        parent_trade = self.ib.placeOrder(self.contract, parent)
+        parent_trade = self._place_ib_order(parent)
         LOGGER.info(
             f"Bracket parent {action} STOP: orderId={parent_id}, "
             f"stopPrice={stop_price}"
         )
-        tp_trade = self.ib.placeOrder(self.contract, tp_order)
+        tp_trade = self._place_ib_order(tp_order)
         LOGGER.info(
             f"Bracket child {opposite} LIMIT (TP): orderId={tp_id}, "
             f"parentId={parent_id}, limitPrice={tp_price}"
         )
-        sl_trade = self.ib.placeOrder(self.contract, sl_order)
+        sl_trade = self._place_ib_order(sl_order)
         LOGGER.info(
             f"Bracket child {opposite} STOP (SL): orderId={sl_id}, "
             f"parentId={parent_id}, stopPrice={sl_price}"
@@ -635,7 +652,7 @@ class IbkrTrading(BaseAvanzaTrading):
     ) -> Any:
         """Place a market buy order via IBKR."""
         order = MarketOrder("BUY", volume, tif="DAY")
-        trade = self.ib.placeOrder(self.contract, order)
+        trade = self._place_ib_order(order)
         LOGGER.info(
             f"Placed market BUY order via IBKR: "
             f"orderId={trade.order.orderId}, status={trade.orderStatus.status}"
@@ -647,7 +664,7 @@ class IbkrTrading(BaseAvanzaTrading):
     ) -> Any:
         """Place a market sell order via IBKR."""
         order = MarketOrder("SELL", volume, tif="DAY")
-        trade = self.ib.placeOrder(self.contract, order)
+        trade = self._place_ib_order(order)
         LOGGER.info(
             f"Placed market SELL order via IBKR: "
             f"orderId={trade.order.orderId}, status={trade.orderStatus.status}"
@@ -702,7 +719,7 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Buy stop: closing short position (exact match)")
             order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
-            trade = self.ib.placeOrder(self.contract, order)
+            trade = self._place_ib_order(order)
             LOGGER.info(
                 f"Placed buy STOP (close short) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
@@ -714,7 +731,7 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Buy stop: scaling up long position")
             order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "ScaleUp"
-            trade = self.ib.placeOrder(self.contract, order)
+            trade = self._place_ib_order(order)
             LOGGER.info(
                 f"Placed buy STOP (scale up) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
@@ -743,7 +760,7 @@ class IbkrTrading(BaseAvanzaTrading):
                     "BUY", close_volume, self._round_price(stop_price), tif="DAY"
                 )
                 close_order.orderRef = "CloseOnly"
-                close_trade = self.ib.placeOrder(self.contract, close_order)
+                close_trade = self._place_ib_order(close_order)
                 LOGGER.info(
                     f"Placed buy STOP (close short) via IBKR: "
                     f"orderId={close_trade.order.orderId}, "
@@ -814,7 +831,7 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Sell stop: closing long position (exact match)")
             order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "CloseOnly"
-            trade = self.ib.placeOrder(self.contract, order)
+            trade = self._place_ib_order(order)
             LOGGER.info(
                 f"Placed sell STOP (close long) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
@@ -826,7 +843,7 @@ class IbkrTrading(BaseAvanzaTrading):
             LOGGER.info("Sell stop: scaling up short position")
             order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
             order.orderRef = "ScaleUp"
-            trade = self.ib.placeOrder(self.contract, order)
+            trade = self._place_ib_order(order)
             LOGGER.info(
                 f"Placed sell STOP (scale up) via IBKR: "
                 f"orderId={trade.order.orderId}, stopPrice={stop_price}"
@@ -860,7 +877,7 @@ class IbkrTrading(BaseAvanzaTrading):
                     "SELL", close_volume, self._round_price(stop_price), tif="DAY"
                 )
                 close_order.orderRef = "CloseOnly"
-                close_trade = self.ib.placeOrder(self.contract, close_order)
+                close_trade = self._place_ib_order(close_order)
                 LOGGER.info(
                     f"Placed sell STOP (close long) via IBKR: "
                     f"orderId={close_trade.order.orderId}, "
@@ -933,7 +950,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def delete_stop_losses(self, instrument_id: str) -> None:
         """Cancel all open stop orders for the contract via IBKR."""
-        open_trades = self.ib.openTrades()
+        open_trades = self._get_open_ib_trades()
         for t in open_trades:
             if (
                 t.contract.conId == self.contract.conId
@@ -954,7 +971,7 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def _find_trade_by_order_id(self, order_id: int) -> Optional[Trade]:
         """Find an active Trade object by its orderId or permId."""
-        for t in self.ib.openTrades():
+        for t in self._get_open_ib_trades():
             if (
                 t.order.orderId == order_id or t.order.permId == order_id
             ) and t.isActive():
@@ -1019,7 +1036,7 @@ class IbkrTrading(BaseAvanzaTrading):
         # causes the modification to be accepted but suspends the order locally.
         order.transmit = True
 
-        self.ib.placeOrder(self.contract, order)
+        self._place_ib_order(order)
         LOGGER.info(
             f"Edited order {order_id}: type={order.orderType}, newPrice={price}, newQuantity={quantity}"
         )
@@ -1048,7 +1065,7 @@ class IbkrTrading(BaseAvanzaTrading):
         LOGGER.info(f"Cancelled order {order_id} to replace with market order")
 
         mkt_order = MarketOrder(action, volume, tif="DAY")
-        new_trade = self.ib.placeOrder(self.contract, mkt_order)
+        new_trade = self._place_ib_order(mkt_order)
         LOGGER.info(
             f"Placed market {action} order: orderId={new_trade.order.orderId}, "
             f"volume={volume}"
@@ -1121,8 +1138,8 @@ class IbkrTrading(BaseAvanzaTrading):
             ocaType=1,
         )
 
-        tp_trade = self.ib.placeOrder(self.contract, tp_order)
-        sl_trade = self.ib.placeOrder(self.contract, sl_order)
+        tp_trade = self._place_ib_order(tp_order)
+        sl_trade = self._place_ib_order(sl_order)
 
         LOGGER.info(
             f"OCA bracket placed: action={action}, volume={volume}, "
@@ -1144,7 +1161,7 @@ class IbkrTrading(BaseAvanzaTrading):
     def place_limit_buy(self, volume: int, price: float) -> Dict[str, Any]:
         """Place a limit buy order via IBKR."""
         order = LimitOrder("BUY", volume, self._round_price(price), tif="DAY")
-        trade = self.ib.placeOrder(self.contract, order)
+        trade = self._place_ib_order(order)
         LOGGER.info(
             f"Placed limit BUY order via IBKR: "
             f"orderId={trade.order.orderId}, price={price}, volume={volume}"
@@ -1161,7 +1178,7 @@ class IbkrTrading(BaseAvanzaTrading):
     def place_limit_sell(self, volume: int, price: float) -> Dict[str, Any]:
         """Place a limit sell order via IBKR."""
         order = LimitOrder("SELL", volume, self._round_price(price), tif="DAY")
-        trade = self.ib.placeOrder(self.contract, order)
+        trade = self._place_ib_order(order)
         LOGGER.info(
             f"Placed limit SELL order via IBKR: "
             f"orderId={trade.order.orderId}, price={price}, volume={volume}"
@@ -1182,7 +1199,7 @@ class IbkrTrading(BaseAvanzaTrading):
         order = StopOrder(action, volume, self._round_price(stop_price), tif="DAY")
         if order_ref:
             order.orderRef = order_ref
-        trade = self.ib.placeOrder(self.contract, order)
+        trade = self._place_ib_order(order)
         LOGGER.info(
             f"Placed standalone STOP order via IBKR: "
             f"orderId={trade.order.orderId}, action={action}, stopPrice={stop_price}, volume={volume}, ref={order_ref}"
@@ -1230,7 +1247,7 @@ class IbkrTrading(BaseAvanzaTrading):
         Return True if there are any active OCA or bracket orders for this
         contract.  Used to avoid stacking multiple auto-OCA brackets.
         """
-        for t in self.ib.openTrades():
+        for t in self._get_open_ib_trades():
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
             order = t.order
@@ -1247,7 +1264,7 @@ class IbkrTrading(BaseAvanzaTrading):
         excluding a specific orderId (e.g. the one that just filled).
         """
         result = []
-        for t in self.ib.openTrades():
+        for t in self._get_open_ib_trades():
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
             if t.order.orderId == exclude_order_id:
@@ -1769,6 +1786,8 @@ class IbkrTrading(BaseAvanzaTrading):
         """Return the current active position size and average cost for the contract."""
         positions = self.ib.positions()
         for pos in positions:
+            if IBKR_ACCOUNT and pos.account != IBKR_ACCOUNT:
+                continue
             if pos.contract.conId == self.contract.conId:
                 try:
                     mult = (

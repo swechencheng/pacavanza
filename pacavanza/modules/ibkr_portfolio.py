@@ -37,10 +37,16 @@ class IbkrPortfolio:
         # ib.accountValues() and ib.portfolio() are populated.
         # This is a streaming subscription — data arrives asynchronously.
         try:
+            from pacavanza.config import IBKR_ACCOUNT
+
+            account_to_use = IBKR_ACCOUNT if IBKR_ACCOUNT else ""
+
             # We must use the *Async variants so they do not block the active Uvicorn event loop
-            self.ib.reqAccountUpdatesAsync("")
+            self.ib.reqAccountUpdatesAsync(account_to_use)
             self.ib.reqAccountSummaryAsync()
-            LOGGER.info("Subscribed to IBKR account updates and summary")
+            LOGGER.info(
+                f"Subscribed to IBKR account updates and summary for account '{account_to_use}'"
+            )
         except Exception as e:
             LOGGER.warning(f"Failed to subscribe to account updates: {e}")
 
@@ -361,10 +367,15 @@ class IbkrPortfolio:
         fills = self.ib.fills()
         executions = []
 
+        from pacavanza.config import IBKR_ACCOUNT
+
         for fill in fills:
             contract = fill.contract
             exec_ = fill.execution
             comm = fill.commissionReport
+
+            if IBKR_ACCOUNT and exec_.acctNumber != IBKR_ACCOUNT:
+                continue
 
             executions.append(
                 {
