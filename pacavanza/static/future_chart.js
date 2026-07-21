@@ -1009,8 +1009,15 @@ class FutureChartApp extends PACChartApp {
           const isBuy = o.action === "BUY";
           const id = `order-standalone-${o.orderId}`;
           const anchors = [{ time: orderBarTime, price: o.price }];
+          let lineColor;
+          if (o.orderType === "LMT") {
+            lineColor = isBuy ? '#2196F3' : '#9E9E9E'; // Blue / Grey
+          } else {
+            // STP or STP LMT
+            lineColor = isBuy ? '#1ed1e9ff' : '#795448ff'; // Pink / Brown
+          }
           const style = {
-            lineColor: isBuy ? '#2196F3' : '#9E9E9E',
+            lineColor: lineColor,
             lineWidth: 1.5,
             lineDash: [6, 4]
           };
