@@ -8,6 +8,9 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import mplfinance as mpf
 import redis.asyncio as aioredis
 
