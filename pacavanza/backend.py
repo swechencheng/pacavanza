@@ -1413,6 +1413,34 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
 
+    @app.post("/ibkr/market_close")
+    async def ibkr_market_close(req: Request):
+        """Close current position via IBKR market order."""
+        _require_ibkr()
+        body = await req.json()
+        instrument_id = body.get("instrumentId")
+        if not instrument_id:
+            raise HTTPException(status_code=400, detail="instrumentId required")
+        try:
+            pos_info = ibkr_trading.get_position_info()
+            if not pos_info or pos_info.get("position", 0) == 0:
+                return JSONResponse(
+                    content={"status": "ok", "message": "No open position"}
+                )
+
+            position = pos_info["position"]
+            if position > 0:
+                order = await ibkr_trading.place_market_sell(
+                    instrument_id, number_of_contracts=position
+                )
+            else:
+                order = await ibkr_trading.place_market_buy(
+                    instrument_id, percentage=None, number_of_contracts=abs(position)
+                )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
     @app.post("/ibkr/buy_stop")
     async def ibkr_buy_stop(req: Request):
         """Schedule a buy stop order via IBKR."""

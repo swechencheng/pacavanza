@@ -519,6 +519,7 @@ class FutureChartApp extends PACChartApp {
     bind("btn-delete-stop-losses-future", "/ibkr/delete_stop_losses", false);
     bind("btn-market-buy-future", "/ibkr/market_buy", true);
     bind("btn-market-sell-future", "/ibkr/market_sell", true);
+    bind("btn-market-close-future", "/ibkr/market_close", false);
 
     // OCA Bracket button — calls new /ibkr/ endpoint
     const ocaBtn = document.getElementById("btn-place-oca");
