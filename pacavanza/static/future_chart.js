@@ -633,6 +633,47 @@ class FutureChartApp extends PACChartApp {
       });
     }
 
+    // Bare Buy Stop button
+    const buyStopBtn = document.getElementById("btn-buy-stop-limit-future");
+    if (buyStopBtn) {
+      buyStopBtn.addEventListener("click", async () => {
+        const volume = contracts();
+        const price = parseFloat(document.getElementById("limit-order-price").value);
+        if (isNaN(price)) {
+          alert("Bare Stop Order: Price is required.");
+          return;
+        }
+        const res = await this._callApi("/ibkr/bare_buy_stop", {
+          volume, price
+        }, "POST", true);
+        if (res) {
+          console.log("[ibkr] Bare Buy Stop placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
+    // Bare Sell Stop button
+    const sellStopBtn = document.getElementById("btn-sell-stop-limit-future");
+    if (sellStopBtn) {
+      sellStopBtn.addEventListener("click", async () => {
+        const volume = contracts();
+        const price = parseFloat(document.getElementById("limit-order-price").value);
+        if (isNaN(price)) {
+          alert("Bare Stop Order: Price is required.");
+          return;
+        }
+        const res = await this._callApi("/ibkr/bare_sell_stop", {
+          volume, price
+        }, "POST", true);
+        if (res) {
+          console.log("[ibkr] Bare Sell Stop placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
+
     // Refresh orders button
     const refreshBtn = document.getElementById("btn-refresh-orders");
     if (refreshBtn) refreshBtn.addEventListener("click", () => this._refreshOrders());

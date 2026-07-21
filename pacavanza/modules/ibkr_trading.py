@@ -1192,6 +1192,40 @@ class IbkrTrading(BaseAvanzaTrading):
             "status": trade.orderStatus.status,
         }
 
+    def place_bare_buy_stop(self, volume: int, stop_price: float) -> Dict[str, Any]:
+        """Place a bare buy stop order via IBKR."""
+        order = StopOrder("BUY", volume, self._round_price(stop_price), tif="DAY")
+        trade = self._place_ib_order(order)
+        LOGGER.info(
+            f"Placed bare BUY stop order via IBKR: "
+            f"orderId={trade.order.orderId}, stopPrice={stop_price}, volume={volume}"
+        )
+        return {
+            "orderId": trade.order.orderId,
+            "action": "BUY",
+            "orderType": "STP",
+            "totalQuantity": volume,
+            "price": stop_price,
+            "status": trade.orderStatus.status,
+        }
+
+    def place_bare_sell_stop(self, volume: int, stop_price: float) -> Dict[str, Any]:
+        """Place a bare sell stop order via IBKR."""
+        order = StopOrder("SELL", volume, self._round_price(stop_price), tif="DAY")
+        trade = self._place_ib_order(order)
+        LOGGER.info(
+            f"Placed bare SELL stop order via IBKR: "
+            f"orderId={trade.order.orderId}, stopPrice={stop_price}, volume={volume}"
+        )
+        return {
+            "orderId": trade.order.orderId,
+            "action": "SELL",
+            "orderType": "STP",
+            "totalQuantity": volume,
+            "price": stop_price,
+            "status": trade.orderStatus.status,
+        }
+
     def place_stop_order(
         self, action: str, volume: int, stop_price: float, order_ref: str = ""
     ) -> Dict[str, Any]:
@@ -1219,12 +1253,14 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def _is_standalone_entry_order(self, trade: Trade) -> bool:
         """
-        Return True if the trade is a standalone entry order (LMT or MKT),
+        Return True if the trade is a standalone entry order (LMT, MKT, STP),
         not a child of a bracket and not part of an OCA group.
         MKT orders are included so that market-order fills also trigger auto-OCA.
         """
         order = trade.order
-        if order.orderType not in ("LMT", "MKT"):
+        if order.orderType not in ("LMT", "MKT", "STP", "STP LMT"):
+            return False
+        if getattr(order, "orderRef", "") == "CloseOnly":
             return False
         # Has a parent → bracket child (TP)
         parent_id = getattr(order, "parentId", 0)
@@ -1305,14 +1341,19 @@ class IbkrTrading(BaseAvanzaTrading):
 
         # Only trigger auto-OCA when a position already existed before the fill.
         # If the fill itself opened the position from flat (pre_fill_pos == 0),
-        # skip — this prevents auto-OCA on pure entry orders.
+        # skip (for limit orders) — this prevents auto-OCA on pure limit entry orders.
         pre_fill_pos = fill.get("pre_fill_pos", None)
         if pre_fill_pos is not None and pre_fill_pos == 0:
-            LOGGER.info(
-                f"Auto-OCA: pre-fill position was flat; this fill opened a new position. "
-                f"Skipping auto-OCA."
-            )
-            return
+            if fill.get("orderType") in ("STP", "STP LMT"):
+                LOGGER.info(
+                    "Auto-OCA: pre-fill position was flat, but order is STP. Proceeding."
+                )
+            else:
+                LOGGER.info(
+                    f"Auto-OCA: pre-fill position was flat; this fill opened a new position. "
+                    f"Skipping auto-OCA."
+                )
+                return
 
         if self._has_active_oca_or_bracket():
             LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
@@ -1338,13 +1379,18 @@ class IbkrTrading(BaseAvanzaTrading):
             else:
                 opposite_dir.append(t)
 
-        # Cancel same-direction limit orders
+        # Cancel same-direction limit/stop orders
         for t in same_dir:
             try:
                 self.ib.cancelOrder(t.order)
+                price = (
+                    t.order.auxPrice
+                    if t.order.orderType in ("STP", "STP LMT")
+                    else t.order.lmtPrice
+                )
                 LOGGER.info(
-                    f"Auto-OCA: cancelled same-direction limit order "
-                    f"orderId={t.order.orderId} ({t.order.action} @ {t.order.lmtPrice})"
+                    f"Auto-OCA: cancelled same-direction standalone order "
+                    f"orderId={t.order.orderId} ({t.order.action} @ {price})"
                 )
             except Exception as e:
                 LOGGER.error(f"Auto-OCA: failed to cancel order {t.order.orderId}: {e}")
@@ -1360,8 +1406,12 @@ class IbkrTrading(BaseAvanzaTrading):
         above_orders = []  # opposite-direction orders with price > fill_price
         below_orders = []  # opposite-direction orders with price < fill_price
         for t in opposite_dir:
-            price = t.order.lmtPrice
-            if price is None:
+            price = (
+                t.order.auxPrice
+                if t.order.orderType in ("STP", "STP LMT")
+                else t.order.lmtPrice
+            )
+            if price is None or price == 0.0:
                 continue
             if price > fill_price:
                 above_orders.append((price, t))
@@ -1404,9 +1454,14 @@ class IbkrTrading(BaseAvanzaTrading):
         for t in orders_to_cancel:
             try:
                 self.ib.cancelOrder(t.order)
+                price = (
+                    t.order.auxPrice
+                    if t.order.orderType in ("STP", "STP LMT")
+                    else t.order.lmtPrice
+                )
                 LOGGER.info(
-                    f"Auto-OCA: cancelled opposite-direction limit order "
-                    f"orderId={t.order.orderId} ({t.order.action} @ {t.order.lmtPrice})"
+                    f"Auto-OCA: cancelled opposite-direction standalone order "
+                    f"orderId={t.order.orderId} ({t.order.action} @ {price})"
                 )
             except Exception as e:
                 LOGGER.error(f"Auto-OCA: failed to cancel order {t.order.orderId}: {e}")
@@ -1612,6 +1667,7 @@ class IbkrTrading(BaseAvanzaTrading):
                         "volume": int(exec_obj.shares),
                         "orderId": trade.order.orderId,
                         "pre_fill_pos": pre_fill_pos,
+                        "orderType": trade.order.orderType,
                     }
                 )
                 LOGGER.info(

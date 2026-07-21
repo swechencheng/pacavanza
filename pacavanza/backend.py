@@ -1685,6 +1685,36 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
 
+    @app.post("/ibkr/bare_buy_stop")
+    async def ibkr_bare_buy_stop(req: Request):
+        """Place a bare buy stop order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        volume = body.get("volume")
+        price = body.get("price")
+        if volume is None or price is None:
+            raise HTTPException(status_code=400, detail="volume and price required")
+        try:
+            order = ibkr_trading.place_bare_buy_stop(int(volume), float(price))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
+    @app.post("/ibkr/bare_sell_stop")
+    async def ibkr_bare_sell_stop(req: Request):
+        """Place a bare sell stop order via IBKR."""
+        _require_ibkr()
+        body = await req.json()
+        volume = body.get("volume")
+        price = body.get("price")
+        if volume is None or price is None:
+            raise HTTPException(status_code=400, detail="volume and price required")
+        try:
+            order = ibkr_trading.place_bare_sell_stop(int(volume), float(price))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", "order": order})
+
     @app.get("/ibkr/open_orders")
     async def ibkr_open_orders():
         """Return all active orders for the IBKR contract."""
