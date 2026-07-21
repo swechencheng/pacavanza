@@ -137,13 +137,24 @@ class IbkrTrading(BaseAvanzaTrading):
         Returns the Trade object if found, None otherwise.
         """
         open_trades = self.ib.openTrades()
+        LOGGER.info(
+            f"_find_existing_sl_order: looking for {closing_action} SL among {len(open_trades)} open trades"
+        )
         for t in open_trades:
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
             order = t.order
             if order.orderType != "STP":
                 continue
+
+            LOGGER.info(
+                f"_find_existing_sl_order: evaluating STP order {order.orderId} with action {order.action}, parentId={getattr(order, 'parentId', 0)}, ocaGroup={getattr(order, 'ocaGroup', '')}"
+            )
+
             if order.action != closing_action:
+                LOGGER.info(
+                    f"_find_existing_sl_order: skip order {order.orderId} due to action mismatch ({order.action} != {closing_action})"
+                )
                 continue
             # Must belong to a bracket (parentId/parentPermId) or OCA group
             parent_id = getattr(order, "parentId", 0)
@@ -156,6 +167,9 @@ class IbkrTrading(BaseAvanzaTrading):
 
             oca_group = getattr(order, "ocaGroup", "")
             if parent_id == 0 and parent_perm == 0 and not oca_group:
+                LOGGER.info(
+                    f"_find_existing_sl_order: skip order {order.orderId} because it is a standalone order"
+                )
                 continue  # standalone order, not a bracket/OCA SL
 
             # For bracket children, only consider SL whose parent is filled
@@ -173,8 +187,17 @@ class IbkrTrading(BaseAvanzaTrading):
 
             # Parent still active → SL protects a pending entry, skip
             if parent_trade and parent_trade.isActive():
+                LOGGER.info(
+                    f"_find_existing_sl_order: skip order {order.orderId} because parent {parent_trade.order.orderId} is still active"
+                )
                 continue
+
+            LOGGER.info(
+                f"_find_existing_sl_order: FOUND matching SL order {order.orderId}"
+            )
             return t
+
+        LOGGER.info(f"_find_existing_sl_order: no matching SL found")
         return None
 
     def _sync_sl_tp_volume(self) -> None:
