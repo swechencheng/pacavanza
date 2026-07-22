@@ -17,10 +17,8 @@ if CONFIG_FILE.exists():
             _config = json.load(f)
             _ibkr_config = _config.get("IBKR", {})
 
-            # Use "paper" as default, if --real is in sys.argv or PACAVANZA_REAL_ACCOUNT env var is set, use "real"
-            use_real = (
-                "--real" in sys.argv or os.environ.get("PACAVANZA_REAL_ACCOUNT") == "1"
-            )
+            # Use "paper" as default, if --real is in sys.argv, use "real"
+            use_real = "--real" in sys.argv
             mode = "real" if use_real else "paper"
 
             # fallback to legacy config structure if "real" and "paper" keys do not exist

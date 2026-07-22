@@ -113,9 +113,6 @@ def main():
     parser.add_argument("--real", action="store_true", help="Use real IBKR account")
     args, _ = parser.parse_known_args()
 
-    if args.real:
-        os.environ["PACAVANZA_REAL_ACCOUNT"] = "1"
-
     from pacavanza.config import IBKR_PORT, IBKR_HOST
 
     logger.info(
