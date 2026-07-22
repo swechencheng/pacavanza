@@ -50,28 +50,15 @@ class FutureMarketCollector(BaseMarketCollector):
     logger_name = "future_market_daemon"
 
     def __init__(self, interval_seconds, **kwargs):
-        from pacavanza.config import IBKR_PORT, IBKR_HOST
-        from ib_async import IB, ContFuture
+        from pacavanza.modules.ibkr_client_instance import resolve_ibkr_local_symbol
 
-        ibkr_local_symbol = None
-        ib = IB()
-        try:
-            # Use a short timeout so it doesn't block forever if IBKR is offline
-            # and use util.run() indirectly by calling connect() synchronously
-            ib.connect(IBKR_HOST, IBKR_PORT, clientId=199, timeout=2.0)
-            c = ContFuture("OMXS30", "OMS")
-            ib.qualifyContracts(c)
-            ibkr_local_symbol = c.localSymbol
-            ib.disconnect()
+        ibkr_local_symbol = resolve_ibkr_local_symbol()
+        if ibkr_local_symbol:
             LOGGER.info(f"Resolved IBKR active future: {ibkr_local_symbol}")
-        except Exception as e:
+        else:
             LOGGER.warning(
-                f"Failed to resolve IBKR active future (fallback to Avanza roll logic): {e}"
+                "Failed to resolve IBKR active future, falling back to Avanza roll logic"
             )
-            try:
-                ib.disconnect()
-            except:
-                pass
 
         active_future = fetch_active_omxs30_future(target_name=ibkr_local_symbol)
         super().__init__(interval_seconds, instrument_list=active_future, **kwargs)

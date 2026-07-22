@@ -1,13 +1,15 @@
 {
     "IBKR": {
         "real": {
-            "host": "192.168.1.99",
+            "host": "127.0.0.1",
             "port": 4001,
-            "account": "U88888888"
+            "account": "U88888888",
+            "clientId": 41
         },
         "paper": {
             "host": "127.0.0.1",
-            "port": 4002
+            "port": 4002,
+            "clientId": 42
         }
     }
 }

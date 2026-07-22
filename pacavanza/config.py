@@ -1,4 +1,3 @@
-import os
 import sys
 import json
 from pathlib import Path
@@ -28,7 +27,9 @@ if CONFIG_FILE.exists():
                     IBKR_HOST = _mode_config["host"]
                 if "port" in _mode_config:
                     IBKR_PORT = int(_mode_config["port"])
-                if "client_id" in _mode_config:
+                if "clientId" in _mode_config:
+                    IBKR_CLIENT_ID = int(_mode_config["clientId"])
+                elif "client_id" in _mode_config:
                     IBKR_CLIENT_ID = int(_mode_config["client_id"])
                 if "account" in _mode_config:
                     IBKR_ACCOUNT = _mode_config["account"]
@@ -37,7 +38,9 @@ if CONFIG_FILE.exists():
                     IBKR_HOST = _ibkr_config["host"]
                 if "port" in _ibkr_config:
                     IBKR_PORT = int(_ibkr_config["port"])
-                if "client_id" in _ibkr_config:
+                if "clientId" in _ibkr_config:
+                    IBKR_CLIENT_ID = int(_ibkr_config["clientId"])
+                elif "client_id" in _ibkr_config:
                     IBKR_CLIENT_ID = int(_ibkr_config["client_id"])
                 if "account" in _ibkr_config:
                     IBKR_ACCOUNT = _ibkr_config["account"]

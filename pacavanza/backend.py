@@ -13,7 +13,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
 from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
-from .config import IBKR_PORT, IBKR_HOST
+
 
 # compute pacavanza package root (pacavanza/)
 ROOT = Path(__file__).resolve().parent  # pacavanza/
@@ -69,14 +69,12 @@ def create_app(
     redis_url="redis://localhost:6379/0",
     redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     static_html_path: str | Path = STATIC_HTML,
-    ibkr_conn=None,
 ):
     """
     Create FastAPI app. Uses lifespan async context manager to start/stop background
     Redis subscriber task and to close the redis client cleanly (uses aclose()).
 
-    Args:
-        ibkr_conn: Optional (ib, contract) tuple from ib_async for IBKR trading.
+    IBKR connection is managed by pacavanza.modules.ibkr_client_instance.
     """
     # redis client (async)
     redis_client = aioredis.from_url(redis_url)
@@ -117,23 +115,11 @@ def create_app(
     # active_future_info: { key, name, orderbookId, timezone, market_open, market_close }
     active_future_info: Dict[str, Any] = {}
 
-    ibkr_local_symbol = None
-    if ibkr_conn is not None:
-        try:
-            from pacavanza.config import IBKR_PORT, IBKR_HOST
-            from ib_async import IB
+    # Resolve the active IBKR future's localSymbol via a quick sync connection.
+    # Uses clientId+1 from config so it won't clash with the persistent backend connection.
+    from pacavanza.modules.ibkr_client_instance import resolve_ibkr_local_symbol
 
-            temp_ib = IB()
-            temp_ib.connect(IBKR_HOST, IBKR_PORT, clientId=198, timeout=2.0)
-            temp_ib.qualifyContracts(ibkr_conn[1])
-            ibkr_local_symbol = ibkr_conn[1].localSymbol
-            temp_ib.disconnect()
-        except Exception as e:
-            LOGGER.warning(f"Could not qualify IBKR contract in create_app: {e}")
-            try:
-                temp_ib.disconnect()
-            except:
-                pass
+    ibkr_local_symbol = resolve_ibkr_local_symbol()
 
     try:
         raw_active = fetch_active_omxs30_future(target_name=ibkr_local_symbol)
@@ -223,84 +209,77 @@ def create_app(
     # instantiate IbkrTrading (if IBKR connection is available)
     # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
     # so that Avanza SSE price updates don't corrupt IBKR bar data.
+    # ── IBKR trading state (populated in lifespan once IB connects) ─────────
     ibkr_trading = None
     ibkr_portfolio = None
-    if ibkr_conn is not None:
-        try:
-            from pacavanza.modules.ibkr_trading import IbkrTrading
 
-            ib, contract = ibkr_conn
+    # Build separate bar storage for the active future.
+    # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
+    # so that Avanza SSE price updates don't corrupt IBKR bar data.
+    ibkr_recent_bars: Dict[str, List[Dict[str, Any]]] = {}
+    if active_future_info:
+        future_key = active_future_info.get("key")
+        if future_key:
+            # RTH filter: only keep bars within market hours
+            from zoneinfo import ZoneInfo
 
-            # Build separate bar storage for the active future only
-            ibkr_recent_bars: Dict[str, List[Dict[str, Any]]] = {}
-            if active_future_info:
-                future_key = active_future_info.get("key")
-                if future_key:
-                    # RTH filter: only keep bars within market hours
-                    from zoneinfo import ZoneInfo
+            tz_name = active_future_info.get("timezone", "Europe/Stockholm")
+            market_open_str = active_future_info.get("market_open", "09:00")
+            market_close_str = active_future_info.get("market_close", "17:45")
+            zone = ZoneInfo(tz_name)
+            oh, om = (int(x) for x in market_open_str.split(":"))
+            ch, cm = (int(x) for x in market_close_str.split(":"))
 
-                    tz_name = active_future_info.get("timezone", "Europe/Stockholm")
-                    market_open_str = active_future_info.get("market_open", "09:00")
-                    market_close_str = active_future_info.get("market_close", "17:45")
-                    zone = ZoneInfo(tz_name)
-                    oh, om = (int(x) for x in market_open_str.split(":"))
-                    ch, cm = (int(x) for x in market_close_str.split(":"))
+            def _is_rth(utc_time):
+                """Return True if utc_time is within regular trading hours."""
+                local = utc_time.astimezone(zone)
+                t = (local.hour, local.minute)
+                return (oh, om) <= t < (ch, cm)
 
-                    def _is_rth(utc_time):
-                        """Return True if utc_time is within regular trading hours."""
-                        local = utc_time.astimezone(zone)
-                        t = (local.hour, local.minute)
-                        return (oh, om) <= t < (ch, cm)
+            ibkr_recent_bars[future_key] = []
+            data_file = f"ohlc_{future_key}.json"
+            skipped = 0
+            try:
+                with open(data_file, "r") as f:
+                    data = json.load(f)
+                for bar in data:
+                    start = datetime.fromisoformat(bar["start_time"])
+                    end = datetime.fromisoformat(bar["end_time"])
+                    if start.tzinfo is None:
+                        start = start.replace(tzinfo=timezone.utc)
+                    else:
+                        start = start.astimezone(timezone.utc)
+                    if end.tzinfo is None:
+                        end = end.replace(tzinfo=timezone.utc)
+                    else:
+                        end = end.astimezone(timezone.utc)
+                    bar["start_time"] = start
+                    bar["end_time"] = end
+                    # Skip bars outside RTH
+                    if not _is_rth(start):
+                        skipped += 1
+                        continue
+                    # Skip dirty in-progress bars (duration >> interval)
+                    if (end - start).total_seconds() > 600:
+                        skipped += 1
+                        continue
+                    ibkr_recent_bars[future_key].append(bar)
+                LOGGER.info(
+                    f"[IBKR] Loaded {len(ibkr_recent_bars[future_key])} "
+                    f"RTH bars for {future_key} "
+                    f"(filtered {skipped} out-of-hours)"
+                )
+            except FileNotFoundError:
+                LOGGER.info(f"[IBKR] No data file {data_file}")
+            except Exception as e:
+                LOGGER.error(f"[IBKR] Failed to load bars: {e}")
 
-                    ibkr_recent_bars[future_key] = []
-                    data_file = f"ohlc_{future_key}.json"
-                    skipped = 0
-                    try:
-                        with open(data_file, "r") as f:
-                            data = json.load(f)
-                        for bar in data:
-                            start = datetime.fromisoformat(bar["start_time"])
-                            end = datetime.fromisoformat(bar["end_time"])
-                            if start.tzinfo is None:
-                                start = start.replace(tzinfo=timezone.utc)
-                            else:
-                                start = start.astimezone(timezone.utc)
-                            if end.tzinfo is None:
-                                end = end.replace(tzinfo=timezone.utc)
-                            else:
-                                end = end.astimezone(timezone.utc)
-                            bar["start_time"] = start
-                            bar["end_time"] = end
-                            # Skip bars outside RTH
-                            if not _is_rth(start):
-                                skipped += 1
-                                continue
-                            # Skip dirty in-progress bars (duration >> interval)
-                            if (end - start).total_seconds() > 600:
-                                skipped += 1
-                                continue
-                            ibkr_recent_bars[future_key].append(bar)
-                        LOGGER.info(
-                            f"[IBKR] Loaded {len(ibkr_recent_bars[future_key])} "
-                            f"RTH bars for {future_key} "
-                            f"(filtered {skipped} out-of-hours)"
-                        )
-                    except FileNotFoundError:
-                        LOGGER.info(f"[IBKR] No data file {data_file}")
-                    except Exception as e:
-                        LOGGER.error(f"[IBKR] Failed to load bars: {e}")
-
-            # Separate locks for IBKR bars
-            ibkr_bars_locks: Dict[str, asyncio.Lock] = {}
-            ibkr_bars_locks_map_lock = asyncio.Lock()
-            ibkr_metadata: Dict[str, Dict[str, Any]] = {}
-            ibkr_metadata_locks: Dict[str, asyncio.Lock] = {}
-            ibkr_metadata_locks_map_lock = asyncio.Lock()
-
-            # We will initialize IbkrTrading inside the lifespan context manager
-            # so it binds to the correct Uvicorn asyncio event loop.
-        except Exception as e:
-            LOGGER.warning(f"Failed to setup IBKR dependencies: {e}")
+    # Separate locks for IBKR bars
+    ibkr_bars_locks: Dict[str, asyncio.Lock] = {}
+    ibkr_bars_locks_map_lock = asyncio.Lock()
+    ibkr_metadata: Dict[str, Dict[str, Any]] = {}
+    ibkr_metadata_locks: Dict[str, asyncio.Lock] = {}
+    ibkr_metadata_locks_map_lock = asyncio.Lock()
 
     # Background task: subscribe to redis channel and forward events
     async def _redis_subscriber_task():
@@ -624,19 +603,26 @@ def create_app(
 
     # Background task: pump ib_async event loop so openTrades()/events stay current
     async def _ibkr_event_pump():
-        """Periodically pump ib_async event loop to process TWS messages."""
+        """Periodically pump ib_async event loop to process TWS messages.
+
+        Reconnection with exponential backoff (5 s → 300 s cap) is handled
+        by ibkr_client_instance.ensure_connected_async().
+        """
+        from pacavanza.modules.ibkr_client_instance import (
+            get_ib,
+            is_connected,
+            ensure_connected_async,
+        )
+
         if ibkr_trading is None:
             return
-        ib = ibkr_trading.ib
         LOGGER.info("Starting IBKR event pump task")
-        retry_delay = 5
-        max_delay = 300
         last_conn_state = None
         last_trading_disabled = None
         try:
             while True:
                 try:
-                    curr_conn_state = ib.isConnected()
+                    curr_conn_state = is_connected()
                     target_local_symbol = (
                         ibkr_trading.contract.localSymbol
                         if (ibkr_trading and getattr(ibkr_trading, "contract", None))
@@ -660,30 +646,14 @@ def create_app(
                         )
 
                     if not curr_conn_state:
-                        LOGGER.warning(
-                            f"IBKR connection lost, reconnecting in {retry_delay}s..."
-                        )
-                        await asyncio.sleep(retry_delay)
-                        try:
-                            ib.disconnect()
-                        except Exception:
-                            pass
-                        await asyncio.sleep(1)
-                        await ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=51)
-                        await ib.qualifyContractsAsync(ibkr_trading.contract)
-                        LOGGER.info("IBKR reconnected successfully.")
-                        retry_delay = 5  # reset on success
-                        if hasattr(ibkr_trading, "_setup_trade_subscription"):
-                            ibkr_trading._setup_trade_subscription(
-                                on_change_callback=_on_order_change,
-                                on_fill_callback=_on_fill,
-                            )
+                        # Reconnection with exponential backoff is handled
+                        # inside ensure_connected_async(); callbacks registered
+                        # in lifespan will re-setup trade subscriptions.
+                        await ensure_connected_async()
                     else:
-                        ib.sleep(0)  # process pending IB events without blocking
+                        get_ib().sleep(0)  # process pending IB events
                 except Exception as e:
-                    LOGGER.debug(f"IBKR event pump/reconnect error: {e}")
-                    if not ib.isConnected():
-                        retry_delay = min(retry_delay * 2, max_delay)
+                    LOGGER.debug(f"IBKR event pump error: {e}")
                 await asyncio.sleep(0.1)  # 100ms cycle
         except asyncio.CancelledError:
             LOGGER.info("IBKR event pump task cancelled (normal shutdown)")
@@ -707,42 +677,56 @@ def create_app(
 
         loop.set_exception_handler(custom_exception_handler)
 
-        # Connect IBKR async inside the correct event loop
-        if ibkr_conn is not None:
-            ib, contract = ibkr_conn
-            try:
-                await ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=51)
-                await ib.qualifyContractsAsync(contract)
-                LOGGER.info("IBKR async connected inside lifespan.")
+        # Connect IBKR via the unified singleton (async, inside the correct loop)
+        from pacavanza.modules.ibkr_client_instance import (
+            init_ibkr_async,
+            register_reconnect_callback,
+            disconnect as ibkr_disconnect,
+        )
 
-                ibkr_trading = IbkrTrading(
-                    ib=ib,
-                    contract=contract,
-                    recent_bars=ibkr_recent_bars,
-                    instrument_list=instrument_list,
-                    metadata=ibkr_metadata,
-                    logger=LOGGER,
-                    bars_locks_map=ibkr_bars_locks,
-                    metadata_locks_map=ibkr_metadata_locks,
-                    bars_map_lock=ibkr_bars_locks_map_lock,
-                    metadata_map_lock=ibkr_metadata_locks_map_lock,
+        try:
+            ib, contract = await init_ibkr_async()
+
+            from pacavanza.modules.ibkr_trading import IbkrTrading
+
+            ibkr_trading = IbkrTrading(
+                ib=ib,
+                contract=contract,
+                recent_bars=ibkr_recent_bars,
+                instrument_list=instrument_list,
+                metadata=ibkr_metadata,
+                logger=LOGGER,
+                bars_locks_map=ibkr_bars_locks,
+                metadata_locks_map=ibkr_metadata_locks,
+                bars_map_lock=ibkr_bars_locks_map_lock,
+                metadata_map_lock=ibkr_metadata_locks_map_lock,
+            )
+            if hasattr(ibkr_trading, "_setup_trade_subscription"):
+                ibkr_trading._setup_trade_subscription(
+                    on_change_callback=_on_order_change,
+                    on_fill_callback=_on_fill,
                 )
-                if hasattr(ibkr_trading, "_setup_trade_subscription"):
+
+            # Re-setup trade subscriptions after reconnect
+            def _on_ibkr_reconnect():
+                if ibkr_trading and hasattr(ibkr_trading, "_setup_trade_subscription"):
                     ibkr_trading._setup_trade_subscription(
                         on_change_callback=_on_order_change,
                         on_fill_callback=_on_fill,
                     )
 
-                # Create portfolio data provider (read-only, shares the IB conn)
-                try:
-                    from pacavanza.modules.ibkr_portfolio import IbkrPortfolio
+            register_reconnect_callback(_on_ibkr_reconnect)
 
-                    ibkr_portfolio = IbkrPortfolio(ib)
-                    LOGGER.info("IbkrPortfolio instance created")
-                except Exception as e:
-                    LOGGER.warning(f"Failed to create IbkrPortfolio: {e}")
+            # Create portfolio data provider (read-only, shares the IB conn)
+            try:
+                from pacavanza.modules.ibkr_portfolio import IbkrPortfolio
+
+                ibkr_portfolio = IbkrPortfolio(ib)
+                LOGGER.info("IbkrPortfolio instance created")
             except Exception as e:
-                LOGGER.error(f"Failed to connect IBKR async: {e}")
+                LOGGER.warning(f"Failed to create IbkrPortfolio: {e}")
+        except Exception as e:
+            LOGGER.error(f"Failed to connect IBKR async: {e}")
 
         # start subscriber task in background
         app.state._redis_task = asyncio.create_task(_redis_subscriber_task())
@@ -779,12 +763,8 @@ def create_app(
                 await redis_client.aclose()
             except Exception:
                 pass
-            # disconnect IBKR if connected
-            if ibkr_trading is not None:
-                try:
-                    ibkr_trading.ib.disconnect()
-                except Exception:
-                    pass
+            # disconnect IBKR via singleton
+            ibkr_disconnect()
             LOGGER.info("FastAPI Redis WS app stopped (lifespan)")
 
     # create app with lifespan
@@ -1879,35 +1859,11 @@ def create_app(
 
 
 def main():
-    # run as: python -m pacavanza.backend.main
-
-    # Try to create an IbkrTrading instance for the future chart
-    ibkr_inst = None
-    try:
-        from ib_async import IB, ContFuture
-        from pacavanza.modules.ibkr_trading import IbkrTrading
-
-        ib = IB()
-        # Do NOT connect or qualify here, wait for lifespan context manager!
-        contract = ContFuture("OMXS30", "OMS")
-        LOGGER.info(
-            f"IBKR instance created for {contract.symbol}. Will connect in lifespan."
-        )
-
-        # IbkrTrading shares recent_bars/instrument_list with AvanzaTrading
-        # but they are populated inside create_app. So we create a minimal
-        # instance here and it will be wired up after create_app populates
-        # the in-memory state.
-        ibkr_inst = (ib, contract)
-    except Exception as e:
-        LOGGER.warning(f"Could not connect to IBKR: {e}. IBKR endpoints disabled.")
-
-    # Build the app — AvanzaTrading is always created internally.
-    # ibkr_trading is created using shared state from inside create_app.
+    # run as: python -m pacavanza.backend
+    # IBKR connection is handled lazily by ibkr_client_instance inside lifespan.
     app = create_app(
         redis_url="redis://localhost:6379/0",
         redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
-        ibkr_conn=ibkr_inst,
     )
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
 
