@@ -77,6 +77,9 @@ class IbkrTrading(BaseAvanzaTrading):
         # Queue of fills from standalone limit orders awaiting position update
         # to trigger auto-OCA.  Each entry: {price, side, volume, orderId}
         self._pending_entry_fills: List[Dict[str, Any]] = []
+        # Track if we are currently flat to reliably trigger Auto-OCA
+        # on the first fill, avoiding race conditions between execDetails and position events.
+        self._is_flat = True
 
         # Subscribe to position updates from IBKR so that ib.positions()
         # is automatically populated and updated.
@@ -1320,17 +1323,19 @@ class IbkrTrading(BaseAvanzaTrading):
         fill = fills[-1]
 
         # Only trigger auto-OCA when a position is opened from flat.
-        pre_fill_pos = fill.get("pre_fill_pos", None)
-        if pre_fill_pos is not None and pre_fill_pos != 0:
+        if not getattr(self, "_is_flat", False):
             LOGGER.info(
-                f"Auto-OCA: pre-fill position was {pre_fill_pos}; this fill "
-                f"did not open a position from flat. Skipping auto-OCA."
+                f"Auto-OCA: this fill did not open a position from flat. "
+                f"Skipping auto-OCA."
             )
             return
 
         if self._has_active_oca_or_bracket():
             LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
             return
+
+        # We are opening a position from flat. Clear the flag so subsequent fills don't duplicate OCA.
+        self._is_flat = False
 
         fill_price = fill["price"]
         volume = abs(pos)
@@ -1451,6 +1456,9 @@ class IbkrTrading(BaseAvanzaTrading):
             f"Position update: conId={position.contract.conId}, "
             f"position={position.position}, avgCost={position.avgCost}"
         )
+        if position.position == 0:
+            self._is_flat = True
+
         try:
             self._sync_sl_tp_volume()
         except Exception as e:
