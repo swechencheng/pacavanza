@@ -744,8 +744,8 @@ class FutureTradeMonitor:
                         zone = timezone.utc
 
                     now_local = datetime.now(zone)
-                    # Check if it's 16:55
-                    if now_local.hour == 16 and now_local.minute == 55:
+                    # Check if it's 17:15
+                    if now_local.hour == 17 and now_local.minute == 15:
                         current_date = now_local.date()
                         if last_flattened_date != current_date:
                             LOGGER.info(
