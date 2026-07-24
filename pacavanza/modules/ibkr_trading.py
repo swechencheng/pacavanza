@@ -1718,7 +1718,10 @@ class IbkrTrading(BaseAvanzaTrading):
         """Cancel a specific order by orderId."""
         trade = self._find_trade_by_order_id(order_id)
         if not trade:
-            raise Exception(f"No active order found with orderId={order_id}")
+            LOGGER.warning(
+                f"No active order found with orderId={order_id}. It may have already been filled or cancelled."
+            )
+            return {"orderId": order_id, "status": "NotFoundOrInactive"}
         self.ib.cancelOrder(trade.order)
         trade.orderStatus.status = "Cancelled"
         LOGGER.info(f"Cancelled order {order_id}")
