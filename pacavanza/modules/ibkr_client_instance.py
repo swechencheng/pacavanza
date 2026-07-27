@@ -101,6 +101,9 @@ async def init_ibkr_async(
     Must be called from an active asyncio event loop (e.g. inside a
     Uvicorn lifespan context manager).
 
+    On failure, cleans up ``_ib`` / ``_contract`` (sets them to ``None``)
+    so that ``ensure_connected_async()`` can create fresh instances later.
+
     Returns ``(ib, contract)``.
     """
     global _ib, _contract, _contract_symbol, _contract_exchange, _retry_delay
@@ -121,8 +124,19 @@ async def init_ibkr_async(
     _ib = IB()
     _contract = ContFuture(symbol, exchange)
 
-    await _ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
-    await _ib.qualifyContractsAsync(_contract)
+    try:
+        await _ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
+        await _ib.qualifyContractsAsync(_contract)
+    except Exception:
+        # Clean up so ensure_connected_async() can create fresh instances
+        try:
+            _ib.disconnect()
+        except Exception:
+            pass
+        _ib = None
+        _contract = None
+        raise
+
     _retry_delay = _INITIAL_RETRY_DELAY
 
     LOGGER.info(
@@ -146,32 +160,41 @@ async def ensure_connected_async() -> bool:
     all registered ``_reconnect_callbacks`` are invoked.  On failure the
     delay doubles (capped at 300 s / 5 min).
 
+    Handles the case where ``_ib`` is ``None`` (e.g. init_ibkr_async()
+    failed at startup) by creating a fresh IB instance.
+
     Returns ``True`` on a healthy connection, ``False`` if the reconnect
     attempt failed.
     """
-    global _retry_delay
+    global _ib, _contract, _retry_delay
 
-    if _ib is None:
-        return False
-
-    if _ib.isConnected():
+    if _ib is not None and _ib.isConnected():
         return True
 
-    # ── disconnected → attempt reconnect ──
+    # ── disconnected or never initialised → attempt (re)connect ──
     LOGGER.warning(f"IBKR connection lost, reconnecting in {_retry_delay:.0f}s…")
     await asyncio.sleep(_retry_delay)
 
     try:
-        try:
-            _ib.disconnect()
-        except Exception:
-            pass
+        # Clean up stale instance
+        if _ib is not None:
+            try:
+                _ib.disconnect()
+            except Exception:
+                pass
 
         await asyncio.sleep(1)
+
+        # Create a fresh IB instance if needed (covers startup failure case)
+        if _ib is None or not hasattr(_ib, "connectAsync"):
+            _ib = IB()
+        if _contract is None:
+            _contract = ContFuture(_contract_symbol, _contract_exchange)
+
         await _ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
         await _ib.qualifyContractsAsync(_contract)
 
-        LOGGER.info("IBKR reconnected successfully.")
+        LOGGER.info(f"IBKR reconnected successfully: contract={_contract.localSymbol}")
         _retry_delay = _INITIAL_RETRY_DELAY
 
         # invoke reconnect callbacks
@@ -183,7 +206,7 @@ async def ensure_connected_async() -> bool:
 
         return True
     except Exception as exc:
-        LOGGER.debug(f"IBKR reconnect failed: {exc}")
+        LOGGER.warning(f"IBKR reconnect failed: {exc}")
         _retry_delay = min(_retry_delay * 2, _MAX_RETRY_DELAY)
         return False
 

@@ -607,15 +607,21 @@ def create_app(
 
         Reconnection with exponential backoff (5 s → 300 s cap) is handled
         by ibkr_client_instance.ensure_connected_async().
+
+        If the initial IBKR connection failed at startup (ibkr_trading is None),
+        this task keeps retrying and creates the IbkrTrading/IbkrPortfolio
+        instances once the connection succeeds.
         """
+        nonlocal ibkr_trading, ibkr_portfolio
+
         from pacavanza.modules.ibkr_client_instance import (
             get_ib,
+            get_contract,
             is_connected,
             ensure_connected_async,
+            register_reconnect_callback,
         )
 
-        if ibkr_trading is None:
-            return
         LOGGER.info("Starting IBKR event pump task")
         last_conn_state = None
         last_trading_disabled = None
@@ -623,6 +629,79 @@ def create_app(
             while True:
                 try:
                     curr_conn_state = is_connected()
+
+                    # If we don't have ibkr_trading yet (startup failure),
+                    # keep retrying the connection and set up when it succeeds.
+                    if ibkr_trading is None:
+                        if not curr_conn_state:
+                            await ensure_connected_async()
+                            await asyncio.sleep(0.1)
+                            continue
+                        else:
+                            # Connection succeeded — perform deferred init
+                            LOGGER.info(
+                                "IBKR connection established (deferred). "
+                                "Creating IbkrTrading and IbkrPortfolio…"
+                            )
+                            try:
+                                ib = get_ib()
+                                contract = get_contract()
+
+                                from pacavanza.modules.ibkr_trading import IbkrTrading
+
+                                ibkr_trading = IbkrTrading(
+                                    ib=ib,
+                                    contract=contract,
+                                    recent_bars=ibkr_recent_bars,
+                                    instrument_list=instrument_list,
+                                    metadata=ibkr_metadata,
+                                    logger=LOGGER,
+                                    bars_locks_map=ibkr_bars_locks,
+                                    metadata_locks_map=ibkr_metadata_locks,
+                                    bars_map_lock=ibkr_bars_locks_map_lock,
+                                    metadata_map_lock=ibkr_metadata_locks_map_lock,
+                                )
+                                if hasattr(ibkr_trading, "_setup_trade_subscription"):
+                                    ibkr_trading._setup_trade_subscription(
+                                        on_change_callback=_on_order_change,
+                                        on_fill_callback=_on_fill,
+                                    )
+
+                                # Register reconnect callback for future reconnects
+                                def _on_ibkr_reconnect():
+                                    if ibkr_trading and hasattr(
+                                        ibkr_trading, "_setup_trade_subscription"
+                                    ):
+                                        ibkr_trading._setup_trade_subscription(
+                                            on_change_callback=_on_order_change,
+                                            on_fill_callback=_on_fill,
+                                        )
+
+                                register_reconnect_callback(_on_ibkr_reconnect)
+
+                                try:
+                                    from pacavanza.modules.ibkr_portfolio import (
+                                        IbkrPortfolio,
+                                    )
+
+                                    ibkr_portfolio = IbkrPortfolio(ib)
+                                    LOGGER.info(
+                                        "IbkrPortfolio instance created (deferred)"
+                                    )
+                                except Exception as e:
+                                    LOGGER.warning(
+                                        f"Failed to create IbkrPortfolio (deferred): {e}"
+                                    )
+
+                                LOGGER.info("Deferred IBKR initialisation complete.")
+                            except Exception as e:
+                                LOGGER.error(
+                                    f"Deferred IBKR initialisation failed: {e}"
+                                )
+                                ibkr_trading = None
+                                await asyncio.sleep(5)
+                                continue
+
                     target_local_symbol = (
                         ibkr_trading.contract.localSymbol
                         if (ibkr_trading and getattr(ibkr_trading, "contract", None))
