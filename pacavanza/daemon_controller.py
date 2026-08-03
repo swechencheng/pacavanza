@@ -39,6 +39,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ],
 )
+logging.getLogger("ib_async").setLevel(logging.WARNING)
 logger = logging.getLogger("controller")
 
 PROCESS_MAP = {}
