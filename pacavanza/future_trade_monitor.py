@@ -2,23 +2,27 @@
 future_trade_monitor.py
 
 Subscribes to the OMXS30 future real-time stream (Redis channel
-`pacavanza:future_updates`), and on every 5-minute bar completion:
+`pacavanza:future_updates`), and on every 5-minute bar completion
+applies an ABC pivot-pattern trailing stop:
 
   Long position:
-    - Counts consecutive bear-bar pullbacks.
-    - If a completed bar closes higher than the absolute highest-high reached
-      since the position was entered (excluding the current bar), the counter
-      is reset to zero (but still increments if the completed bar is a bear).
-    - When the counter reaches PULLBACK_TRIGGER_COUNT (e.g. 5), places a SELL STOP order
-      1 tick (0.25) below the lowest-low of the last 5 bear bars.
+    - A = Pivot Low (initial stop reference)
+    - B = Pivot High (swing high after A)
+    - C = Pivot Low with C.low > A.low (higher low)
+    - Confirmation: a bar on C's right leg closes above B's pivot high
+    - Action: move SELL STOP from A.low → C.low
 
   Short position:
-    - Counts consecutive bull-bar pullbacks.
-    - If a completed bar closes lower than the absolute lowest-low reached
-      since the position was entered (excluding the current bar), the counter
-      is reset to zero (but still increments if the completed bar is a bull).
-    - When the counter reaches PULLBACK_TRIGGER_COUNT (e.g. 5), places a BUY STOP order
-      1 tick (0.25) above the highest-high of the last 5 bull bars.
+    - A = Pivot High (initial stop reference)
+    - B = Pivot Low (swing low after A)
+    - C = Pivot High with C.high < A.high (lower high)
+    - Confirmation: a bar on C's right leg closes below B's pivot low
+    - Action: move BUY STOP from A.high → C.high
+
+  All pivots require at least 2 bars on the left leg and 2 bars on
+  the right leg, and are detected on bar close/completion only.
+  After a successful stop move, C becomes the new A and the pattern
+  chains indefinitely.
 
 Order placement uses IbkrTrading (ibkr_trading.py).
 
@@ -33,7 +37,7 @@ import sys
 import threading
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 import redis.asyncio as aioredis
@@ -51,8 +55,9 @@ BACKEND_URL = "http://localhost:8001"
 # OMXS30 future tick size
 TICK_SIZE = 0.25
 
-# Pullback counter threshold before placing stop order
-PULLBACK_TRIGGER_COUNT = 5
+# Pivot detection: minimum bars on each leg
+PIVOT_LEFT = 2
+PIVOT_RIGHT = 2
 
 
 # ---------------------------------------------------------------------------
@@ -70,31 +75,97 @@ def _is_bull_bar(bar: Dict[str, Any]) -> bool:
     return float(bar["close"]) > float(bar["open"])
 
 
-def _lowest_low_of_bear_bars(bars: List[Dict[str, Any]], count: int) -> Optional[float]:
-    """Return the lowest low of the most-recent `count` bear bars."""
-    bear_lows = []
-    for b in reversed(bars):
-        if _is_bear_bar(b):
-            bear_lows.append(float(b["low"]))
-            if len(bear_lows) == count:
-                break
-    if bear_lows:
-        return min(bear_lows)
+# ---------------------------------------------------------------------------
+# Pivot detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_pivot_low_at(
+    bars: List[Dict[str, Any]],
+    idx: int,
+    left: int = PIVOT_LEFT,
+    right: int = PIVOT_RIGHT,
+) -> bool:
+    """
+    Check whether the bar at *idx* is a pivot low.
+
+    A pivot low requires *left* bars to the left with lows >= pivot low,
+    and *right* bars to the right with lows >= pivot low.
+    """
+    if idx < left or idx + right >= len(bars):
+        return False
+    pivot_low = float(bars[idx]["low"])
+    for i in range(1, left + 1):
+        if float(bars[idx - i]["low"]) < pivot_low:
+            return False
+    for i in range(1, right + 1):
+        if float(bars[idx + i]["low"]) < pivot_low:
+            return False
+    return True
+
+
+def _is_pivot_high_at(
+    bars: List[Dict[str, Any]],
+    idx: int,
+    left: int = PIVOT_LEFT,
+    right: int = PIVOT_RIGHT,
+) -> bool:
+    """
+    Check whether the bar at *idx* is a pivot high.
+
+    A pivot high requires *left* bars to the left with highs <= pivot high,
+    and *right* bars to the right with highs <= pivot high.
+    """
+    if idx < left or idx + right >= len(bars):
+        return False
+    pivot_high = float(bars[idx]["high"])
+    for i in range(1, left + 1):
+        if float(bars[idx - i]["high"]) > pivot_high:
+            return False
+    for i in range(1, right + 1):
+        if float(bars[idx + i]["high"]) > pivot_high:
+            return False
+    return True
+
+
+def _find_nearest_pivot_low(
+    bars: List[Dict[str, Any]],
+    left: int = PIVOT_LEFT,
+    right: int = PIVOT_RIGHT,
+    min_idx: int = 0,
+) -> Optional[Tuple[int, float]]:
+    """
+    Scan backwards through *bars* and return ``(index, low_value)`` for the
+    most recent pivot low, or ``None`` if none found.
+
+    The latest confirmable pivot is at index ``len(bars) - 1 - right``
+    because it needs *right* bars to its right.
+
+    *min_idx* limits how far back the scan goes (inclusive).
+    """
+    start = max(left, min_idx)
+    for idx in range(len(bars) - 1 - right, start - 1, -1):
+        if _is_pivot_low_at(bars, idx, left, right):
+            return idx, float(bars[idx]["low"])
     return None
 
 
-def _highest_high_of_bull_bars(
-    bars: List[Dict[str, Any]], count: int
-) -> Optional[float]:
-    """Return the highest high of the most-recent `count` bull bars."""
-    bull_highs = []
-    for b in reversed(bars):
-        if _is_bull_bar(b):
-            bull_highs.append(float(b["high"]))
-            if len(bull_highs) == count:
-                break
-    if bull_highs:
-        return max(bull_highs)
+def _find_nearest_pivot_high(
+    bars: List[Dict[str, Any]],
+    left: int = PIVOT_LEFT,
+    right: int = PIVOT_RIGHT,
+    min_idx: int = 0,
+) -> Optional[Tuple[int, float]]:
+    """
+    Scan backwards through *bars* and return ``(index, high_value)`` for the
+    most recent pivot high, or ``None`` if none found.
+
+    *min_idx* limits how far back the scan goes (inclusive).
+    """
+    start = max(left, min_idx)
+    for idx in range(len(bars) - 1 - right, start - 1, -1):
+        if _is_pivot_high_at(bars, idx, left, right):
+            return idx, float(bars[idx]["high"])
     return None
 
 
@@ -106,12 +177,11 @@ def _highest_high_of_bull_bars(
 class FutureTradeMonitor:
     """
     Listens to the Redis `pacavanza:future_updates` stream and applies the
-    pullback-counter logic described in the module docstring.
+    ABC pivot-pattern trailing stop described in the module docstring.
 
     State:
-        _completed_bars  – ordered list of finalised 5m bars for the instrument
-        _pullback_count  – current pullback bar count (reset on higher-high /
-                           lower-low; incremented on bear/bull completion)
+        _bars       – ordered list of finalised 5m bars per instrument
+        _abc_state  – ABC pattern tracking state per instrument
     """
 
     def __init__(
@@ -129,8 +199,9 @@ class FutureTradeMonitor:
         # in-memory bar store, keyed by instrument id
         self._bars: Dict[str, List[Dict[str, Any]]] = {}
 
-        # pullback counter state per instrument
-        self._pullback_count: Dict[str, int] = {}
+        # ABC pattern state per instrument
+        # Each entry tracks the initial anchor: {"A": float, "A_idx": int}
+        self._abc_state: Dict[str, Optional[Dict[str, Any]]] = {}
 
         # track the extreme price since position entry
         self._highest_since_entry: Dict[str, float] = {}
@@ -298,7 +369,7 @@ class FutureTradeMonitor:
                 "action": action,
                 "volume": volume,
                 "stopPrice": stop_price,
-                "orderRef": "PullbackSL",
+                "orderRef": "ABC_TrailingStop",
             }
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload) as resp:
@@ -436,6 +507,35 @@ class FutureTradeMonitor:
     # Bar processing logic
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _today_first_bar_idx(
+        bars: List[Dict[str, Any]], tz_name: str = "Europe/Stockholm"
+    ) -> int:
+        """
+        Return the index of the first bar whose ``start_time`` falls on
+        today's date in the given timezone.  Falls back to 0 if parsing
+        fails or all bars are from earlier days.
+        """
+        try:
+            zone = ZoneInfo(tz_name)
+        except Exception:
+            zone = ZoneInfo("Europe/Stockholm")
+        today = datetime.now(zone).date()
+
+        for i, b in enumerate(bars):
+            st = b.get("start_time", "")
+            if not st:
+                continue
+            try:
+                dt = datetime.fromisoformat(st)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=zone)
+                if dt.astimezone(zone).date() == today:
+                    return i
+            except Exception:
+                continue
+        return 0
+
     def _update_extremes(
         self,
         instrument_id: str,
@@ -445,8 +545,6 @@ class FutureTradeMonitor:
     ) -> None:
         """
         Track the highest-high and lowest-low since the position was entered.
-        If a new extreme is found on a completed bar (based on close price),
-        the pullback counter is reset to 0.
         """
         current_dir = 1 if signed_pos > 0 else (-1 if signed_pos < 0 else 0)
         last_dir = self._current_direction.get(instrument_id, 0)
@@ -455,7 +553,7 @@ class FutureTradeMonitor:
         if current_dir != last_dir:
             self._highest_since_entry.pop(instrument_id, None)
             self._lowest_since_entry.pop(instrument_id, None)
-            self._pullback_count[instrument_id] = 0
+            self._abc_state.pop(instrument_id, None)
             self._current_direction[instrument_id] = current_dir
 
         if current_dir == 0:
@@ -463,7 +561,6 @@ class FutureTradeMonitor:
 
         current_high = float(bar["high"])
         current_low = float(bar["low"])
-        current_close = float(bar["close"])
 
         # Initialize if not set (this is the entry bar)
         if instrument_id not in self._highest_since_entry:
@@ -471,131 +568,165 @@ class FutureTradeMonitor:
             self._lowest_since_entry[instrument_id] = current_low
 
         if current_dir > 0:
-            if is_completed:
-                if current_close > self._highest_since_entry[instrument_id]:
-                    LOGGER.info(
-                        f"[{instrument_id}] Long: completed bar close ({current_close}) > "
-                        f"previous highest-high ({self._highest_since_entry[instrument_id]}). Resetting pullback counter."
-                    )
-                    self._pullback_count[instrument_id] = 0
-
-                # Update the highest-high tracker for the next bar
-                if current_high > self._highest_since_entry[instrument_id]:
-                    self._highest_since_entry[instrument_id] = current_high
+            if current_high > self._highest_since_entry[instrument_id]:
+                self._highest_since_entry[instrument_id] = current_high
 
         elif current_dir < 0:
-            if is_completed:
-                if current_close < self._lowest_since_entry[instrument_id]:
-                    LOGGER.info(
-                        f"[{instrument_id}] Short: completed bar close ({current_close}) < "
-                        f"previous lowest-low ({self._lowest_since_entry[instrument_id]}). Resetting pullback counter."
-                    )
-                    self._pullback_count[instrument_id] = 0
+            if current_low < self._lowest_since_entry[instrument_id]:
+                self._lowest_since_entry[instrument_id] = current_low
 
-                # Update the lowest-low tracker for the next bar
-                if current_low < self._lowest_since_entry[instrument_id]:
-                    self._lowest_since_entry[instrument_id] = current_low
+    def _add_or_update_bar(self, instrument_id: str, bar: Dict[str, Any]) -> None:
+        """
+        Deduplicates and appends bars by start_time.
+        """
+        bars = self._bars.setdefault(instrument_id, [])
+        bar_start = bar.get("start_time")
+        if not bar_start:
+            return
+
+        for i in range(len(bars) - 1, -1, -1):
+            if bars[i].get("start_time") == bar_start:
+                bars[i] = bar
+                return
+
+        bars.append(bar)
+        if len(bars) > 1500:
+            excess = len(bars) - 1500
+            del bars[:excess]
+            state = self._abc_state.get(instrument_id)
+            if state and state.get("A_idx") is not None:
+                state["A_idx"] -= excess
 
     async def _on_bar_completed(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
         Called once per 5m bar completion.
 
-        Implements the pullback-counter rules for both long and short positions.
-        All counter mutations are guarded behind current position checks so that
-        the monitor is a no-op when flat.
+        Implements the ABC pivot-pattern trailing stop using a stateless backwards scan.
         """
-        bars = self._bars.setdefault(instrument_id, [])
-
-        # Append or update the completed bar
-        bar_start = bar.get("start_time")
-        if bars and bars[-1].get("start_time") == bar_start:
-            bars[-1] = bar  # finalise in-place
-        else:
-            bars.append(bar)
+        self._add_or_update_bar(instrument_id, bar)
+        bars = self._bars[instrument_id]
 
         signed_pos = await self._get_signed_position()
         self._update_extremes(instrument_id, bar, signed_pos, is_completed=True)
 
         if signed_pos == 0:
             LOGGER.debug(f"[{instrument_id}] Flat position – no action.")
+            self._abc_state.pop(instrument_id, None)
             return
 
-        count = self._pullback_count.get(instrument_id, 0)
-        is_bear = _is_bear_bar(bar)
-        is_bull = _is_bull_bar(bar)
+        is_long = signed_pos > 0
+        n = len(bars)
 
-        if signed_pos > 0:
-            # ── Long position ─────────────────────────────────────────
-            # Increment counter if bear bar on completion
-            if is_bear:
-                count += 1
-                LOGGER.info(
-                    f"[{instrument_id}] Long: bear bar completed. "
-                    f"Pullback counter → {count}."
-                )
+        # ── Ensure we have an A pivot ────────
+        if (
+            instrument_id not in self._abc_state
+            or self._abc_state[instrument_id] is None
+        ):
+            today_idx = self._today_first_bar_idx(bars)
 
-            self._pullback_count[instrument_id] = count
-
-            if count >= PULLBACK_TRIGGER_COUNT:
-                low = _lowest_low_of_bear_bars(bars, count)
-                if low is not None:
-                    stop_price = round(low - TICK_SIZE, 2)
+            if is_long:
+                result = _find_nearest_pivot_low(bars, min_idx=today_idx)
+                if result:
+                    a_idx, a_val = result
+                    self._abc_state[instrument_id] = {"A": a_val, "A_idx": a_idx}
                     LOGGER.info(
-                        f"[{instrument_id}] Long: pullback counter reached {count}. "
-                        f"Placing SELL STOP at {stop_price} "
-                        f"(lowest low of last {count} bear bars={low} – 1 tick)."
+                        f"[{instrument_id}] Long ABC: A pivot low detected "
+                        f"at bar idx {a_idx}, low={a_val}."
                     )
-                    await self._place_sell_stop(stop_price)
-                    # Reset counter so we don't re-place on every subsequent bar
-                    self._pullback_count[instrument_id] = 0
                 else:
-                    LOGGER.warning(
-                        f"[{instrument_id}] Long: pullback counter={count} but not enough bear bars found."
+                    LOGGER.debug(
+                        f"[{instrument_id}] Long ABC: no qualifying pivot low found in today's bars."
                     )
+            else:
+                result = _find_nearest_pivot_high(bars, min_idx=today_idx)
+                if result:
+                    a_idx, a_val = result
+                    self._abc_state[instrument_id] = {"A": a_val, "A_idx": a_idx}
+                    LOGGER.info(
+                        f"[{instrument_id}] Short ABC: A pivot high detected "
+                        f"at bar idx {a_idx}, high={a_val}."
+                    )
+                else:
+                    LOGGER.debug(
+                        f"[{instrument_id}] Short ABC: no qualifying pivot high found in today's bars."
+                    )
+            return
 
+        state = self._abc_state[instrument_id]
+        a_val = state["A"]
+        a_idx = state["A_idx"]
+
+        # ── Scan backwards for C and B ────────
+        if is_long:
+            c_result = None
+            for idx in range(n - 1 - PIVOT_RIGHT, a_idx, -1):
+                if _is_pivot_low_at(bars, idx):
+                    if float(bars[idx]["low"]) > a_val:
+                        c_result = (idx, float(bars[idx]["low"]))
+                        break
+
+            if c_result:
+                c_idx, c_val = c_result
+                b_result = None
+                for idx in range(c_idx - 1, a_idx, -1):
+                    if _is_pivot_high_at(bars, idx):
+                        b_result = (idx, float(bars[idx]["high"]))
+                        break
+
+                if b_result:
+                    b_idx, b_val = b_result
+                    current_close = float(bars[-1]["close"])
+                    if current_close > b_val:
+                        LOGGER.info(
+                            f"[{instrument_id}] Long ABC CONFIRMED: bar close {current_close} > "
+                            f"B={b_val} (idx {b_idx}). Moving SELL STOP to C={c_val} (idx {c_idx})."
+                        )
+                        stop_price = round(c_val - TICK_SIZE, 2)
+                        await self._place_sell_stop(stop_price)
+
+                        state["A"] = c_val
+                        state["A_idx"] = c_idx
+                        LOGGER.info(
+                            f"[{instrument_id}] Long ABC: chaining → new A={c_val} (idx {c_idx})."
+                        )
         else:
-            # ── Short position ────────────────────────────────────────
-            # Increment counter if bull bar on completion
-            if is_bull:
-                count += 1
-                LOGGER.info(
-                    f"[{instrument_id}] Short: bull bar completed. "
-                    f"Pullback counter → {count}."
-                )
+            c_result = None
+            for idx in range(n - 1 - PIVOT_RIGHT, a_idx, -1):
+                if _is_pivot_high_at(bars, idx):
+                    if float(bars[idx]["high"]) < a_val:
+                        c_result = (idx, float(bars[idx]["high"]))
+                        break
 
-            self._pullback_count[instrument_id] = count
+            if c_result:
+                c_idx, c_val = c_result
+                b_result = None
+                for idx in range(c_idx - 1, a_idx, -1):
+                    if _is_pivot_low_at(bars, idx):
+                        b_result = (idx, float(bars[idx]["low"]))
+                        break
 
-            if count >= PULLBACK_TRIGGER_COUNT:
-                high = _highest_high_of_bull_bars(bars, count)
-                if high is not None:
-                    stop_price = round(high + TICK_SIZE, 2)
-                    LOGGER.info(
-                        f"[{instrument_id}] Short: pullback counter reached {count}. "
-                        f"Placing BUY STOP at {stop_price} "
-                        f"(highest high of last {count} bull bars={high} + 1 tick)."
-                    )
-                    await self._place_buy_stop(stop_price)
-                    # Reset counter so we don't re-place on every subsequent bar
-                    self._pullback_count[instrument_id] = 0
-                else:
-                    LOGGER.warning(
-                        f"[{instrument_id}] Short: pullback counter={count} but not enough bull bars found."
-                    )
+                if b_result:
+                    b_idx, b_val = b_result
+                    current_close = float(bars[-1]["close"])
+                    if current_close < b_val:
+                        LOGGER.info(
+                            f"[{instrument_id}] Short ABC CONFIRMED: bar close {current_close} < "
+                            f"B={b_val} (idx {b_idx}). Moving BUY STOP to C={c_val} (idx {c_idx})."
+                        )
+                        stop_price = round(c_val + TICK_SIZE, 2)
+                        await self._place_buy_stop(stop_price)
+
+                        state["A"] = c_val
+                        state["A_idx"] = c_idx
+                        LOGGER.info(
+                            f"[{instrument_id}] Short ABC: chaining → new A={c_val} (idx {c_idx})."
+                        )
 
     async def _on_bar_update(self, instrument_id: str, bar: Dict[str, Any]) -> None:
         """
         Called on every in-progress bar update (type='update').
         """
-        bars = self._bars.setdefault(instrument_id, [])
-        bar_start = bar.get("start_time")
-        if bars and bars[-1].get("start_time") == bar_start:
-            bars[-1] = bar
-        else:
-            # New bar started
-            bars.append(bar)
-            # Keep bounded
-            if len(bars) > 1500:
-                bars[:] = bars[-1500:]
+        self._add_or_update_bar(instrument_id, bar)
 
         signed_pos = await self._get_signed_position()
         self._update_extremes(instrument_id, bar, signed_pos)
