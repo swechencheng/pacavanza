@@ -9,9 +9,19 @@ LOGGER = logging.getLogger("avanza_sse_client")
 
 
 class AvanzaSSEClient:
-    def __init__(self, avanza: Avanza, sse_url: str, impersonate: str = "firefox"):
+    def __init__(
+        self,
+        avanza: Avanza,
+        sse_url: str,
+        method: str = "GET",
+        json_payload: dict = None,
+        impersonate: str = "firefox",
+    ):
         self.session_cookie = avanza._session.cookies.get_dict()
+        self.headers = {"X-SecurityToken": getattr(avanza, "_security_token", "")}
         self.sse_url = sse_url
+        self.method = method
+        self.json_payload = json_payload
         self.running = False
         self.listeners = []
         self.last_event = None
@@ -33,11 +43,11 @@ class AvanzaSSEClient:
 
     async def _listen(self):
         async with AsyncSession(impersonate=self.impersonate) as session:
-            async with session.stream(
-                "GET",
-                self.sse_url,
-                cookies=self.session_cookie,
-            ) as resp:
+            kwargs = {"cookies": self.session_cookie, "headers": self.headers}
+            if self.json_payload is not None:
+                kwargs["json"] = self.json_payload
+
+            async with session.stream(self.method, self.sse_url, **kwargs) as resp:
                 LOGGER.debug("Connected to SSE stream: %s", self.sse_url)
                 async for line in resp.aiter_lines():
                     if not line:
