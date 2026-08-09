@@ -22,7 +22,9 @@ LOGGER = logging.getLogger("trend_bar_alert_daemon")
 SECRET_FILE = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "../.tg_bot_secret.json")
 )
-REDIS_URL = "redis://localhost:6379/0"
+
+from pacavanza.config import REDIS_URL
+
 CHANNEL = "pacavanza:future_updates"
 
 

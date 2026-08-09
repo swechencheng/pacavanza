@@ -13,6 +13,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from .modules.avanza_trading import AvanzaTrading
 from .utils.utils import flatten_instrument_list, fetch_active_omxs30_future
+from .config import REDIS_URL, BACKEND_PORT
 
 
 # compute pacavanza package root (pacavanza/)
@@ -66,7 +67,7 @@ class WebSocketManager:
 
 
 def create_app(
-    redis_url="redis://localhost:6379/0",
+    redis_url=REDIS_URL,
     redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     static_html_path: str | Path = STATIC_HTML,
 ):
@@ -1941,10 +1942,10 @@ def main():
     # run as: python -m pacavanza.backend
     # IBKR connection is handled lazily by ibkr_client_instance inside lifespan.
     app = create_app(
-        redis_url="redis://localhost:6379/0",
+        redis_url=REDIS_URL,
         redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     )
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=BACKEND_PORT, log_level="info")
 
 
 if __name__ == "__main__":

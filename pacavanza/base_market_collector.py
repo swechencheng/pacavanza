@@ -57,7 +57,7 @@ class BaseMarketCollector:
         instrument_list_path=None,
         instrument_datas: dict = None,
         instrument_list: dict = None,
-        redis_url: str = "redis://localhost:6379/0",
+        redis_url: str = None,
         redis_channel: str = None,
         completed_save_interval: Optional[float] = None,
         current_snapshot_interval: float = 3.0,
@@ -110,12 +110,21 @@ class BaseMarketCollector:
         self._loop = None
 
         # Redis pub/sub config
-        self.redis_url = redis_url
         self.redis_channel = redis_channel or self.default_redis_channel
         self._redis = None
 
         # saver config
         self.current_snapshot_interval = current_snapshot_interval
+
+        if redis_url is None:
+            from pacavanza.config import REDIS_URL
+
+            redis_url = REDIS_URL
+
+        # Initialize Redis
+        self.redis_url = redis_url
+        self.redis = aioredis.from_url(redis_url)
+
         self.completed_save_interval = (
             completed_save_interval
             if completed_save_interval is not None

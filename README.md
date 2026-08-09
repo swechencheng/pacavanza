@@ -62,7 +62,7 @@ Ensure you have Python 3.10 or higher installed on your system.
 
 #### Redis Server
 
-The event-driven architecture requires a running **Redis** server on the default port (**6379**). You can install it via your package manager (e.g., `brew install redis` or `sudo apt-get install redis`) and start it using the `redis-server` command.
+The event-driven architecture requires a running **Redis** server. By default, the system connects to `localhost` on port **6379**. You can install it via your package manager (e.g., `brew install redis` or `sudo apt-get install redis`) and start it using the `redis-server` command. You can customize the host and port via `config.json`.
 
 #### IBKR TWS or IB Gateway
 
@@ -99,9 +99,9 @@ To authenticate with the Avanza API, copy the provided `samples/secret.json.samp
 }
 ```
 
-#### IBKR Setup (`config.json`)
+#### System Setup (`config.json`)
 
-You must configure your IBKR connection details by providing a `config.json` file in the root directory. Copy the provided `samples/config.json.sample` to `config.json` under repo root folder and adjust the IP address, port, and your account ID for both live ("real") and "paper" trading environments, e.g.:
+You must configure your IBKR connection details, and optionally override the default Redis and Backend ports, by providing a `config.json` file in the root directory. Copy the provided `samples/config.json.sample` to `config.json` under repo root folder and adjust the IP address, port, and your account ID for both live ("real") and "paper" trading environments, e.g.:
 
 ```json
 {
@@ -117,6 +117,13 @@ You must configure your IBKR connection details by providing a `config.json` fil
       "port": 4002,
       "clientId": 42
     }
+  },
+  "redis": {
+    "host": "localhost",
+    "port": 6379
+  },
+  "backend": {
+    "port": 8001
   }
 }
 ```
@@ -142,7 +149,7 @@ python -m pacavanza.daemon_controller start
 
 This will automatically launch the backend API and all the required market data collectors and trade monitors in the background.
 
-_You can now visit `http://localhost:8001/chart` in your browser to view the dashboard._
+_You can now visit `http://localhost:<backend-port>/chart` (default port is `8001`) in your browser to view the dashboard._
 
 _(Use `python -m pacavanza.daemon_controller stop` to gracefully shut down the entire system)._
 

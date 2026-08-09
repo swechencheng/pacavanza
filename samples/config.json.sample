@@ -11,5 +11,12 @@
             "port": 4002,
             "clientId": 42
         }
+    },
+    "redis": {
+        "host": "localhost",
+        "port": 6379
+    },
+    "backend": {
+        "port": 8001
     }
 }

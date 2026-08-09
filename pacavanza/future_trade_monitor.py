@@ -45,12 +45,13 @@ import redis.asyncio as aioredis
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("future_trade_monitor")
 
+from pacavanza.config import REDIS_URL, BACKEND_PORT
+
 # Redis channel published by future_market_daemon
-REDIS_URL = "redis://localhost:6379/0"
 REDIS_CHANNEL = "pacavanza:future_updates"
 
 # Backend base URL (same process, loopback)
-BACKEND_URL = "http://localhost:8001"
+BACKEND_URL = f"http://localhost:{BACKEND_PORT}"
 
 # OMXS30 future tick size
 TICK_SIZE = 0.25

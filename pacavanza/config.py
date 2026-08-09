@@ -10,6 +10,10 @@ IBKR_PORT = 7497
 IBKR_CLIENT_ID = 3
 IBKR_ACCOUNT = None
 
+REDIS_HOST = "localhost"
+REDIS_PORT = 6379
+BACKEND_PORT = 8001
+
 if CONFIG_FILE.exists():
     with open(CONFIG_FILE, "r") as f:
         try:
@@ -44,5 +48,17 @@ if CONFIG_FILE.exists():
                     IBKR_CLIENT_ID = int(_ibkr_config["client_id"])
                 if "account" in _ibkr_config:
                     IBKR_ACCOUNT = _ibkr_config["account"]
+
+            if "redis" in _config:
+                if "host" in _config["redis"]:
+                    REDIS_HOST = _config["redis"]["host"]
+                if "port" in _config["redis"]:
+                    REDIS_PORT = int(_config["redis"]["port"])
+
+            if "backend" in _config and "port" in _config["backend"]:
+                BACKEND_PORT = int(_config["backend"]["port"])
+
         except Exception as e:
             print(f"Error loading config.json: {e}")
+
+REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
