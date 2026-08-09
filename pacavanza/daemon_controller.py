@@ -112,6 +112,11 @@ def stop_all():
 def main():
     parser = argparse.ArgumentParser(description="Pacavanza Daemon Controller")
     parser.add_argument("--real", action="store_true", help="Use real IBKR account")
+    parser.add_argument(
+        "--enable-ava-mini",
+        action="store_true",
+        help="Enable Avanza mini options trading daemons",
+    )
     args, _ = parser.parse_known_args()
 
     from pacavanza.config import IBKR_PORT, IBKR_HOST
@@ -159,13 +164,14 @@ def main():
                         "pacavanza.trend_alert_daemon",
                     )
 
-                # 3. Market Daemon (Always ensure it is running)
-                if start_process(
-                    "market",
-                    "pacavanza.avanza_market_daemon",
-                    "pacavanza.avanza_market_daemon",
-                ):
-                    time.sleep(5)
+                # 3. Market Daemon (Avanza Mini Futures)
+                if args.enable_ava_mini:
+                    if start_process(
+                        "market",
+                        "pacavanza.avanza_market_daemon",
+                        "pacavanza.avanza_market_daemon",
+                    ):
+                        time.sleep(5)
 
                 # 4. Future Trade Monitor (depends on future_market being up)
                 start_process(
@@ -174,12 +180,13 @@ def main():
                     "pacavanza.future_trade_monitor",
                 )
 
-                # 5. Trading Monitor
-                start_process(
-                    "monitor",
-                    "pacavanza.avanza_trading_monitor",
-                    "pacavanza.avanza_trading_monitor",
-                )
+                # 5. Trading Monitor (Avanza Mini Futures)
+                if args.enable_ava_mini:
+                    start_process(
+                        "monitor",
+                        "pacavanza.avanza_trading_monitor",
+                        "pacavanza.avanza_trading_monitor",
+                    )
 
             else:
                 # Outside active window

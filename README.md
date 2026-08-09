@@ -19,6 +19,8 @@ Built with an event-driven async architecture in Python, it separates market dat
 - **Live Market Streaming**: Connects directly to Avanza's Server-Sent Events (SSE) stream (`avanza_sse_client.py`) for ultra-low latency price updates.
 - **Automated Execution**: Monitors underlying assets and executes rapid trades on leveraged mini futures (`avanza_trading_monitor.py`).
 
+**Note on Avanza Mini Futures**: These instruments are provided by [Morgan Stanley](https://etp.morganstanley.com/se/sv/). Unlike standard OMXS30 futures, trading Avanza minis does not have full feature support and they are not traded via IBKR. Due to this limitation, the Avanza daemons are disabled by default.
+
 ### 3. Centralized Backend & Visualization
 
 - **FastAPI Server**: Hosts REST endpoints for manual trade intervention and querying system state (`backend.py`).
@@ -147,7 +149,13 @@ Use the provided daemon controller to spin up the entire ecosystem seamlessly.
 python -m pacavanza.daemon_controller start
 ```
 
-This will automatically launch the backend API and all the required market data collectors and trade monitors in the background.
+This will automatically launch the backend API and all the required IBKR futures market data collectors and trade monitors in the background.
+
+To also enable the Avanza mini futures daemons (disabled by default), append the `--enable-ava-mini` flag:
+
+```bash
+python -m pacavanza.daemon_controller start --enable-ava-mini
+```
 
 _You can now visit `http://localhost:<backend-port>/chart` (default port is `8001`) in your browser to view the dashboard._
 
