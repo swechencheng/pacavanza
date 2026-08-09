@@ -11,6 +11,7 @@ Built with an event-driven async architecture in Python, it separates market dat
 ### 1. OMXS30 Futures (Termin på svenska) Trading through IBKR with live data from Avanza
 
 - **Automated Trade Management**: Semi-auto order placement and advanced tracking for open future positions. See [order handling scenarios](./docs/order_handling_scenarios.md).
+- **Auto Contract Rollover**: Implements a built-in roll-window logic that automatically transitions to trading the next back-month contract ~5 days before the expiration of the current front-month contract, ensuring seamless continuity.
 - **ABC Pattern Trailing Stops**: Implements an intelligent, stateless backward-scanning algorithm (`future_trade_monitor.py`) to dynamically detect A-B-C pivot fractals in real-time. Once a breakout is confirmed, it automatically trails your stop-loss tight to the most recent 'C' pivot to lock in profits.
 - **End of Day (EOD) Auto-Flatten**: Automatically cancels all pending orders and force-closes open positions right before the market closes (configured at 17:25 CEST) to avoid overnight margin requirements and gap risks.
 
