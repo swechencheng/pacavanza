@@ -47,6 +47,11 @@ The local HTML dashboard (`http://localhost:8001`) offers a rich set of features
   - **Live Trades Panel**: A real-time scrolling tape of executed market trades.
 - **On-Chart Drawing Tools**: Includes a built-in drawing toolbar for plotting trend lines, horizontal support/resistance, rectangles, and Fibonacci retracements.
 
+### 4. Telegram Trend Breakout Alerts (Optional)
+
+- **Real-Time Anomaly Detection**: The `trend_alert_daemon.py` constantly monitors the 5-minute OHLC bars of the active OMXS30 future to detect unusually large bull or bear trend bars (breakouts) compared to the recent 20-bar history.
+- **Visual Telegram Notifications**: When a breakout is detected, it automatically renders a candlestick chart image using `mplfinance` and sends it directly to your Telegram app, ensuring you never miss a sudden market move even when away from the dashboard.
+
 ---
 
 ## 🏗 Software Architecture
@@ -59,6 +64,27 @@ The system is built on a highly decoupled, async **Event-Driven Architecture** p
    These scripts subscribe to the Redis data streams. They maintain internal state machines (like tracking highest highs, lowest lows, and pivot points), evaluate entry/exit logic, and issue order commands when conditions are met.
 3. **The Backend (`backend.py`)**:
    Acts as the central nervous system. It consumes the same Redis streams to broadcast updates to connected web clients via WebSockets. It also exposes HTTP endpoints that the Strategy Monitors can call to execute trades, ensuring that all API credentials and connection pools (like the IBKR socket) are managed in one place.
+
+---
+
+## 📂 State Persistence & Local Files
+
+To ensure resilience and minimize data loss during restarts, the Pacavanza daemons rely on several local files for state persistence and configuration:
+
+- **Market Data Storage**:
+  - `ohlc_<instrument_id>.json`: The market daemons persist completed 5-minute OHLC (Open-High-Low-Close) bars to disk. This allows the trading monitors and charting dashboard to instantly load historical context on startup without needing to refetch massive amounts of data from the broker.
+  - `snapshot_<instrument_id>.json`: Saves real-time snapshot data (including the currently forming incomplete bar) to quickly recover state if the daemon crashes mid-bar.
+
+- **Configuration & Credentials**:
+  - `config.json`: The single source of truth for global configuration, such as Redis ports, backend ports, and IBKR connection details.
+  - `.avanza_secret.json`: Stores Avanza login credentials securely.
+  - `.tg_bot_secret.json`: Stores Telegram Bot API keys used by the `trend_alert_daemon` to push notifications.
+
+- **Session Management**:
+  - `.avanza_session.json`: Serializes Avanza API authentication tokens. The Avanza daemon loads this on startup to resume the session, preventing the need for a full login on every restart and avoiding 2FA/login fatigue.
+
+- **System Logs**:
+  - `/tmp/<daemon_name>.stdout.log` & `/tmp/<daemon_name>.stderr.log`: The daemon controller (`daemon_controller.py`) routes standard output and errors from all background processes to the `/tmp/` directory for debugging and monitoring.
 
 ---
 
@@ -151,6 +177,19 @@ You must configure your IBKR connection details, and optionally override the def
 ```
 
 _(You can also review `pacavanza/config.py` to modify the default hardcoded symbols and trade quantities)._
+
+#### Telegram Trend Alerts Setup (`.tg_bot_secret.json`)
+
+To enable the optional Telegram Trend Breakout Alerts, copy the provided `samples/tg_bot_secret.json.sample` to `.tg_bot_secret.json` in the root directory and fill in your details:
+
+```json
+{
+  "telegram_bot_token": "YOUR_BOT_TOKEN",
+  "telegram_chat_id": "YOUR_CHAT_ID"
+}
+```
+
+If this file is not present, the `trend_alert_daemon` will fail to load secrets and simply skip sending notifications.
 
 ### 3. Start the Infrastructure
 
