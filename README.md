@@ -29,6 +29,7 @@ The FastAPI backend (`backend.py`) acts as the central nervous system, consuming
 The local HTML dashboard (`http://localhost:8001`) offers a rich set of features to improve the manual trading and monitoring experience:
 
 - **Real-Time & Historical Charting**: Uses TradingView's Lightweight Charts to plot live OHLC data. A dropdown selector allows you to instantly pull up charts of historical futures.
+- **Historical Trade Markers**: Past filled orders are plotted directly on the chart as color-coded dots, giving you immediate visual context of your entry and exit points over time.
 - **Advanced Order Management**:
   - **Quick Execution Controls**:
     Trade buttons are designed for fast order placement based on the current market situation. All of them will place a bracketed order with a roughly 2:1 take profit ratio and a stop-loss order. No order confirmation is needed to catch the extreme moves in the market.
