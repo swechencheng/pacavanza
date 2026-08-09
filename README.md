@@ -8,7 +8,7 @@ Built with an event-driven async architecture in Python, it separates market dat
 
 ## 🌟 Major Features
 
-### 1. IBKR OMXS30 Futures (Termin på svenska) Trading
+### 1. OMXS30 Futures (Termin på svenska) Trading through IBKR with live data from Avanza
 
 - **Automated Trade Management**: Semi-auto order placement and advanced tracking for open future positions. See [order handling scenarios](./docs/order_handling_scenarios.md).
 - **ABC Pattern Trailing Stops**: Implements an intelligent, stateless backward-scanning algorithm (`future_trade_monitor.py`) to dynamically detect A-B-C pivot fractals in real-time. Once a breakout is confirmed, it automatically trails your stop-loss tight to the most recent 'C' pivot to lock in profits.
@@ -21,11 +21,29 @@ Built with an event-driven async architecture in Python, it separates market dat
 
 **Note on Avanza Mini Futures**: These instruments are provided by [Morgan Stanley](https://etp.morganstanley.com/se/sv/). Unlike standard OMXS30 futures, trading Avanza minis does not have full feature support and they are not traded via IBKR. Due to this limitation, the Avanza daemons are disabled by default.
 
-### 3. Centralized Backend & Visualization
+### 3. Centralized Backend & Interactive Dashboard
 
-- **FastAPI Server**: Hosts REST endpoints for manual trade intervention and querying system state (`backend.py`).
-- **WebSockets & Pub/Sub**: Streams live chart data directly to the browser for real-time UI updates.
-- **Interactive UI**: Includes local static HTML dashboards for tracking the portfolio and viewing real-time price action overlaid with EMA indicators and active orders.
+The FastAPI backend (`backend.py`) acts as the central nervous system, consuming Redis streams to broadcast updates to connected web clients via WebSockets and exposing REST endpoints for trade execution.
+
+The local HTML dashboard (`http://localhost:8001`) offers a rich set of features to improve the manual trading and monitoring experience:
+
+- **Real-Time & Historical Charting**: Uses TradingView's Lightweight Charts to plot live OHLC data. A dropdown selector allows you to instantly pull up charts of historical futures.
+- **Advanced Order Management**:
+  - **Quick Execution Controls**:
+    Trade buttons are designed for fast order placement based on the current market situation. All of them will place a bracketed order with a roughly 2:1 take profit ratio and a stop-loss order. No order confirmation is needed to catch the extreme moves in the market.
+    - **Market (B Mkt / S Mkt)**: Instantly buy or sell at the current market price.
+    - **Market Close (C Mkt)**: Instantly close your entire open position at the market price.
+    - **Auto Stop Entry (B Stp / S Stp)**: Schedules a bracketed stop-entry order for the start of the _next_ 5-minute bar. The entry trigger is dynamically calculated based on the bar's high/low, and it automatically attaches a 2:1 Take-Profit and a Stop-Loss (placed below/above the recent swing leg).
+    - **Late Auto Stop (B Late / S Late)**: Instantly places the same auto-calculated bracketed stop-entry order using the _last completed_ 5-minute bar, without waiting for the current bar to close.
+    - **Explicit Limit/Stop (Lmt / Stp)**: Place standard limit or stop orders manually by entering a specific price.
+  - **Visual Order Lines**: Active orders are displayed as interactive lines on the chart.
+  - **OCA Bracket Orders (One-Cancels-All)**: Automatically attach Stop-Loss (SL) and Take-Profit (TP) levels to a position, managed directly from the UI toolbar.
+  - **Order Lifecycle Panel**: View all working orders in a list. Easily modify price and quantity inline, or cancel orders with a single click.
+- **Position & Market Tape Overlay**:
+  - **Position Heads-Up Display**: A persistent on-chart overlay displaying your current Long/Short/Flat position size and average entry price.
+  - **Live Order Depth (Level 2)**: A streaming tape panel visualizing bid/ask spread and market depth with dynamic volume bars.
+  - **Live Trades Panel**: A real-time scrolling tape of executed market trades.
+- **On-Chart Drawing Tools**: Includes a built-in drawing toolbar for plotting trend lines, horizontal support/resistance, rectangles, and Fibonacci retracements.
 
 ---
 
@@ -157,7 +175,7 @@ To also enable the Avanza mini futures daemons (disabled by default), append the
 python -m pacavanza.daemon_controller start --enable-ava-mini
 ```
 
-_You can now visit `http://localhost:<backend-port>/chart` (default port is `8001`) in your browser to view the dashboard._
+_You can now visit `http://localhost:<backend-port>` (default port is `8001`) in your browser to view the dashboard._
 
 _(Use `python -m pacavanza.daemon_controller stop` to gracefully shut down the entire system)._
 
