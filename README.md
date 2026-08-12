@@ -4,6 +4,8 @@ Pacavanza is an automated algorithmic trading and monitoring suite designed for 
 
 Built with an event-driven async architecture in Python, it separates market data collection, real-time strategy evaluation, and order execution while providing a centralized FastAPI backend for real-time charting and monitoring.
 
+![Pacavanza Dashboard](./pacavanza_dashboard.png)
+
 ---
 
 ## 🌟 Major Features
