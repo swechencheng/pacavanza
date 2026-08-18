@@ -15,6 +15,7 @@ import mplfinance as mpf
 import redis.asyncio as aioredis
 
 from pacavanza.utils.utils import fetch_active_omxs30_future, flatten_instrument_list
+from pacavanza.modules.ibkr_client_instance import resolve_ibkr_local_symbol
 
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("trend_bar_alert_daemon")
@@ -30,7 +31,8 @@ CHANNEL = "pacavanza:future_updates"
 
 class TrendBarAlertDaemon:
     def __init__(self):
-        raw_instruments = fetch_active_omxs30_future()
+        ibkr_local_symbol = resolve_ibkr_local_symbol()
+        raw_instruments = fetch_active_omxs30_future(target_name=ibkr_local_symbol)
         self.instruments = flatten_instrument_list(raw_instruments)
         self.active_sid = list(self.instruments.keys())[0] if self.instruments else None
 
