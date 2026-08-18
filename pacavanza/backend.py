@@ -164,9 +164,11 @@ def create_app(
         with open(file_path, "w") as f:
             json.dump(fills, f, default=str)
 
-    recent_bars = {sid: [] for sid in instrument_list.keys()}
+    # Initialize known instruments without overwriting the defaultdict
+    for sid in instrument_list.keys():
+        recent_bars[sid] = []
 
-    for sid in recent_bars:
+    for sid in list(recent_bars.keys()):
         data_file = f"ohlc_{sid}.json"
         try:
             with open(data_file, "r") as f:
