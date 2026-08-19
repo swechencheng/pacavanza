@@ -864,7 +864,7 @@ class FutureTradeMonitor:
         self._http = aiohttp.ClientSession()
 
         async def _eod_flatten_monitor():
-            """Monitor time and force close all positions at 17:25 CEST."""
+            """Monitor time and force close all positions at 17:15 CEST."""
             last_flattened_date = None
             while not self._shutting_down:
                 try:
@@ -876,8 +876,8 @@ class FutureTradeMonitor:
                         zone = timezone.utc
 
                     now_local = datetime.now(zone)
-                    # Check if it's 17:25
-                    if now_local.hour == 17 and now_local.minute == 25:
+                    # Check if it's 17:15
+                    if now_local.hour == 17 and now_local.minute == 15:
                         current_date = now_local.date()
                         if last_flattened_date != current_date:
                             LOGGER.info(
