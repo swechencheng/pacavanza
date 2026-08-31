@@ -36,6 +36,7 @@ import signal
 import sys
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -219,6 +220,19 @@ class FutureTradeMonitor:
         self._shutting_down = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
+        # Telegram credentials
+        self.bot_token = None
+        self.chat_id = None
+        secret_file = Path(__file__).parent.parent / ".tg_bot_secret.json"
+        if secret_file.exists():
+            import json
+
+            with open(secret_file, "r") as f:
+                data = json.load(f)
+                self.bot_token = data.get("telegram_bot_token")
+                self.chat_id = data.get("telegram_chat_id")
+            LOGGER.info(f"Loaded Telegram secrets from {secret_file}")
+
     # ------------------------------------------------------------------
     # Position helpers
     # ------------------------------------------------------------------
@@ -234,6 +248,19 @@ class FutureTradeMonitor:
         if local_symbol and local_symbol != self._contract_local_symbol:
             self._contract_local_symbol = local_symbol
             LOGGER.info(f"Active contract identified: {self._contract_local_symbol}")
+
+    async def _send_telegram_text(self, message: str) -> None:
+        """Send a text message alert to Telegram."""
+        if not self.bot_token or not self.chat_id or not self._http:
+            return
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        payload = {"chat_id": str(self.chat_id), "text": message}
+        try:
+            await self._http.post(
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=5)
+            )
+        except Exception as e:
+            LOGGER.warning(f"Failed to send Telegram alert: {e}")
 
     async def _get_signed_position(self) -> int:
         """Return the signed position for the active OMXS30 future. Positive=long, negative=short."""
@@ -678,10 +705,12 @@ class FutureTradeMonitor:
                     b_idx, b_val = b_result
                     current_close = float(bars[-1]["close"])
                     if current_close > b_val:
-                        LOGGER.info(
+                        msg = (
                             f"[{instrument_id}] Long ABC CONFIRMED: bar close {current_close} > "
                             f"B={b_val} (idx {b_idx}). Moving SELL STOP to C={c_val} (idx {c_idx})."
                         )
+                        LOGGER.info(msg)
+                        asyncio.create_task(self._send_telegram_text(msg))
                         stop_price = round(c_val - TICK_SIZE, 2)
                         await self._place_sell_stop(stop_price)
 
@@ -710,10 +739,12 @@ class FutureTradeMonitor:
                     b_idx, b_val = b_result
                     current_close = float(bars[-1]["close"])
                     if current_close < b_val:
-                        LOGGER.info(
+                        msg = (
                             f"[{instrument_id}] Short ABC CONFIRMED: bar close {current_close} < "
                             f"B={b_val} (idx {b_idx}). Moving BUY STOP to C={c_val} (idx {c_idx})."
                         )
+                        LOGGER.info(msg)
+                        asyncio.create_task(self._send_telegram_text(msg))
                         stop_price = round(c_val + TICK_SIZE, 2)
                         await self._place_buy_stop(stop_price)
 
