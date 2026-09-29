@@ -88,7 +88,7 @@ class FutureChartApp extends PACChartApp {
     this.tickSize = parseFloat(info.tick_size) || parseFloat(info.tickSize) || 0.25;
     this._remoteLog("INFO", `Set tickSize to ${this.tickSize} from active_future`);
 
-    const inputsToUpdate = ["oca-stop-price", "oca-limit-price", "limit-order-price"];
+    const inputsToUpdate = ["oca-stop-price", "oca-limit-price", "limit-order-price", "bostp-long-price", "bostp-short-price"];
     inputsToUpdate.forEach(id => {
       const el = document.getElementById(id);
       if (el) {
@@ -593,6 +593,86 @@ class FutureChartApp extends PACChartApp {
       });
     }
 
+    // Breakout Stop OCA button
+    const bostpOcaBtn = document.getElementById("btn-place-bostp-oca");
+    if (bostpOcaBtn) {
+      bostpOcaBtn.addEventListener("click", async () => {
+        const pos = this._currentPosition;
+        if (pos && pos.position !== 0) {
+          alert("BO-STP-OCA: Only allowed when flat (no active position).");
+          return;
+        }
+
+        const volume = contracts();
+        if (!volume || volume <= 0) {
+          alert("BO-STP-OCA: Invalid volume.");
+          return;
+        }
+
+        const longInput = document.getElementById("bostp-long-price");
+        const shortInput = document.getElementById("bostp-short-price");
+        const rawLong = longInput ? longInput.value.trim().replace(",", ".") : "";
+        const rawShort = shortInput ? shortInput.value.trim().replace(",", ".") : "";
+
+        if (!rawLong || !rawShort) {
+          alert("BO-STP-OCA: Both Long (L) and Short (S) stop prices are required.");
+          return;
+        }
+
+        let highPrice = parseFloat(rawLong);
+        let lowPrice = parseFloat(rawShort);
+        if (isNaN(highPrice) || isNaN(lowPrice)) {
+          alert("BO-STP-OCA: Invalid stop price values.");
+          return;
+        }
+
+        // Snap to instrument tick size
+        const tick = this.tickSize || 0.25;
+        highPrice = Math.round(highPrice / tick) * tick;
+        lowPrice = Math.round(lowPrice / tick) * tick;
+
+        if (highPrice === lowPrice) {
+          alert("BO-STP-OCA: Long (L) and Short (S) prices cannot be equal.");
+          return;
+        }
+
+        if (highPrice < lowPrice) {
+          const swapMsg = `Long price (${highPrice}) should be higher than Short price (${lowPrice}).\nSwap them?`;
+          if (!confirm(swapMsg)) return;
+          [highPrice, lowPrice] = [lowPrice, highPrice];
+        }
+
+        if (longInput) longInput.value = highPrice;
+        if (shortInput) shortInput.value = lowPrice;
+
+        // Market price sanity check
+        const cm = this.chartFuture;
+        if (cm && cm.data && cm.data.size > 0) {
+          const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
+          const lastBar = cm.data.get(allTimes[allTimes.length - 1]);
+          if (lastBar && lastBar.close != null) {
+            if (lastBar.close >= highPrice) {
+              if (!confirm(`Warning: Current price (${lastBar.close}) is already at or above Long stop price (${highPrice}). The Long order will trigger immediately. Continue?`)) {
+                return;
+              }
+            } else if (lastBar.close <= lowPrice) {
+              if (!confirm(`Warning: Current price (${lastBar.close}) is already at or below Short stop price (${lowPrice}). The Short order will trigger immediately. Continue?`)) {
+                return;
+              }
+            }
+          }
+        }
+
+        const res = await this._callApi("/ibkr/place_breakout_stop_oca", {
+          volume, highPrice, lowPrice
+        }, "POST", true);
+        if (res) {
+          console.log("[ibkr] Breakout Stop OCA placed:", res);
+          this._refreshOrders();
+        }
+      });
+    }
+
     // Buy Limit button
     const buyLimitBtn = document.getElementById("btn-buy-limit-future");
     if (buyLimitBtn) {
@@ -705,7 +785,12 @@ class FutureChartApp extends PACChartApp {
 
   _renderOrders(orders) {
     this._lastOrders = orders;
-    this._updateOrderDrawings(orders);
+    try {
+      this._updateOrderDrawings(orders);
+    } catch (e) {
+      console.error("[future_chart] _updateOrderDrawings error:", e);
+      this._remoteLog("ERROR", `_updateOrderDrawings error: ${e.message}`);
+    }
 
     const container = document.getElementById("order-list");
     if (!container) return;
@@ -792,10 +877,11 @@ class FutureChartApp extends PACChartApp {
     }
 
     const getBarTimeForOrder = (placedTimeStr) => {
-      if (!placedTimeStr) return null;
-      const placedUnix = this.isoToLWTime(placedTimeStr);
       const times = Array.from(cm.data.keys()).sort((a, b) => a - b);
       if (times.length === 0) return null;
+      if (!placedTimeStr) return times[times.length - 1];
+      const placedUnix = this.isoToLWTime(placedTimeStr);
+      if (isNaN(placedUnix)) return times[times.length - 1];
       let orderBarTime = null;
       for (let i = times.length - 1; i >= 0; i--) {
         if (times[i] <= placedUnix) {
@@ -803,10 +889,7 @@ class FutureChartApp extends PACChartApp {
           break;
         }
       }
-      if (orderBarTime === null) {
-        orderBarTime = times[0];
-      }
-      return orderBarTime;
+      return orderBarTime !== null ? orderBarTime : times[times.length - 1];
     };
 
     // Filter active orders for standalone drawings and OCA drawings
@@ -899,16 +982,119 @@ class FutureChartApp extends PACChartApp {
     // ── 2. OCA orders ──
     const ocaGroupToAllOrders = {};
     orders.forEach(o => {
-      if (o.ocaGroup) {
-        if (!ocaGroupToAllOrders[o.ocaGroup]) {
-          ocaGroupToAllOrders[o.ocaGroup] = [];
+      const oca = o.ocaGroup || (o.orderRef === "BreakoutStop" ? "ibkr_oca_bostp_fallback" : null);
+      if (oca) {
+        if (!ocaGroupToAllOrders[oca]) {
+          ocaGroupToAllOrders[oca] = [];
         }
-        ocaGroupToAllOrders[o.ocaGroup].push(o);
+        ocaGroupToAllOrders[oca].push(o);
       }
     });
 
     for (const ocaGroupId in ocaGroupToAllOrders) {
       const ocaOrders = ocaGroupToAllOrders[ocaGroupId];
+      const isBreakoutOca = ocaGroupId.startsWith("ibkr_oca_bostp_") || ocaOrders.some(o => o.orderRef === "BreakoutStop");
+
+      if (isBreakoutOca) {
+        // ── Breakout Stop OCA Group ──
+        const activeOcaOrders = ocaOrders.filter(o => !o.isDone && !processedOrderIds.has(o.orderId));
+        const fulfilledOrder = ocaOrders.find(o => o.fulfilled);
+
+        // Case 1: Pending (neither fulfilled) -> render two gray dotted horizontal rays
+        if (!fulfilledOrder && activeOcaOrders.length > 0) {
+          activeOcaOrders.forEach(o => {
+            const orderBarTime = getBarTimeForOrder(o.placedTime);
+            if (orderBarTime !== null && o.price != null) {
+              const id = `order-standalone-${o.orderId}`;
+              const anchors = [{ time: orderBarTime, price: o.price }];
+              const lineStyleDotted = (window.LightweightCharts && window.LightweightCharts.LineStyle) ? window.LightweightCharts.LineStyle.Dotted : 1;
+              const style = {
+                lineColor: '#9E9E9E', // Gray
+                lineWidth: 1.5,
+                lineStyle: lineStyleDotted,
+                lineDash: [3, 3]      // Dotted
+              };
+              const opts = { showPrice: true };
+              try {
+                const drawing = cm.toolRegistry.createDrawing('horizontal-ray', id, anchors, style, opts);
+                if (drawing) {
+                  cm.drawingManager.addDrawing(drawing);
+                  this._orderDrawingIds.push(id);
+                }
+              } catch (err) {
+                this._remoteLog("ERROR", `Failed to create BO-STP drawing ${id}: ${err.message}`);
+              }
+              processedOrderIds.add(o.orderId);
+            }
+          });
+          continue;
+        }
+
+        // Case 2: One stop order fulfilled & position is active -> turn into position drawing
+        if (fulfilledOrder && this._currentPosition && this._currentPosition.position !== 0) {
+          const isLong = this._currentPosition.position > 0;
+          const prices = ocaOrders.map(o => o.price).filter(p => p != null);
+          const upperPrice = Math.max(...prices);
+          const lowerPrice = Math.min(...prices);
+          const range = upperPrice - lowerPrice;
+
+          const entryPrice = this._currentPosition.avgCost || (isLong ? upperPrice : lowerPrice);
+          const slPrice = isLong ? lowerPrice : upperPrice;
+          const tpPrice = isLong ? (entryPrice + 2 * range) : (entryPrice - 2 * range);
+
+          const times = ocaOrders.map(o => o.placedTime).filter(t => t != null);
+          const earliestPlacedTime = times.length > 0 ? times.reduce((a, b) => a < b ? a : b) : null;
+          const leftBarTime = getBarTimeForOrder(earliestPlacedTime);
+
+          if (leftBarTime !== null) {
+            const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
+            const leftIndex = allTimes.indexOf(leftBarTime);
+            let rightBarTime;
+            if (leftIndex !== -1 && leftIndex + 20 < allTimes.length) {
+              rightBarTime = allTimes[leftIndex + 20];
+            } else {
+              rightBarTime = leftBarTime + 20 * this.INTERVAL_SECONDS;
+            }
+
+            const toolType = isLong ? "long-position" : "short-position";
+            const id = `order-oca-${ocaGroupId}`;
+            const anchors = [
+              { time: leftBarTime, price: entryPrice },
+              { time: rightBarTime, price: slPrice },
+              { time: rightBarTime, price: tpPrice }
+            ];
+
+            const style = {
+              lineColor: isLong ? "#26A69A" : "#EF5350",
+              lineWidth: 1.5
+            };
+            const opts = {
+              showPrices: true,
+              showPercentage: true,
+              showRiskReward: true
+            };
+
+            this._remoteLog("DEBUG", `Attempting to create BO-STP position drawing ${toolType} for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
+            try {
+              const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
+              if (drawing) {
+                PACChartApp.patchPositionDrawing(drawing, toolType);
+                cm.drawingManager.addDrawing(drawing);
+                this._orderDrawingIds.push(id);
+                this._remoteLog("DEBUG", `Successfully added BO-STP position drawing ${id}`);
+              }
+            } catch (err) {
+              this._remoteLog("ERROR", `Failed to create BO-STP position drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
+            }
+          }
+          ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
+          continue;
+        }
+
+        // If neither pending nor active position, mark processed
+        ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
+        continue;
+      }
 
       // Only draw if at least two orders in the OCA group are active (not done)
       // and not already processed by bracket logic
@@ -1016,9 +1202,11 @@ class FutureChartApp extends PACChartApp {
             // STP or STP LMT
             lineColor = isBuy ? '#1ed1e9ff' : '#795448ff'; // Pink / Brown
           }
+          const lineStyleDashed = (window.LightweightCharts && window.LightweightCharts.LineStyle) ? window.LightweightCharts.LineStyle.Dashed : 2;
           const style = {
             lineColor: lineColor,
             lineWidth: 1.5,
+            lineStyle: lineStyleDashed,
             lineDash: [6, 4]
           };
           const opts = {

@@ -41,7 +41,8 @@ The local HTML dashboard (`http://localhost:8001`) offers a rich set of features
     - **Late Auto Stop (B Late / S Late)**: Instantly places the same auto-calculated bracketed stop-entry order using the _last completed_ 5-minute bar, without waiting for the current bar to close.
     - **Explicit Limit/Stop (Lmt / Stp)**: Place standard limit or stop orders manually by entering a specific price.
   - **Visual Order Lines**: Active orders are displayed as interactive lines on the chart.
-  - **OCA Bracket Orders (One-Cancels-All)**: Automatically attach Stop-Loss (SL) and Take-Profit (TP) levels to a position, managed directly from the UI toolbar.
+  - **OCA Bracket Orders (One-Cancels-All)**: Automatically attach Stop-Loss (SL) and Take-Profit (TP) levels to an open position, managed directly from the UI toolbar.
+  - **Breakout Stop OCA Orders (BO-STP-OCA)**: Place simultaneous Long (BUY) and Short (SELL) stop orders in an OCA group when flat. Once the breakout occurs in either direction, IBKR automatically fills the winning stop and cancels the opposite stop. Pending orders render as two gray dotted horizontal rays on the chart that automatically transform into a position drawing once executed.
   - **Order Lifecycle Panel**: View all working orders in a list. Easily modify price and quantity inline, or cancel orders with a single click.
 - **Position & Market Tape Overlay**:
   - **Position Heads-Up Display**: A persistent on-chart overlay displaying your current Long/Short/Flat position size and average entry price.

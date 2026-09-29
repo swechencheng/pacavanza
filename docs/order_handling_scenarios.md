@@ -77,7 +77,34 @@ Used when a user has an open position and wants to manually attach an SL and TP.
   - Conversely, if the SL is hit, the Stop Order fills, and the Limit Order is canceled.
 - **Chart UI**: The frontend detects the `ocaGroup`, groups the two orders, and renders a `long-position` or `short-position` tool on the chart based on the provided prices.
 
-### D. Limit Orders (Buy / Sell Limit)
+### D. Breakout Stop OCA Orders (BO-STP-OCA)
+
+Used to trade breakouts in either direction when the market is consolidating, automatically entering a position when the breakout occurs while canceling the opposite breakout order.
+
+- **Trigger**: User inputs a higher price for Long (`L`) and a lower price for Short (`S`) in the `BO-STP:` panel, and clicks `⚡ BO` (`btn-place-bostp-oca`).
+- **Validation**:
+  - **Flat Position Only**: Only allowed when there is **no open position** (`position == 0`). If an active position exists, the order is blocked to keep order handling scenarios predictable and avoid conflicting reversal/scale-up interactions.
+  - **Price Relationship**: The Long stop price must be strictly greater than the Short stop price (`highPrice > lowPrice`). The UI provides an interactive swap prompt if inverted.
+  - **Volume**: Must be greater than 0.
+  - **Market Price Check**: The UI warns the user if the current market price has already exceeded either stop price (which would trigger immediately).
+- **Backend Flow**:
+  - Validates flat position (`_get_signed_position() == 0`).
+  - Creates two `StopOrder` instances:
+    - Long: `StopOrder("BUY", volume, highPrice, tif="DAY")`
+    - Short: `StopOrder("SELL", volume, lowPrice, tif="DAY")`
+  - Tags both orders with `orderRef="BreakoutStop"`.
+  - Groups them via IBKR's `IB.oneCancelsAll(orders=[long_order, short_order], ocaGroup=..., ocaType=1)`.
+  - Transmits both orders to IBKR.
+- **Lifecycle & Background Synchronization**:
+  - **Pending State (Flat)**: Both stop orders remain active. The automated synchronizer (`_sync_sl_tp_volume()`) explicitly protects `BreakoutStop` orders while flat so they are not cancelled as orphans.
+  - **Execution (Breakout Triggered)**: Once the market breaks out and one stop order fills, IBKR's OCA engine automatically cancels the other stop order.
+  - **Active State (In Position)**: The trader enters a Long or Short position. The synchronizer (`_sync_sl_tp_volume()`) guarantees that any residual breakout entry order is immediately cancelled and never mistaken for an SL/TP order. The trader can now use the adjacent manual OCA panel (📎) to attach an SL and TP.
+- **Chart UI**:
+  - **Pending**: Renders as **two gray dotted horizontal rays** (`horizontal-ray` with `lineDash: [3, 3]`) at the respective Long and Short stop prices. Each ray can be interactively dragged on the chart to adjust the trigger price via `/ibkr/edit_order`.
+  - **Filled**: Automatically transforms into a `long-position` or `short-position` drawing on the chart, anchoring the entry price at the fill level, setting the stop level at the opposite breakout price, and setting a 2:1 profit target.
+  - **Closed**: Once the position is completely closed (position returns to 0), the drawing is automatically removed.
+
+### E. Limit Orders (Buy / Sell Limit)
 
 Used to place a standalone limit order at a specific price.
 

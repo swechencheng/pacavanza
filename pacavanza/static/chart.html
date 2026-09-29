@@ -660,24 +660,44 @@
         <button id="btn-market-sell-future"><span class="sell">S</span> Mkt</button>
         <button id="btn-market-close-future"><span style="color: white;">C</span> Mkt</button>
       </div>
-      <!-- OCA Bracket Controls -->
+      <!-- OCA Bracket & Breakout Controls -->
       <div class="trading-controls" data-side="future" style="border-top: none;">
-        <label style="font-size:11px; color:#888;">OCA:</label>
-        <label style="font-size:11px;">
-          <span class="sell">SL</span>
-          <input type="number" id="oca-stop-price" value="" step="0.25" class="volume-input" style="width:80px;"
-            placeholder="Stop" />
-        </label>
-        <label style="font-size:11px;">
-          <span class="buy">TP</span>
-          <input type="number" id="oca-limit-price" value="" step="0.25" class="volume-input" style="width:80px;"
-            placeholder="Limit" />
-        </label>
-        <select id="oca-action" class="volume-input" style="width:52px;" disabled title="Auto-set from position">
-          <option value="SELL">S</option>
-          <option value="BUY">B</option>
-        </select>
-        <button id="btn-place-oca">📎</button>
+        <div style="display: flex; gap: inherit; align-items: center;">
+          <label style="font-size:11px; color:#888;">OCA:</label>
+          <label style="font-size:11px;">
+            <span class="sell">SL</span>
+            <input type="number" id="oca-stop-price" value="" step="0.25" class="volume-input" style="width:80px;"
+              placeholder="Stop" />
+          </label>
+          <label style="font-size:11px;">
+            <span class="buy">TP</span>
+            <input type="number" id="oca-limit-price" value="" step="0.25" class="volume-input" style="width:80px;"
+              placeholder="Limit" />
+          </label>
+          <select id="oca-action" class="volume-input" style="width:52px;" disabled title="Auto-set from position">
+            <option value="SELL">S</option>
+            <option value="BUY">B</option>
+          </select>
+          <button id="btn-place-oca" title="Place Manual SL/TP OCA Bracket">📎</button>
+        </div>
+
+        <div class="spacer"></div>
+
+        <!-- Breakout Stop OCA Controls -->
+        <div style="display: flex; gap: inherit; align-items: center;">
+          <label style="font-size:11px; color:#888;">BO-STP:</label>
+          <label style="font-size:11px;">
+            <span class="buy">L</span>
+            <input type="number" id="bostp-long-price" value="" step="0.25" class="volume-input" style="width:80px;"
+              placeholder="Long" />
+          </label>
+          <label style="font-size:11px;">
+            <span class="sell">S</span>
+            <input type="number" id="bostp-short-price" value="" step="0.25" class="volume-input" style="width:80px;"
+              placeholder="Short" />
+          </label>
+          <button id="btn-place-bostp-oca" title="Place Breakout Stop OCA (Flat only)">⚡ BO</button>
+        </div>
 
         <div class="spacer"></div>
 
@@ -730,7 +750,7 @@
 
   <script src="/static/chart_core.js"></script>
   <script src="/static/drawing_tools.js"></script>
-  <script src="/static/future_chart.js"></script>
+  <script src="/static/future_chart.js?v=20260930_1"></script>
 </body>
 
 </html>

@@ -252,14 +252,22 @@ class IbkrTrading(BaseAvanzaTrading):
 
         # ── Position is FLAT: cancel orphaned orders but protect pending entries ──
         if abs_pos == 0:
-            # Build a set of order IDs that are part of a pending bracket entry.
-            # These are: (a) active parent entry orders, and (b) their children.
+            # Build a set of order IDs that are part of a pending bracket entry or breakout stop OCA.
+            # These are: (a) active parent entry orders, (b) their children,
+            # and (c) pending BreakoutStop OCA orders.
             # During a position reversal (e.g., close LONG + enter SHORT),
             # position momentarily hits 0 after the close leg fills. We must
             # NOT cancel the bracket entry for the new direction.
             protected_ids: set = set()
             now = datetime.now(timezone.utc)
             for t in contract_trades:
+                # Protect Breakout Stop OCA orders while position is flat
+                if (
+                    getattr(t.order, "orderRef", "") == "BreakoutStop"
+                    or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
+                ):
+                    protected_ids.add(t.order.orderId)
+
                 # An active parent entry order: its children reference its orderId.
                 # Check if any other trade's parentId points to this order.
                 is_parent = any(
@@ -302,9 +310,9 @@ class IbkrTrading(BaseAvanzaTrading):
             for t in contract_trades:
                 if t.order.orderId in protected_ids:
                     LOGGER.info(
-                        f"Sync: Position is FLAT but PROTECTING pending bracket "
+                        f"Sync: Position is FLAT but PROTECTING pending entry/bracket "
                         f"orderId={t.order.orderId} action={t.order.action} "
-                        f"type={t.order.orderType}"
+                        f"type={t.order.orderType} ref='{getattr(t.order, 'orderRef', '')}'"
                     )
                     continue
                 LOGGER.info(
@@ -317,13 +325,24 @@ class IbkrTrading(BaseAvanzaTrading):
             if cancelled_count > 0:
                 LOGGER.info(
                     f"Sync: Cancelled {cancelled_count} orders (position is FLAT, "
-                    f"protected {len(protected_ids)} pending bracket orders)"
+                    f"protected {len(protected_ids)} pending entry/bracket orders)"
                 )
             return
 
         # ── Position is non-zero: selectively sync SL/TP orders ──
         cancelled_count = 0
         for t in contract_trades:
+            # If position is active, any residual BreakoutStop entry order must be cancelled immediately
+            if (
+                getattr(t.order, "orderRef", "") == "BreakoutStop"
+                or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
+            ):
+                LOGGER.info(
+                    f"Sync: Position is active ({signed_pos}), cancelling residual BreakoutStop orderId={t.order.orderId}"
+                )
+                self.ib.cancelOrder(t.order)
+                cancelled_count += 1
+                continue
             parent_id = getattr(t.order, "parentId", 0)
             if parent_id == IB_UNSET_INT:
                 parent_id = 0
@@ -1161,6 +1180,85 @@ class IbkrTrading(BaseAvanzaTrading):
             "status": "placed",
         }
 
+    def place_breakout_stop_oca(
+        self,
+        volume: int,
+        high_price: float,
+        low_price: float,
+    ) -> Dict[str, Any]:
+        """
+        Place a Breakout Stop OCA order pair:
+        - 1 BUY Stop order at high_price (Long breakout)
+        - 1 SELL Stop order at low_price (Short breakout)
+        Grouped in an OCA group (ocaType=1) so filling one cancels the other.
+        Only allowed when flat (no active position).
+
+        Args:
+            volume: number of contracts.
+            high_price: stop price for the long breakout (BUY).
+            low_price: stop price for the short breakout (SELL).
+
+        Returns:
+            Dict with order IDs, prices, and OCA group name.
+        """
+        signed_pos = self._get_signed_position()
+        if signed_pos != 0:
+            raise Exception(
+                "Breakout Stop OCA is only allowed when flat (no active position)."
+            )
+
+        if high_price <= low_price:
+            raise Exception(
+                "High price (Long) must be strictly greater than Low price (Short)."
+            )
+
+        high_rounded = self._round_price(high_price)
+        low_rounded = self._round_price(low_price)
+
+        long_order = StopOrder("BUY", volume, high_rounded, tif="DAY")
+        short_order = StopOrder("SELL", volume, low_rounded, tif="DAY")
+
+        long_order.orderRef = "BreakoutStop"
+        short_order.orderRef = "BreakoutStop"
+
+        for order in [long_order, short_order]:
+            if getattr(order, "deltaNeutralOrderType", "") == "无":
+                order.deltaNeutralOrderType = ""
+            if getattr(order, "adjustedOrderType", "") == "无":
+                order.adjustedOrderType = ""
+
+        oca_group = f"ibkr_oca_bostp_{int(datetime.now(tz=timezone.utc).timestamp())}"
+        IB.oneCancelsAll(
+            orders=[long_order, short_order],
+            ocaGroup=oca_group,
+            ocaType=1,
+        )
+
+        long_trade = self._place_ib_order(long_order)
+        short_trade = self._place_ib_order(short_order)
+
+        now_utc = datetime.now(timezone.utc)
+        if getattr(long_trade.order, "orderId", 0):
+            self.order_placed_times[long_trade.order.orderId] = now_utc
+        if getattr(short_trade.order, "orderId", 0):
+            self.order_placed_times[short_trade.order.orderId] = now_utc
+
+        LOGGER.info(
+            f"Breakout Stop OCA placed: volume={volume}, "
+            f"Long BUY STP orderId={long_trade.order.orderId} @ {high_rounded}, "
+            f"Short SELL STP orderId={short_trade.order.orderId} @ {low_rounded}, "
+            f"ocaGroup={oca_group}"
+        )
+        return {
+            "ocaGroup": oca_group,
+            "longOrderId": long_trade.order.orderId,
+            "longPrice": high_rounded,
+            "shortOrderId": short_trade.order.orderId,
+            "shortPrice": low_rounded,
+            "volume": volume,
+            "status": "placed",
+        }
+
     def place_limit_buy(self, volume: int, price: float) -> Dict[str, Any]:
         """Place a limit buy order via IBKR."""
         order = LimitOrder("BUY", volume, self._round_price(price), tif="DAY")
@@ -1612,48 +1710,49 @@ class IbkrTrading(BaseAvanzaTrading):
         for t in contract_trades:
             order = t.order
             pid = getattr(order, "permId", 0)
-            if not pid:
-                continue
-
-            p_perm = get_parent_perm_id(order)
-            if p_perm:
-                self.perm_id_to_parent_perm_id[pid] = p_perm
-
             oca = getattr(order, "ocaGroup", "")
-            if oca:
-                self.perm_id_to_oca_group[pid] = oca
+            if pid:
+                p_perm = get_parent_perm_id(order)
+                if p_perm:
+                    self.perm_id_to_parent_perm_id[pid] = p_perm
+                if oca:
+                    self.perm_id_to_oca_group[pid] = oca
 
         # Step 1: Find all parent perm IDs
         parent_perm_ids = set()
         for t in contract_trades:
             pid = getattr(t.order, "permId", 0)
-            p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
-            if p_perm:
-                parent_perm_ids.add(p_perm)
+            if pid:
+                p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
+                if p_perm:
+                    parent_perm_ids.add(p_perm)
 
         # Step 2: Group trades
         trade_groups = {}
         for t in contract_trades:
             order = t.order
             pid = getattr(order, "permId", 0)
+            oid = getattr(order, "orderId", 0)
             p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
             has_parent = bool(p_perm)
-            oca = self.perm_id_to_oca_group.get(pid, "")
+            oca = getattr(order, "ocaGroup", "") or self.perm_id_to_oca_group.get(pid, "")
 
             if has_parent:
                 group_key = f"parent_{p_perm}"
-            elif pid in parent_perm_ids:
+            elif pid and pid in parent_perm_ids:
                 group_key = f"parent_{pid}"
             elif oca:
                 group_key = f"oca_{oca}"
             else:
-                group_key = f"order_{pid}"
+                effective_id = pid or oid
+                group_key = f"order_{effective_id}"
 
             if group_key not in trade_groups:
                 trade_groups[group_key] = []
             trade_groups[group_key].append(t)
 
         # Step 3: Determine which groups should stay
+        signed_pos = self._get_signed_position()
         result = []
         for group_key, trades in trade_groups.items():
             # If all orders in the group are done, do not show this group
@@ -1667,7 +1766,21 @@ class IbkrTrading(BaseAvanzaTrading):
                 return False
 
             if all(is_trade_done(t) for t in trades):
-                continue
+                # Exception: if this is a BreakoutStop OCA group where one order was Filled
+                # and the position is still active, keep it so the frontend can render the position drawing!
+                is_bostp = any(
+                    getattr(t.order, "orderRef", "") == "BreakoutStop"
+                    or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
+                    for t in trades
+                )
+                if (
+                    is_bostp
+                    and signed_pos != 0
+                    and any(t.orderStatus.status == "Filled" for t in trades)
+                ):
+                    pass
+                else:
+                    continue
 
             # Otherwise, keep all of them
             for t in trades:
@@ -1680,25 +1793,34 @@ class IbkrTrading(BaseAvanzaTrading):
                 elif order.orderType == "STP LMT":
                     price = order.auxPrice
 
+                effective_order_id = getattr(order, "permId", 0) or getattr(order, "orderId", 0)
+
                 placed_time = self.order_placed_times.get(order.permId)
+                if not placed_time and getattr(order, "orderId", 0):
+                    placed_time = self.order_placed_times.get(order.orderId)
                 if not placed_time:
                     if t.log:
                         placed_time = t.log[0].time
                     if not placed_time:
                         placed_time = datetime.now(timezone.utc)
-                    self.order_placed_times[order.permId] = placed_time
+                    if order.permId:
+                        self.order_placed_times[order.permId] = placed_time
+                    if getattr(order, "orderId", 0):
+                        self.order_placed_times[order.orderId] = placed_time
 
                 parent_id_val = self.perm_id_to_parent_perm_id.get(order.permId, 0)
                 if parent_id_val == 0:
-                    parent_id_val = None
+                    parent_id_val = getattr(order, "parentId", None)
+                    if parent_id_val in (0, IB_UNSET_INT):
+                        parent_id_val = None
 
-                oca_val = self.perm_id_to_oca_group.get(order.permId, "")
+                oca_val = getattr(order, "ocaGroup", "") or self.perm_id_to_oca_group.get(order.permId, "")
                 if not oca_val:
                     oca_val = None
 
                 result.append(
                     {
-                        "orderId": order.permId,
+                        "orderId": effective_order_id,
                         "action": order.action,
                         "orderType": order.orderType,
                         "totalQuantity": int(order.totalQuantity),

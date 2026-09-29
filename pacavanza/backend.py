@@ -1717,6 +1717,55 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
 
+    @app.post("/ibkr/place_breakout_stop_oca")
+    async def ibkr_place_breakout_stop_oca(req: Request):
+        """
+        Place a Breakout Stop OCA order pair (Long Buy Stop + Short Sell Stop).
+        Accepts: { volume: int, highPrice: float, lowPrice: float }
+        Only allowed when flat (no active position).
+        """
+        _require_ibkr()
+        body = await req.json()
+        LOGGER.info(f"ibkr_place_breakout_stop_oca received: {body}")
+        volume = body.get("volume")
+        high_price = body.get("highPrice")
+        low_price = body.get("lowPrice")
+        if volume is None or high_price is None or low_price is None:
+            LOGGER.warning(f"ibkr_place_breakout_stop_oca missing fields: {body}")
+            raise HTTPException(
+                status_code=400,
+                detail="volume, highPrice, and lowPrice required",
+            )
+        try:
+            vol = int(str(volume).strip())
+            hp = float(str(high_price).strip().replace(",", "."))
+            lp = float(str(low_price).strip().replace(",", "."))
+        except (ValueError, TypeError) as e:
+            LOGGER.warning(f"ibkr_place_breakout_stop_oca invalid types: {e}, body={body}")
+            raise HTTPException(status_code=400, detail=f"Invalid volume or price types: {e}")
+
+        if vol <= 0:
+            LOGGER.warning(f"ibkr_place_breakout_stop_oca volume <= 0: {vol}")
+            raise HTTPException(status_code=400, detail="Volume must be greater than 0")
+        if hp <= lp:
+            LOGGER.warning(f"ibkr_place_breakout_stop_oca highPrice <= lowPrice: {hp} <= {lp}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"highPrice ({hp}) must be strictly greater than lowPrice ({lp})",
+            )
+
+        try:
+            result = ibkr_trading.place_breakout_stop_oca(
+                volume=vol,
+                high_price=hp,
+                low_price=lp,
+            )
+            LOGGER.info(f"ibkr_place_breakout_stop_oca succeeded: {result}")
+        except Exception as e:
+            LOGGER.error(f"ibkr_place_breakout_stop_oca error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "ok", **result})
+
     @app.post("/ibkr/limit_buy")
     async def ibkr_limit_buy(req: Request):
         """Place a limit buy order via IBKR."""
