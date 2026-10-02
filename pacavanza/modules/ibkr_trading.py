@@ -80,6 +80,8 @@ class IbkrTrading(BaseAvanzaTrading):
         # Track if we are currently flat to reliably trigger Auto-OCA
         # on the first fill, avoiding race conditions between execDetails and position events.
         self._is_flat = True
+        self._last_position = 0
+        self._last_avg_cost = 0.0
 
         # Subscribe to position updates from IBKR so that ib.positions()
         # is automatically populated and updated.
@@ -186,11 +188,17 @@ class IbkrTrading(BaseAvanzaTrading):
                 parent_perm = 0
 
             oca_group = getattr(order, "ocaGroup", "")
-            if parent_id == 0 and parent_perm == 0 and not oca_group:
+            # Check if this order is an active parent entry order (protecting a reversal)
+            is_parent_entry = any(
+                getattr(ct.order, "parentId", 0) == order.orderId
+                for ct in open_trades
+                if ct is not t
+            )
+            if is_parent_entry:
                 LOGGER.info(
-                    f"_find_existing_sl_order: skip order {order.orderId} because it is a standalone order"
+                    f"_find_existing_sl_order: skip order {order.orderId} because it is a parent entry order"
                 )
-                continue  # standalone order, not a bracket/OCA SL
+                continue
 
             # For bracket children, only consider SL whose parent is filled
             parent_trade = None
@@ -262,10 +270,9 @@ class IbkrTrading(BaseAvanzaTrading):
             now = datetime.now(timezone.utc)
             for t in contract_trades:
                 # Protect Breakout Stop OCA orders while position is flat
-                if (
-                    getattr(t.order, "orderRef", "") == "BreakoutStop"
-                    or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
-                ):
+                if getattr(t.order, "orderRef", "") == "BreakoutStop" or getattr(
+                    t.order, "ocaGroup", ""
+                ).startswith("ibkr_oca_bostp_"):
                     protected_ids.add(t.order.orderId)
 
                 # An active parent entry order: its children reference its orderId.
@@ -333,10 +340,9 @@ class IbkrTrading(BaseAvanzaTrading):
         cancelled_count = 0
         for t in contract_trades:
             # If position is active, any residual BreakoutStop entry order must be cancelled immediately
-            if (
-                getattr(t.order, "orderRef", "") == "BreakoutStop"
-                or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
-            ):
+            if getattr(t.order, "orderRef", "") == "BreakoutStop" or getattr(
+                t.order, "ocaGroup", ""
+            ).startswith("ibkr_oca_bostp_"):
                 LOGGER.info(
                     f"Sync: Position is active ({signed_pos}), cancelling residual BreakoutStop orderId={t.order.orderId}"
                 )
@@ -352,11 +358,35 @@ class IbkrTrading(BaseAvanzaTrading):
                 parent_perm = 0
 
             # Identify if this is a closing SL or TP.
-            # We assume any active order with an ocaGroup or parentId/parentPermId is an SL/TP bracket child.
+            # An active order is an SL or TP for the current position if:
+            # 1. It has an ocaGroup, parentId/parentPermId, or orderRef ('BracketTP', 'BracketSL', etc.), OR
+            # 2. It is an opposite-direction order (action == closing_action) with type in (STP, STP LMT, LMT),
+            #    provided it is not an active parent entry order (which protects an unfilled entry/reversal).
+            is_parent_entry = any(
+                getattr(ct.order, "parentId", 0) == t.order.orderId
+                for ct in contract_trades
+                if ct is not t
+            )
+            if is_parent_entry:
+                continue
+
             is_sl_tp = False
             if t.order.ocaGroup:
                 is_sl_tp = True
             elif parent_id != 0 or parent_perm != 0:
+                is_sl_tp = True
+            elif getattr(t.order, "orderRef", "") in (
+                "BracketTP",
+                "BracketSL",
+                "TakeProfit",
+                "StopLoss",
+            ):
+                is_sl_tp = True
+            elif t.order.action == closing_action and t.order.orderType in (
+                "STP",
+                "STP LMT",
+                "LMT",
+            ):
                 is_sl_tp = True
 
             if not is_sl_tp:
@@ -580,13 +610,22 @@ class IbkrTrading(BaseAvanzaTrading):
         tp_order = LimitOrder(opposite, volume, self._round_price(tp_price), tif="DAY")
         tp_order.orderId = tp_id
         tp_order.parentId = parent_id
+        tp_order.orderRef = "BracketTP"
         tp_order.transmit = False
 
         # Stop-loss child: stop order (placed last, transmit=True triggers the whole group)
         sl_order = StopOrder(opposite, volume, self._round_price(sl_price), tif="DAY")
         sl_order.orderId = sl_id
         sl_order.parentId = parent_id
+        sl_order.orderRef = "BracketSL"
         sl_order.transmit = True  # transmit all orders in the bracket
+
+        oca_group = f"ibkr_bracket_oca_{parent_id}"
+        IB.oneCancelsAll(
+            orders=[tp_order, sl_order],
+            ocaGroup=oca_group,
+            ocaType=1,
+        )
 
         parent_trade = self._place_ib_order(parent)
         LOGGER.info(
@@ -1051,6 +1090,10 @@ class IbkrTrading(BaseAvanzaTrading):
         if getattr(order, "parentId", 0) != 0:
             parent_trade = self._find_trade_by_order_id(order.parentId)
             if not parent_trade:
+                if not getattr(order, "ocaGroup", ""):
+                    order.ocaGroup = f"ibkr_bracket_oca_{order.parentId}"
+                if not getattr(order, "orderRef", ""):
+                    order.orderRef = f"Bracket{order.orderType}"
                 order.parentId = 0
 
         # IMPORTANT: Force transmit=True on modifications. Bracket children may
@@ -1145,6 +1188,8 @@ class IbkrTrading(BaseAvanzaTrading):
 
         tp_order = LimitOrder(action, volume, self._round_price(limit_price), tif="DAY")
         sl_order = StopOrder(action, volume, self._round_price(stop_price), tif="DAY")
+        tp_order.orderRef = "BracketTP"
+        sl_order.orderRef = "BracketSL"
 
         # Sanitize order fields that TWS might have populated with localized strings
         for order in [tp_order, sl_order]:
@@ -1361,7 +1406,13 @@ class IbkrTrading(BaseAvanzaTrading):
         order = trade.order
         if order.orderType not in ("LMT", "MKT", "STP", "STP LMT"):
             return False
-        if getattr(order, "orderRef", "") == "CloseOnly":
+        if getattr(order, "orderRef", "") in (
+            "CloseOnly",
+            "BracketTP",
+            "BracketSL",
+            "TakeProfit",
+            "StopLoss",
+        ):
             return False
         # Has a parent → bracket child (TP)
         parent_id = getattr(order, "parentId", 0)
@@ -1384,6 +1435,9 @@ class IbkrTrading(BaseAvanzaTrading):
         Return True if there are any active OCA or bracket orders for this
         contract.  Used to avoid stacking multiple auto-OCA brackets.
         """
+        signed_pos = self._get_signed_position()
+        closing_action = "SELL" if signed_pos > 0 else "BUY"
+
         for t in self._get_open_ib_trades():
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
@@ -1393,17 +1447,32 @@ class IbkrTrading(BaseAvanzaTrading):
             parent_id = getattr(order, "parentId", 0)
             if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
                 return True
+            if getattr(order, "orderRef", "") in ("BracketTP", "BracketSL"):
+                return True
+            # If position is non-zero, any active closing STP or LMT is an exit bracket order
+            if signed_pos != 0 and order.action == closing_action:
+                if order.orderType in ("STP", "STP LMT", "LMT"):
+                    return True
         return False
 
-    def _process_pending_entry_fills(self) -> None:
+    def _process_pending_entry_fills(
+        self,
+        old_pos: int = 0,
+        old_avg_cost: float = 0.0,
+        current_avg_cost: float = 0.0,
+        was_flat: bool = False,
+    ) -> None:
         """
         Called from _on_position after ib.positions() is updated.
 
         Logic:
-        1. If a position was opened from flat (pre_fill_pos == 0),
+        1. If a position was opened from flat (pre_fill_pos == 0 and old_pos == 0),
            generate an Auto-OCA bracket automatically.
-        2. TP and SL are determined via fill_price ± AUTO_OCA_OFFSET.
-        3. Do NOT repurpose or cancel resting limit orders.
+        2. If scaling up an existing position (e.g. LMT order between position avg price
+           and children bracket STP price), do NOT create any other OCA orders.
+           The existing SL/TP orders have already been volume-synced in _sync_sl_tp_volume.
+        3. TP and SL are determined via fill_price ± AUTO_OCA_OFFSET.
+        4. Do NOT repurpose or cancel resting limit orders.
         """
         if not self._pending_entry_fills:
             return
@@ -1419,11 +1488,48 @@ class IbkrTrading(BaseAvanzaTrading):
 
         # Use the most recent fill for pricing and state checks
         fill = fills[-1]
+        fill_price = fill["price"]
+        fill_side = fill["side"]
+        fill_order_id = fill.get("orderId", 0)
+        pre_fill_pos = fill.get("pre_fill_pos", 0)
+
+        # Determine effective position prior to this fill
+        effective_old_pos = old_pos if old_pos != 0 else pre_fill_pos
+
+        # Check if this fill is scaling up an existing position:
+        # A scale-up occurs when the position was already open in the same direction.
+        is_scale_up = False
+        if effective_old_pos != 0:
+            if (effective_old_pos < 0 and fill_side == "sell") or (
+                effective_old_pos > 0 and fill_side == "buy"
+            ):
+                is_scale_up = True
+
+        if is_scale_up:
+            closing_action = "SELL" if effective_old_pos > 0 else "BUY"
+            sl_trade = self._find_existing_sl_order(closing_action)
+            sl_price = getattr(sl_trade.order, "auxPrice", None) if sl_trade else None
+
+            pos_avg = old_avg_cost if old_avg_cost > 0 else current_avg_cost
+
+            in_range = False
+            if sl_price is not None and pos_avg > 0:
+                low_bound = min(pos_avg, sl_price)
+                high_bound = max(pos_avg, sl_price)
+                in_range = low_bound <= fill_price <= high_bound
+
+            LOGGER.info(
+                f"Scale-up entry fill orderId={fill_order_id} @ {fill_price} detected "
+                f"(old_pos={effective_old_pos} -> new_pos={pos}, pos_avg={pos_avg}, sl_price={sl_price}, "
+                f"in_range={in_range}). Existing SL/TP orders will cover the new position size {abs(pos)}. "
+                f"Skipping Auto-OCA bracket creation."
+            )
+            return
 
         # Only trigger auto-OCA when a position is opened from flat.
-        if not getattr(self, "_is_flat", False):
+        if not was_flat or effective_old_pos != 0:
             LOGGER.info(
-                f"Auto-OCA: this fill did not open a position from flat. "
+                f"Auto-OCA: position was not flat before fill (effective_old_pos={effective_old_pos}, was_flat={was_flat}). "
                 f"Skipping auto-OCA."
             )
             return
@@ -1435,7 +1541,6 @@ class IbkrTrading(BaseAvanzaTrading):
         # We are opening a position from flat. Clear the flag so subsequent fills don't duplicate OCA.
         self._is_flat = False
 
-        fill_price = fill["price"]
         volume = abs(pos)
 
         if pos > 0:
@@ -1554,7 +1659,15 @@ class IbkrTrading(BaseAvanzaTrading):
             f"Position update: conId={position.contract.conId}, "
             f"position={position.position}, avgCost={position.avgCost}"
         )
-        if position.position == 0:
+        old_pos = getattr(self, "_last_position", 0)
+        old_avg_cost = getattr(self, "_last_avg_cost", 0.0)
+        was_flat = getattr(self, "_is_flat", False) or (old_pos == 0)
+
+        mult = float(self.contract.multiplier) if self.contract.multiplier else 1.0
+        current_avg_cost = (position.avgCost / mult) if mult > 0 else position.avgCost
+        new_pos = int(position.position)
+
+        if new_pos == 0:
             self._is_flat = True
 
         try:
@@ -1565,9 +1678,20 @@ class IbkrTrading(BaseAvanzaTrading):
         # Process any pending limit fills for auto-OCA bracket placement.
         # Position is now up to date, so place_oca_bracket validation will pass.
         try:
-            self._process_pending_entry_fills()
+            self._process_pending_entry_fills(
+                old_pos=old_pos,
+                old_avg_cost=old_avg_cost,
+                current_avg_cost=current_avg_cost,
+                was_flat=was_flat,
+            )
         except Exception as e:
             LOGGER.error(f"Auto-OCA: error processing pending fills: {e}")
+
+        if new_pos != 0:
+            self._is_flat = False
+
+        self._last_position = new_pos
+        self._last_avg_cost = current_avg_cost
 
         if self._on_change_callback:
             self._on_change_callback(self.get_open_orders())
@@ -1735,7 +1859,9 @@ class IbkrTrading(BaseAvanzaTrading):
             oid = getattr(order, "orderId", 0)
             p_perm = self.perm_id_to_parent_perm_id.get(pid, 0)
             has_parent = bool(p_perm)
-            oca = getattr(order, "ocaGroup", "") or self.perm_id_to_oca_group.get(pid, "")
+            oca = getattr(order, "ocaGroup", "") or self.perm_id_to_oca_group.get(
+                pid, ""
+            )
 
             if has_parent:
                 group_key = f"parent_{p_perm}"
@@ -1793,7 +1919,9 @@ class IbkrTrading(BaseAvanzaTrading):
                 elif order.orderType == "STP LMT":
                     price = order.auxPrice
 
-                effective_order_id = getattr(order, "permId", 0) or getattr(order, "orderId", 0)
+                effective_order_id = getattr(order, "permId", 0) or getattr(
+                    order, "orderId", 0
+                )
 
                 placed_time = self.order_placed_times.get(order.permId)
                 if not placed_time and getattr(order, "orderId", 0):
@@ -1814,7 +1942,9 @@ class IbkrTrading(BaseAvanzaTrading):
                     if parent_id_val in (0, IB_UNSET_INT):
                         parent_id_val = None
 
-                oca_val = getattr(order, "ocaGroup", "") or self.perm_id_to_oca_group.get(order.permId, "")
+                oca_val = getattr(
+                    order, "ocaGroup", ""
+                ) or self.perm_id_to_oca_group.get(order.permId, "")
                 if not oca_val:
                     oca_val = None
 

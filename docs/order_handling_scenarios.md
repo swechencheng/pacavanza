@@ -111,7 +111,10 @@ Used to place a standalone limit order at a specific price.
 - **Trigger**: User inputs a price in the `LMT` field and clicks `[B] Limit` or `[S] Limit`.
 - **Backend Flow**: Places a standard `LimitOrder` via IBKR.
 - **Chart UI**: Renders as a single horizontal dashed line (`horizontal-ray`). It is colored **blue** (`#2196F3`) for Buy Limit orders and **grey** (`#9E9E9E`) for Sell Limit orders.
-- **Lifecycle**: Remains in the order book until the market reaches the specified price, at which point it fills.
+- **Lifecycle & Execution**:
+  - Remains in the order book until the market reaches the specified price, at which point it fills.
+  - **Flat Entry (New Position)**: When filled from flat (no open position), the Auto-OCA feature automatically attaches an SL/TP bracket to protect the initial position.
+  - **Scale-Up Entry (Existing Position)**: When filled in the same direction as an existing position (e.g., selling limit on a pullback to scale into a short position between average cost and stop price), **no duplicate OCA bracket is created**. Instead, `_sync_sl_tp_volume()` automatically scales up both the existing Take Profit and Stop Loss order quantities to match the new total position size, keeping their original prices unchanged.
 
 ---
 
@@ -122,7 +125,7 @@ Once orders are active, users can manage them via the UI or the chart.
 ### A. Editing Orders via Chart Dragging
 
 - **User Action**: The user drags the Stop Loss, Take Profit, or Entry line of an order directly on the TradingView chart.
-- **Execution**: `drawing_tools.js` handles the mouse release event and calculates the new price. `future_chart.js` dispatches an `edit_order` API call. The backend updates the `auxPrice` (for stops) or `lmtPrice` (for limits) and re-transmits the order to IBKR. Note: Dragging the Entry line will **only** transmit an update if the entry order is still pending (not fulfilled). If the position is already open, dragging the entry line visually moves it, but no entry update is sent to the backend.
+- **Execution**: `drawing_tools.js` handles the mouse release event and calculates the new price. `future_chart.js` dispatches an `edit_order` API call. The backend updates the `auxPrice` (for stops) or `lmtPrice` (for limits) and re-transmits the order to IBKR. If the parent entry order has already filled, `edit_order` detaches `parentId` to prevent TWS modification rejection while preserving its `ocaGroup` and `orderRef` so it remains linked in IBKR's OCA engine. Note: Dragging the Entry line will **only** transmit an update if the entry order is still pending (not fulfilled). If the position is already open, dragging the entry line visually moves it, but no entry update is sent to the backend.
 
 ### B. Editing Orders via Text Inputs
 
@@ -148,11 +151,11 @@ Once orders are active, users can manage them via the UI or the chart.
 
 ## 4. Background Synchronization (`_sync_sl_tp_volume`)
 
-To ensure SL/TP logic remains robust against manual interventions or split executions, the backend utilizes an automated synchronizer.
+To ensure SL/TP logic remains robust against manual interventions, split executions, or scale-up orders, the backend utilizes an automated synchronizer.
 
 - **Trigger**: Every time an order fills, the position updates (`_on_position` event), which triggers `_sync_sl_tp_volume()`. (Note: the synchronizer is called from `_on_position` rather than `_on_exec_details` because `ib.positions()` updates asynchronously after execution details fire — calling it from `_on_exec_details` would read the old position size.)
 - **Logic**:
-  1. Queries the absolute current position size.
-  2. Iterates over all open child orders (identified by `parentId` or `ocaGroup`).
-  3. **If flat (position = 0)**: Cancels all active SL/TP orders to prevent ghost entries.
-  4. **If active (position > 0)**: Identifies SL/TP orders in the wrong direction and cancels them. Updates the volume (`totalQuantity`) of the correct SL/TP orders to perfectly match the current position size. Transmits the update to IBKR.
+  1. Queries the absolute current position size (`abs(position)`).
+  2. Iterates over all open child/exit orders (identified by `ocaGroup`, `parentId`, bracket `orderRef`, or active opposite-direction closing orders).
+  3. **If flat (position = 0)**: Cancels all active SL/TP orders to prevent ghost entries (while protecting pending `BreakoutStop` or entry parent orders).
+  4. **If active (position != 0, Long or Short)**: Identifies SL/TP orders in the wrong direction and cancels them. Updates the volume (`totalQuantity`) of both the Take Profit and Stop Loss orders to perfectly match the current position size without modifying their prices. Transmits the update to IBKR.
