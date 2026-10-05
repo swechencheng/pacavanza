@@ -1031,77 +1031,8 @@ class FutureChartApp extends PACChartApp {
           continue;
         }
 
-        // Check if an active exit OCA bracket already exists for this position (e.g. newly placed TP/SL bracket)
-        const hasLiveExitOca = orders.some(o =>
-          !o.isDone &&
-          o.ocaGroup &&
-          !o.ocaGroup.startsWith("ibkr_oca_bostp_") &&
-          o.orderRef !== "BreakoutStop"
-        );
-
-        // Case 2: One stop order fulfilled & position is active -> turn into position drawing
-        // (Only draw if no live exit OCA bracket exists, preventing duplicate position drawings)
-        if (fulfilledOrder && this._currentPosition && this._currentPosition.position !== 0 && !hasLiveExitOca) {
-          const isLong = this._currentPosition.position > 0;
-          const prices = ocaOrders.map(o => o.price).filter(p => p != null);
-          const upperPrice = Math.max(...prices);
-          const lowerPrice = Math.min(...prices);
-          const range = upperPrice - lowerPrice;
-
-          const entryPrice = this._currentPosition.avgCost || (isLong ? upperPrice : lowerPrice);
-          const slPrice = isLong ? lowerPrice : upperPrice;
-          const tpPrice = isLong ? (entryPrice + 2 * range) : (entryPrice - 2 * range);
-
-          const times = ocaOrders.map(o => o.placedTime).filter(t => t != null);
-          const earliestPlacedTime = times.length > 0 ? times.reduce((a, b) => a < b ? a : b) : null;
-          const leftBarTime = getBarTimeForOrder(earliestPlacedTime);
-
-          if (leftBarTime !== null) {
-            const allTimes = Array.from(cm.data.keys()).sort((a, b) => a - b);
-            const leftIndex = allTimes.indexOf(leftBarTime);
-            let rightBarTime;
-            if (leftIndex !== -1 && leftIndex + 20 < allTimes.length) {
-              rightBarTime = allTimes[leftIndex + 20];
-            } else {
-              rightBarTime = leftBarTime + 20 * this.INTERVAL_SECONDS;
-            }
-
-            const toolType = isLong ? "long-position" : "short-position";
-            const id = `order-oca-${ocaGroupId}`;
-            const anchors = [
-              { time: leftBarTime, price: entryPrice },
-              { time: rightBarTime, price: slPrice },
-              { time: rightBarTime, price: tpPrice }
-            ];
-
-            const style = {
-              lineColor: isLong ? "#26A69A" : "#EF5350",
-              lineWidth: 1.5
-            };
-            const opts = {
-              showPrices: true,
-              showPercentage: true,
-              showRiskReward: true
-            };
-
-            this._remoteLog("DEBUG", `Attempting to create BO-STP position drawing ${toolType} for group ${ocaGroupId} with anchors: ${JSON.stringify(anchors)}`);
-            try {
-              const drawing = cm.toolRegistry.createDrawing(toolType, id, anchors, style, opts);
-              if (drawing) {
-                PACChartApp.patchPositionDrawing(drawing, toolType);
-                cm.drawingManager.addDrawing(drawing);
-                this._orderDrawingIds.push(id);
-                this._remoteLog("DEBUG", `Successfully added BO-STP position drawing ${id}`);
-              }
-            } catch (err) {
-              this._remoteLog("ERROR", `Failed to create BO-STP position drawing ${toolType}: ${err.message}\nStack: ${err.stack}`);
-            }
-          }
-          ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
-          continue;
-        }
-
-        // If neither pending nor active position, mark processed
+        // If fulfilled or not active, mark all orders in BO-STP group as processed
+        // (The resulting position drawing is handled by the live exit OCA bracket below)
         ocaOrders.forEach(o => processedOrderIds.add(o.orderId));
         continue;
       }
@@ -1150,10 +1081,11 @@ class FutureChartApp extends PACChartApp {
           entryPrice = lastTime ? cm.data.get(lastTime).close : (upperPrice + lowerPrice) / 2;
         }
 
-        // Long position: TP is upperPrice, SL is lowerPrice
-        // Short position: TP is lowerPrice, SL is upperPrice
-        const slPrice = isLong ? lowerPrice : upperPrice;
-        const tpPrice = isLong ? upperPrice : lowerPrice;
+        // Match TP (LMT) and SL (STP) explicitly from the active orders in the OCA group
+        const tpOrder = ocaOrders.find(o => o.orderType === "LMT");
+        const slOrder = ocaOrders.find(o => o.orderType === "STP" || o.orderType === "STP LMT");
+        const slPrice = slOrder && slOrder.price != null ? slOrder.price : (isLong ? lowerPrice : upperPrice);
+        const tpPrice = tpOrder && tpOrder.price != null ? tpOrder.price : (isLong ? upperPrice : lowerPrice);
 
         const toolType = isLong ? "long-position" : "short-position";
         const id = `order-oca-${ocaGroupId}`;

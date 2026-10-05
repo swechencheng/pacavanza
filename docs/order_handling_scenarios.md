@@ -25,10 +25,11 @@ Used to enter or exit a position immediately at the best available current price
   - Calls `_execute_market_buy_order` or `_execute_market_sell_order`.
   - Creates a `MarketOrder("BUY", volume)` or `MarketOrder("SELL", volume)`.
   - Transmits to IBKR.
-- **Lifecycle**:
+- **Lifecycle & Automated Bracket Placement**:
   - Fills almost instantaneously.
-  - The `_on_position` event fires (after `ib.positions()` is updated asynchronously), which triggers `_sync_sl_tp_volume()` to align any existing open stop-loss (SL) / take-profit (TP) order volumes with the new total position.
-  - UI briefly shows the order as "Filled" before it disappears from the active order list.
+  - **Flat Entry (New Position)**: When filled from flat (or whenever a position opens without an active exit bracket), the Auto-OCA engine automatically generates and places a live **OCA Bracket Order** (`place_oca_bracket`) with Take Profit at `fill_price + AUTO_OCA_OFFSET` and Stop Loss at `fill_price - AUTO_OCA_OFFSET` (or inverted for short positions).
+  - **Active Orders & Chart UI**: The newly placed TP (LMT) and SL (STP) bracket orders immediately appear in the **Active Orders panel** as live, editable orders. The chart renders a corresponding `long-position` or `short-position` drawing, perfectly aligned with the live TP and SL order prices. Dragging the SL or TP line on the chart directly modifies the live IBKR orders.
+  - **Closing Trade**: When used to close an existing position to flat, `_sync_sl_tp_volume()` automatically cleans up any orphaned SL/TP orders upon return to flat.
 
 ### B. Stop Orders (Position-Aware Entry/Exit)
 

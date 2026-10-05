@@ -1458,14 +1458,22 @@ class IbkrTrading(BaseAvanzaTrading):
 
     def _has_active_oca_or_bracket(self) -> bool:
         """
-        Return True if there are any active OCA or bracket orders for this
-        contract.  Used to avoid stacking multiple auto-OCA brackets.
+        Return True if there are any active exit OCA or bracket orders for this
+        contract. Used to avoid stacking multiple auto-OCA brackets.
         """
         signed_pos = self._get_signed_position()
         closing_action = "SELL" if signed_pos > 0 else "BUY"
 
         for t in self._get_open_ib_trades():
             if t.contract.conId != self.contract.conId or not t.isActive():
+                continue
+            if t.orderStatus.status in (
+                "PendingCancel",
+                "Cancelled",
+                "ApiCancelled",
+                "Inactive",
+                "Filled",
+            ):
                 continue
             order = t.order
             # Ignore BreakoutStop entry orders (which are not exit brackets)
@@ -1478,11 +1486,16 @@ class IbkrTrading(BaseAvanzaTrading):
             parent_id = getattr(order, "parentId", 0)
             if parent_id and parent_id != 0 and parent_id != IB_UNSET_INT:
                 return True
-            if getattr(order, "orderRef", "") in ("BracketTP", "BracketSL"):
+            if getattr(order, "orderRef", "") in (
+                "BracketTP",
+                "BracketSL",
+                "TakeProfit",
+                "StopLoss",
+            ):
                 return True
-            # If position is non-zero, any active closing STP or LMT is an exit bracket order
+            # If position is non-zero, any active closing STP order is an exit bracket order
             if signed_pos != 0 and order.action == closing_action:
-                if order.orderType in ("STP", "STP LMT", "LMT"):
+                if order.orderType in ("STP", "STP LMT"):
                     return True
         return False
 
@@ -1494,84 +1507,99 @@ class IbkrTrading(BaseAvanzaTrading):
         was_flat: bool = False,
     ) -> None:
         """
-        Called from _on_position after ib.positions() is updated.
+        Processes entry fills to attach live Auto-OCA brackets (or handle scale-ups).
+        Called from _on_position, _on_exec_details, or delayed sync.
 
         Logic:
-        1. If a position was opened from flat (pre_fill_pos == 0 and old_pos == 0),
+        1. If a position was opened from flat (or has no existing active exit bracket),
            generate an Auto-OCA bracket automatically.
-        2. If scaling up an existing position (e.g. LMT order between position avg price
-           and children bracket STP price), do NOT create any other OCA orders.
-           The existing SL/TP orders have already been volume-synced in _sync_sl_tp_volume.
-        3. TP and SL are determined via fill_price ± AUTO_OCA_OFFSET.
-        4. Do NOT repurpose or cancel resting limit orders.
+        2. If scaling up an existing position (fill in same direction AND an active bracket
+           already exists), do NOT create any duplicate OCA orders. The existing SL/TP orders
+           have already been volume-synced in _sync_sl_tp_volume.
+        3. TP and SL are determined via fill_price ± AUTO_OCA_OFFSET (or 2:1 for BO-STP).
         """
-        if not self._pending_entry_fills:
-            return
-
-        # Drain the queue
-        fills = list(self._pending_entry_fills)
-        self._pending_entry_fills.clear()
-
         pos = self._get_signed_position()
         if pos == 0:
-            LOGGER.info("Auto-OCA: position is flat after fill, skipping OCA.")
+            if self._pending_entry_fills:
+                LOGGER.info("Auto-OCA: position is flat after fill, clearing queue and skipping OCA.")
+                self._pending_entry_fills.clear()
             return
 
-        # Use the most recent fill for pricing and state checks
-        fill = fills[-1]
+        if not self._pending_entry_fills:
+            # If position is active from flat, but fills queue was empty,
+            # check if an OCA bracket is already protecting it
+            if was_flat and not self._has_active_oca_or_bracket() and current_avg_cost > 0:
+                fill = {
+                    "price": current_avg_cost,
+                    "side": "buy" if pos > 0 else "sell",
+                    "volume": abs(pos),
+                    "orderId": 0,
+                    "pre_fill_pos": 0,
+                    "orderType": "MKT",
+                    "orderRef": "",
+                    "ocaGroup": "",
+                }
+            else:
+                return
+        else:
+            # Drain the queue
+            fills = list(self._pending_entry_fills)
+            self._pending_entry_fills.clear()
+            fill = fills[-1]
+
         fill_price = fill["price"]
         fill_side = fill["side"]
         fill_order_id = fill.get("orderId", 0)
+        fill_shares = fill.get("volume", 0) or abs(pos)
         pre_fill_pos = fill.get("pre_fill_pos", 0)
 
-        # Determine effective position prior to this fill
-        effective_old_pos = old_pos if old_pos != 0 else pre_fill_pos
+        # Mathematically exact pre-fill position:
+        fill_delta = fill_shares if fill_side == "buy" else -fill_shares
+        calculated_pre_fill_pos = pos - fill_delta
+
+        # An entry fill opened the position from flat if:
+        # 1. was_flat flag is True, OR
+        # 2. old_pos == 0, OR
+        # 3. pre_fill_pos == 0, OR
+        # 4. calculated_pre_fill_pos == 0
+        opened_from_flat = (
+            was_flat
+            or old_pos == 0
+            or pre_fill_pos == 0
+            or calculated_pre_fill_pos == 0
+        )
+
+        has_bracket = self._has_active_oca_or_bracket()
 
         # Check if this fill is scaling up an existing position:
-        # A scale-up occurs when the position was already open in the same direction.
+        # A scale-up occurs ONLY when:
+        # - The position was already open before this fill (not opened_from_flat)
+        # - The fill was in the same direction
+        # - AND an active OCA/bracket order ALREADY exists to cover the position!
         is_scale_up = False
-        if effective_old_pos != 0:
-            if (effective_old_pos < 0 and fill_side == "sell") or (
-                effective_old_pos > 0 and fill_side == "buy"
+        if not opened_from_flat and has_bracket:
+            effective_prev = old_pos if old_pos != 0 else calculated_pre_fill_pos
+            if (effective_prev < 0 and fill_side == "sell") or (
+                effective_prev > 0 and fill_side == "buy"
             ):
                 is_scale_up = True
 
         if is_scale_up:
-            closing_action = "SELL" if effective_old_pos > 0 else "BUY"
-            sl_trade = self._find_existing_sl_order(closing_action)
-            sl_price = getattr(sl_trade.order, "auxPrice", None) if sl_trade else None
-
-            pos_avg = old_avg_cost if old_avg_cost > 0 else current_avg_cost
-
-            in_range = False
-            if sl_price is not None and pos_avg > 0:
-                low_bound = min(pos_avg, sl_price)
-                high_bound = max(pos_avg, sl_price)
-                in_range = low_bound <= fill_price <= high_bound
-
             LOGGER.info(
                 f"Scale-up entry fill orderId={fill_order_id} @ {fill_price} detected "
-                f"(old_pos={effective_old_pos} -> new_pos={pos}, pos_avg={pos_avg}, sl_price={sl_price}, "
-                f"in_range={in_range}). Existing SL/TP orders will cover the new position size {abs(pos)}. "
+                f"(prev_pos={calculated_pre_fill_pos} -> new_pos={pos}). "
+                f"Existing SL/TP orders will cover the new position size {abs(pos)}. "
                 f"Skipping Auto-OCA bracket creation."
             )
             return
 
-        # Only trigger auto-OCA when a position is opened from flat.
-        if not was_flat or effective_old_pos != 0:
-            LOGGER.info(
-                f"Auto-OCA: position was not flat before fill (effective_old_pos={effective_old_pos}, was_flat={was_flat}). "
-                f"Skipping auto-OCA."
-            )
-            return
-
-        if self._has_active_oca_or_bracket():
+        # If an active OCA or bracket already exists, don't duplicate it
+        if has_bracket:
             LOGGER.info("Auto-OCA: active OCA/bracket already exists, skipping.")
             return
 
-        # We are opening a position from flat. Clear the flag so subsequent fills don't duplicate OCA.
+        # Clear flat flag so subsequent scale-ups know we are in position
         self._is_flat = False
-
         volume = abs(pos)
 
         is_bostp = fill.get("orderRef") == "BreakoutStop" or fill.get(
@@ -1638,17 +1666,18 @@ class IbkrTrading(BaseAvanzaTrading):
                 f"(high={high_price}, low={low_price}, range={range_pts})"
             )
         else:
+            entry_price = fill_price if fill_price > 0 else current_avg_cost
             if pos > 0:
                 action = "SELL"
-                tp_price = self._round_price(fill_price + AUTO_OCA_OFFSET)
-                sl_price = self._round_price(fill_price - AUTO_OCA_OFFSET)
+                tp_price = self._round_price(entry_price + AUTO_OCA_OFFSET)
+                sl_price = self._round_price(entry_price - AUTO_OCA_OFFSET)
             else:
                 action = "BUY"
-                tp_price = self._round_price(fill_price - AUTO_OCA_OFFSET)
-                sl_price = self._round_price(fill_price + AUTO_OCA_OFFSET)
+                tp_price = self._round_price(entry_price - AUTO_OCA_OFFSET)
+                sl_price = self._round_price(entry_price + AUTO_OCA_OFFSET)
 
             LOGGER.info(
-                f"Auto-OCA: placing bracket after entry fill @ {fill_price}. "
+                f"Auto-OCA: placing bracket after entry fill @ {entry_price}. "
                 f"action={action}, volume={volume}, TP={tp_price}, SL={sl_price}"
             )
         try:
@@ -1659,6 +1688,8 @@ class IbkrTrading(BaseAvanzaTrading):
                 stop_price=sl_price,
             )
             LOGGER.info(f"Auto-OCA: bracket placed successfully: {result}")
+            if self._on_change_callback:
+                self._on_change_callback(self.get_open_orders())
         except Exception as e:
             LOGGER.error(f"Auto-OCA: failed to place bracket: {e}")
 
@@ -1814,6 +1845,8 @@ class IbkrTrading(BaseAvanzaTrading):
             try:
                 LOGGER.debug("Delayed sync: running _sync_sl_tp_volume safety check")
                 self._sync_sl_tp_volume()
+                if self._pending_entry_fills:
+                    self._process_pending_entry_fills()
                 if self._on_change_callback:
                     self._on_change_callback(self.get_open_orders())
             except Exception as e:
@@ -1856,12 +1889,12 @@ class IbkrTrading(BaseAvanzaTrading):
                 LOGGER.error(f"Error extracting fill data: {e}")
 
         # Queue standalone entry fills for auto-OCA processing
-        # (will be processed in _on_position once ib.positions() is updated)
+        # (will be processed in _on_position once ib.positions() is updated,
+        # or immediately if ib.positions() is already populated)
         if _fill and self._is_standalone_entry_order(trade):
             try:
                 exec_obj = _fill.execution
-                # Capture the position BEFORE the fill (ib.positions() has not
-                # been updated yet at this point — that happens via positionEvent).
+                # Capture the position BEFORE the fill (or current position if updated)
                 pre_fill_pos = self._get_signed_position()
                 self._pending_entry_fills.append(
                     {
@@ -1879,6 +1912,9 @@ class IbkrTrading(BaseAvanzaTrading):
                     f"Auto-OCA: queued standalone entry fill orderId={trade.order.orderId} "
                     f"@ {exec_obj.price} (pre-fill position={pre_fill_pos}) for auto-OCA processing"
                 )
+                # If position is already non-zero and no bracket exists yet, place immediately!
+                if self._get_signed_position() != 0 and not self._has_active_oca_or_bracket():
+                    self._process_pending_entry_fills()
             except Exception as e:
                 LOGGER.error(f"Auto-OCA: error queuing fill: {e}")
 
@@ -1989,21 +2025,7 @@ class IbkrTrading(BaseAvanzaTrading):
                 return False
 
             if all(is_trade_done(t) for t in trades):
-                # Exception: if this is a BreakoutStop OCA group where one order was Filled
-                # and the position is still active, keep it so the frontend can render the position drawing!
-                is_bostp = any(
-                    getattr(t.order, "orderRef", "") == "BreakoutStop"
-                    or getattr(t.order, "ocaGroup", "").startswith("ibkr_oca_bostp_")
-                    for t in trades
-                )
-                if (
-                    is_bostp
-                    and signed_pos != 0
-                    and any(t.orderStatus.status == "Filled" for t in trades)
-                ):
-                    pass
-                else:
-                    continue
+                continue
 
             # Otherwise, keep all of them
             for t in trades:
