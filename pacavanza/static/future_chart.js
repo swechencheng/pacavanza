@@ -814,7 +814,8 @@ class FutureChartApp extends PACChartApp {
 
       const isFulfilled = !!o.fulfilled;
       const isDone = !!o.isDone;
-      const fulfilledCls = isFulfilled ? "order-row-fulfilled" : "";
+      const isCancelled = isDone && !isFulfilled;
+      const fulfilledCls = isFulfilled ? "order-row-fulfilled" : (isCancelled ? "order-row-cancelled" : "");
       const purpleStyle = isFulfilled ? 'style="color: #b388ff !important;"' : "";
 
       return `<div class="order-row ${fulfilledCls}" data-order-id="${o.orderId}" ${purpleStyle}>
@@ -823,7 +824,7 @@ class FutureChartApp extends PACChartApp {
         ${isFulfilled || isDone ? `<span style="color:#888; ${purpleStyle}">×${o.totalQuantity}</span>` :
           `×<input type="number" class="order-qty-input" value="${o.totalQuantity}" step="1" min="1" data-oid="${o.orderId}" />`}
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
-          `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${isFulfilled ? "disabled" : ""} ${purpleStyle} />`}
+          `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${(isFulfilled || isDone) ? "disabled" : ""} ${purpleStyle} />`}
         <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
         ${ocaInfo}
         <span style="flex:1;"></span>
@@ -1030,8 +1031,17 @@ class FutureChartApp extends PACChartApp {
           continue;
         }
 
+        // Check if an active exit OCA bracket already exists for this position (e.g. newly placed TP/SL bracket)
+        const hasLiveExitOca = orders.some(o =>
+          !o.isDone &&
+          o.ocaGroup &&
+          !o.ocaGroup.startsWith("ibkr_oca_bostp_") &&
+          o.orderRef !== "BreakoutStop"
+        );
+
         // Case 2: One stop order fulfilled & position is active -> turn into position drawing
-        if (fulfilledOrder && this._currentPosition && this._currentPosition.position !== 0) {
+        // (Only draw if no live exit OCA bracket exists, preventing duplicate position drawings)
+        if (fulfilledOrder && this._currentPosition && this._currentPosition.position !== 0 && !hasLiveExitOca) {
           const isLong = this._currentPosition.position > 0;
           const prices = ocaOrders.map(o => o.price).filter(p => p != null);
           const upperPrice = Math.max(...prices);

@@ -472,6 +472,18 @@
       background: rgba(106, 27, 154, 0.05) !important;
     }
 
+    .order-row .order-price-input:disabled,
+    .order-row .order-qty-input:disabled {
+      background: transparent !important;
+      border-color: transparent !important;
+      color: #777 !important;
+      cursor: default;
+    }
+
+    .order-row-cancelled {
+      opacity: 0.55;
+    }
+
     .order-empty,
     .tape-empty,
     .trades-empty {

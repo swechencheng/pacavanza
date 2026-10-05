@@ -82,6 +82,8 @@ class IbkrTrading(BaseAvanzaTrading):
         self._is_flat = True
         self._last_position = 0
         self._last_avg_cost = 0.0
+        # Track Breakout Stop OCA order parameters by ocaGroup: {high_price, low_price, volume}
+        self._bostp_info: Dict[str, Dict[str, Any]] = {}
 
         # Subscribe to position updates from IBKR so that ib.positions()
         # is automatically populated and updated.
@@ -1101,6 +1103,17 @@ class IbkrTrading(BaseAvanzaTrading):
         # causes the modification to be accepted but suspends the order locally.
         order.transmit = True
 
+        # Update _bostp_info if a Breakout Stop order's price is edited
+        if getattr(order, "orderRef", "") == "BreakoutStop" or getattr(
+            order, "ocaGroup", ""
+        ).startswith("ibkr_oca_bostp_"):
+            oca_grp = getattr(order, "ocaGroup", "")
+            if oca_grp and oca_grp in getattr(self, "_bostp_info", {}):
+                if order.action == "BUY" and price is not None:
+                    self._bostp_info[oca_grp]["high_price"] = price
+                elif order.action == "SELL" and price is not None:
+                    self._bostp_info[oca_grp]["low_price"] = price
+
         self._place_ib_order(order)
         LOGGER.info(
             f"Edited order {order_id}: type={order.orderType}, newPrice={price}, newQuantity={quantity}"
@@ -1288,6 +1301,14 @@ class IbkrTrading(BaseAvanzaTrading):
         if getattr(short_trade.order, "orderId", 0):
             self.order_placed_times[short_trade.order.orderId] = now_utc
 
+        self._bostp_info[oca_group] = {
+            "high_price": high_rounded,
+            "low_price": low_rounded,
+            "volume": volume,
+            "longOrderId": long_trade.order.orderId,
+            "shortOrderId": short_trade.order.orderId,
+        }
+
         LOGGER.info(
             f"Breakout Stop OCA placed: volume={volume}, "
             f"Long BUY STP orderId={long_trade.order.orderId} @ {high_rounded}, "
@@ -1425,8 +1446,13 @@ class IbkrTrading(BaseAvanzaTrading):
             and parent_perm not in (IB_UNSET_INT, IB_UNSET_LONG)
         ):
             return False
-        # Part of an OCA group → OCA TP
-        if getattr(order, "ocaGroup", ""):
+        # Part of an OCA group → exit OCA TP (except BreakoutStop which is an entry order)
+        oca_group = getattr(order, "ocaGroup", "")
+        if oca_group:
+            if getattr(order, "orderRef", "") == "BreakoutStop" or oca_group.startswith(
+                "ibkr_oca_bostp_"
+            ):
+                return True
             return False
         return True
 
@@ -1442,6 +1468,11 @@ class IbkrTrading(BaseAvanzaTrading):
             if t.contract.conId != self.contract.conId or not t.isActive():
                 continue
             order = t.order
+            # Ignore BreakoutStop entry orders (which are not exit brackets)
+            if getattr(order, "orderRef", "") == "BreakoutStop" or getattr(
+                order, "ocaGroup", ""
+            ).startswith("ibkr_oca_bostp_"):
+                continue
             if getattr(order, "ocaGroup", ""):
                 return True
             parent_id = getattr(order, "parentId", 0)
@@ -1543,19 +1574,83 @@ class IbkrTrading(BaseAvanzaTrading):
 
         volume = abs(pos)
 
-        if pos > 0:
-            action = "SELL"
-            tp_price = fill_price + AUTO_OCA_OFFSET
-            sl_price = fill_price - AUTO_OCA_OFFSET
-        else:
-            action = "BUY"
-            tp_price = fill_price - AUTO_OCA_OFFSET
-            sl_price = fill_price + AUTO_OCA_OFFSET
+        is_bostp = fill.get("orderRef") == "BreakoutStop" or fill.get(
+            "ocaGroup", ""
+        ).startswith("ibkr_oca_bostp_")
 
-        LOGGER.info(
-            f"Auto-OCA: placing bracket after entry fill @ {fill_price}. "
-            f"action={action}, volume={volume}, TP={tp_price}, SL={sl_price}"
-        )
+        if is_bostp:
+            bostp_oca_group = fill.get("ocaGroup", "")
+            bostp_data = getattr(self, "_bostp_info", {}).get(bostp_oca_group, {})
+            high_price = bostp_data.get("high_price")
+            low_price = bostp_data.get("low_price")
+
+            # Fallback: search open/recent trades in this OCA group
+            if high_price is None or low_price is None:
+                prices = []
+                for t in self.ib.trades():
+                    if t.contract.conId == self.contract.conId and (
+                        getattr(t.order, "ocaGroup", "") == bostp_oca_group
+                        or getattr(t.order, "orderRef", "") == "BreakoutStop"
+                    ):
+                        p = getattr(t.order, "auxPrice", None)
+                        if p is not None and p > 0:
+                            prices.append(float(p))
+                if len(prices) >= 2:
+                    high_price = max(prices)
+                    low_price = min(prices)
+
+            entry_price = current_avg_cost if current_avg_cost > 0 else fill_price
+            range_pts = (
+                (high_price - low_price)
+                if (high_price is not None and low_price is not None)
+                else None
+            )
+
+            if pos > 0:
+                action = "SELL"
+                sl_price = (
+                    low_price
+                    if low_price is not None
+                    else (entry_price - AUTO_OCA_OFFSET)
+                )
+                if range_pts is not None and range_pts > 0:
+                    tp_price = entry_price + 2 * range_pts
+                else:
+                    tp_price = entry_price + 2 * abs(entry_price - sl_price)
+            else:
+                action = "BUY"
+                sl_price = (
+                    high_price
+                    if high_price is not None
+                    else (entry_price + AUTO_OCA_OFFSET)
+                )
+                if range_pts is not None and range_pts > 0:
+                    tp_price = entry_price - 2 * range_pts
+                else:
+                    tp_price = entry_price - 2 * abs(sl_price - entry_price)
+
+            tp_price = self._round_price(tp_price)
+            sl_price = self._round_price(sl_price)
+
+            LOGGER.info(
+                f"Auto-OCA (Breakout Stop): placing bracket after BO-STP fill @ {fill_price}. "
+                f"action={action}, volume={volume}, TP={tp_price}, SL={sl_price} "
+                f"(high={high_price}, low={low_price}, range={range_pts})"
+            )
+        else:
+            if pos > 0:
+                action = "SELL"
+                tp_price = self._round_price(fill_price + AUTO_OCA_OFFSET)
+                sl_price = self._round_price(fill_price - AUTO_OCA_OFFSET)
+            else:
+                action = "BUY"
+                tp_price = self._round_price(fill_price - AUTO_OCA_OFFSET)
+                sl_price = self._round_price(fill_price + AUTO_OCA_OFFSET)
+
+            LOGGER.info(
+                f"Auto-OCA: placing bracket after entry fill @ {fill_price}. "
+                f"action={action}, volume={volume}, TP={tp_price}, SL={sl_price}"
+            )
         try:
             result = self.place_oca_bracket(
                 action=action,
@@ -1776,6 +1871,8 @@ class IbkrTrading(BaseAvanzaTrading):
                         "orderId": trade.order.orderId,
                         "pre_fill_pos": pre_fill_pos,
                         "orderType": trade.order.orderType,
+                        "orderRef": getattr(trade.order, "orderRef", ""),
+                        "ocaGroup": getattr(trade.order, "ocaGroup", ""),
                     }
                 )
                 LOGGER.info(

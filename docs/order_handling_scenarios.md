@@ -98,10 +98,14 @@ Used to trade breakouts in either direction when the market is consolidating, au
 - **Lifecycle & Background Synchronization**:
   - **Pending State (Flat)**: Both stop orders remain active. The automated synchronizer (`_sync_sl_tp_volume()`) explicitly protects `BreakoutStop` orders while flat so they are not cancelled as orphans.
   - **Execution (Breakout Triggered)**: Once the market breaks out and one stop order fills, IBKR's OCA engine automatically cancels the other stop order.
-  - **Active State (In Position)**: The trader enters a Long or Short position. The synchronizer (`_sync_sl_tp_volume()`) guarantees that any residual breakout entry order is immediately cancelled and never mistaken for an SL/TP order. The trader can now use the adjacent manual OCA panel (📎) to attach an SL and TP.
+  - **Automated Bracket Placement (In Position)**:
+    - Upon fill, the backend automatically generates and places a new **OCA Bracket Order** (`place_oca_bracket`) to protect the position:
+      - **Long BO Fill**: Stop Loss placed at the opposite (Short) BO price; Take Profit Limit placed at a 2:1 profit-to-risk ratio (`entryPrice + 2 * (highPrice - lowPrice)`).
+      - **Short BO Fill**: Stop Loss placed at the opposite (Long) BO price; Take Profit Limit placed at a 2:1 profit-to-risk ratio (`entryPrice - 2 * (highPrice - lowPrice)`).
+    - In the **Active Orders panel**, the newly placed TP and SL bracket orders appear as active/editable orders. The opposite cancelled breakout order is retained with its status displayed as "Cancelled" and its price/qty inputs disabled.
 - **Chart UI**:
   - **Pending**: Renders as **two gray dotted horizontal rays** (`horizontal-ray` with `lineDash: [3, 3]`) at the respective Long and Short stop prices. Each ray can be interactively dragged on the chart to adjust the trigger price via `/ibkr/edit_order`.
-  - **Filled**: Automatically transforms into a `long-position` or `short-position` drawing on the chart, anchoring the entry price at the fill level, setting the stop level at the opposite breakout price, and setting a 2:1 profit target.
+  - **Filled**: Automatically transforms into a `long-position` or `short-position` drawing on the chart with anchors at the Entry price, opposite BO Stop Loss price, and 2:1 Take Profit price. The drawing is seamlessly backed by the live exit bracket orders, allowing interactive chart drag-editing of the live TP and SL levels.
   - **Closed**: Once the position is completely closed (position returns to 0), the drawing is automatically removed.
 
 ### E. Limit Orders (Buy / Sell Limit)
