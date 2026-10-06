@@ -130,7 +130,7 @@ Once orders are active, users can manage them via the UI or the chart.
 ### A. Editing Orders via Chart Dragging
 
 - **User Action**: The user drags the Stop Loss, Take Profit, or Entry line of an order directly on the TradingView chart.
-- **Execution**: `drawing_tools.js` handles the mouse release event and calculates the new price. `future_chart.js` dispatches an `edit_order` API call. The backend updates the `auxPrice` (for stops) or `lmtPrice` (for limits) and re-transmits the order to IBKR. If the parent entry order has already filled, `edit_order` detaches `parentId` to prevent TWS modification rejection while preserving its `ocaGroup` and `orderRef` so it remains linked in IBKR's OCA engine. Note: Dragging the Entry line will **only** transmit an update if the entry order is still pending (not fulfilled). If the position is already open, dragging the entry line visually moves it, but no entry update is sent to the backend.
+- **Execution**: `drawing_tools.js` handles the mouse release event and calculates the new price. `future_chart.js` dispatches an `edit_order` API call. The backend updates the `auxPrice` (for stops) or `lmtPrice` (for limits) and re-transmits the order to IBKR, cleanly preserving the order's existing structural fields (`parentId` for bracket children and `ocaGroup` for standalone OCA orders) without mutation so that IBKR's order revision checks succeed without Error 10326 ("OCA group revision is not allowed"). Note: Dragging the Entry line will **only** transmit an update if the entry order is still pending (not fulfilled). If the position is already open, dragging the entry line visually moves it, but no entry update is sent to the backend.
 
 ### B. Editing Orders via Text Inputs
 

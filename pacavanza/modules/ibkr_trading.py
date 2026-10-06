@@ -622,12 +622,10 @@ class IbkrTrading(BaseAvanzaTrading):
         sl_order.orderRef = "BracketSL"
         sl_order.transmit = True  # transmit all orders in the bracket
 
-        oca_group = f"ibkr_bracket_oca_{parent_id}"
-        IB.oneCancelsAll(
-            orders=[tp_order, sl_order],
-            ocaGroup=oca_group,
-            ocaType=1,
-        )
+        # Note: Do NOT attach IB.oneCancelsAll to bracket children.
+        # IBKR TWS natively handles the bracket OCA relationship via parentId.
+        # Explicitly setting ocaGroup/ocaType causes TWS to reject subsequent
+        # modifications with Error 10326 ("OCA group revision is not allowed").
 
         parent_trade = self._place_ib_order(parent)
         LOGGER.info(
@@ -1087,16 +1085,10 @@ class IbkrTrading(BaseAvanzaTrading):
         if getattr(order, "adjustedOrderType", "") == "无":
             order.adjustedOrderType = ""
 
-        # If parent is no longer active (e.g. fulfilled), clear parentId
-        # Otherwise TWS will reject the modify with "Cannot find parent order"
-        if getattr(order, "parentId", 0) != 0:
-            parent_trade = self._find_trade_by_order_id(order.parentId)
-            if not parent_trade:
-                if not getattr(order, "ocaGroup", ""):
-                    order.ocaGroup = f"ibkr_bracket_oca_{order.parentId}"
-                if not getattr(order, "orderRef", ""):
-                    order.orderRef = f"Bracket{order.orderType}"
-                order.parentId = 0
+        # Note: Do NOT clear parentId or mutate ocaGroup on modifications.
+        # In IBKR TWS, altering an order's parentId or assigning/changing its ocaGroup
+        # on an active order causes TWS to reject the modification with Error 10326
+        # ("OCA group revision is not allowed") or Error 10327 and immediately cancel it.
 
         # IMPORTANT: Force transmit=True on modifications. Bracket children may
         # have transmit=False from their initial creation. Leaving it False
