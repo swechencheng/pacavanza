@@ -87,14 +87,71 @@ class PACChartApp {
       lastValueVisible: false,
       priceLineVisible: false,
     });
+
+    let volumeSeries = null;
+    let volSmaSeries = null;
+    if (options.enableVolume) {
+      volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
+      chart.priceScale("volume").applyOptions({
+        scaleMargins: { top: 0.8, bottom: 0 },
+        visible: false,
+      });
+    }
+
+    let rvolSeries = null;
+    if (options.enableRvol) {
+      rvolSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+        title: "",
+        base: 1.0,
+        priceFormat: {
+          type: "custom",
+          formatter: (val) => val.toFixed(2),
+        },
+        priceScaleId: "rvol",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      }, 1);
+
+      rvolSeries.createPriceLine({
+        price: 1.0,
+        color: "rgba(120, 123, 134, 0.5)",
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: "",
+      });
+
+      const panes = chart.panes();
+      if (panes && panes.length >= 2) {
+        panes[0].setStretchFactor(4);
+        panes[1].setStretchFactor(1);
+      }
+    }
+
     const state = {
       chart,
-      series: { candle: candleSeries, ema20: ema20Series, whitespace: whitespaceSeries },
+      series: {
+        candle: candleSeries,
+        ema20: ema20Series,
+        whitespace: whitespaceSeries,
+        volume: volumeSeries,
+        volSma: volSmaSeries,
+        rvol: rvolSeries,
+      },
       drawingManager: null,
       toolRegistry: null,
       autoRays: { yh: null, yl: null, th: null, tl: null },
       data: new Map(),
       ema20Data: new Map(),
+      volSmaData: new Map(),
+      rvolData: new Map(),
+      dayCumVolMap: new Map(),
+      tradingDays: [],
       lastBarTime: null,
       lastEMAValue: null,
       lastEMATime: null,
@@ -126,13 +183,28 @@ class PACChartApp {
       if (!cData || cData.open === undefined) { tt.innerHTML = empty; return; }
       const { open, high, low, close } = cData;
       const bg = state.barGroupMap.get(cData.time);
-      tt.innerHTML = [
+      const bar = state.data.get(cData.time);
+      const vol = (bar && bar.volume !== undefined) ? bar.volume : null;
+      const rvol = state.rvolData.get(cData.time);
+
+      const items = [
         `<span style="color:#ddd">O:${open.toFixed(2)}</span>`,
         `<span style="color:#4caf50">H:${high.toFixed(2)}</span>`,
         `<span style="color:#f44336">L:${low.toFixed(2)}</span>`,
         `<span style="color:#ddd">C:${close.toFixed(2)}</span>`,
         `<span style="color:#ff9900">Bar ${bg !== undefined ? bg : "-"}</span>`,
-      ].join(" ");
+      ];
+
+      if (vol !== null && vol !== undefined) {
+        items.push(`<span style="color:#26a69a">Vol:${Math.round(vol)}</span>`);
+      }
+
+      if (rvol != null) {
+        const rvolColor = rvol > 1.0 ? "#26a69a" : (rvol < 1.0 ? "#ef5350" : "#ddd");
+        items.push(`<span style="color:${rvolColor}; font-weight:bold;">Rel vol:${rvol.toFixed(2)}</span>`);
+      }
+
+      tt.innerHTML = items.join(" ");
     });
 
     new ResizeObserver(() => {
@@ -464,6 +536,13 @@ class PACChartApp {
     cm.ema20Data.clear(); cm.lastEMAValue = null; cm.lastEMATime = null;
     cm.series.candle.setData([]); cm.series.ema20.setData([]);
     if (cm.series.whitespace) cm.series.whitespace.setData([]);
+    if (cm.series.volume) cm.series.volume.setData([]);
+    if (cm.series.volSma) cm.series.volSma.setData([]);
+    if (cm.series.rvol) cm.series.rvol.setData([]);
+    if (cm.volSmaData) cm.volSmaData.clear();
+    if (cm.rvolData) cm.rvolData.clear();
+    if (cm.dayCumVolMap) cm.dayCumVolMap.clear();
+    cm.tradingDays = [];
     if (cm.drawingManager) {
       for (const key of ['yh', 'yl', 'th', 'tl']) {
         if (cm.autoRays[key]) {
@@ -499,7 +578,14 @@ class PACChartApp {
 
     const bars = await this.fetchHistory(instrumentId);
     const barData = bars
-      .map((b) => ({ time: this.isoToLWTime(b.start_time), open: +b.open, high: +b.high, low: +b.low, close: +b.close }))
+      .map((b) => ({
+        time: this.isoToLWTime(b.start_time),
+        open: +b.open,
+        high: +b.high,
+        low: +b.low,
+        close: +b.close,
+        volume: +b.volume || 0,
+      }))
       .filter((b) => b.open && !isNaN(b.open));
 
     cm.data.clear(); cm.ema20Data.clear();
@@ -555,6 +641,7 @@ class PACChartApp {
         const last = histEMA[histEMA.length - 1];
         if (last) { cm.lastEMAValue = last.value; cm.lastEMATime = last.time; }
       }
+      this.calculateVolumeIndicators(cm, sorted);
       this.calculateHistoryHighLow(cm, sorted);
       this._updateWhitespace(cm);
     }
@@ -638,6 +725,7 @@ class PACChartApp {
 
       this._checkTrendBar(cm, candleData);
       cm.series.candle.update(candleData);
+      this._updateVolumeAndRvolIncremental(cm, candleData);
     }
   }
 
@@ -657,6 +745,190 @@ class PACChartApp {
 
       this._checkTrendBar(cm, candleData);
       cm.series.candle.update(candleData);
+      this._updateVolumeAndRvolIncremental(cm, candleData);
+    }
+  }
+
+  // ── Cumulative Relative Volume (Rel vol) & Volume Calculations ───
+  calculateVolumeIndicators(cm, sortedBars) {
+    if (!cm.series.volume && !cm.series.rvol) return;
+
+    const tz = cm.groupingState.sessionTZ || "Europe/Stockholm";
+
+    // 1. Group bars by day and calculate cumulative volume for each day
+    const dayBarsMap = new Map();
+    const dayList = [];
+
+    for (const b of sortedBars) {
+      const { ymd, hour, minute } = this.getLocalParts(b.time, tz);
+      const hhmm = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+      if (!dayBarsMap.has(ymd)) {
+        dayBarsMap.set(ymd, []);
+        dayList.push(ymd);
+      }
+      dayBarsMap.get(ymd).push({
+        time: b.time,
+        hhmm,
+        volume: b.volume || 0,
+        bar: b,
+      });
+    }
+
+    const dayCumVolMap = new Map();
+    for (const [ymd, bars] of dayBarsMap.entries()) {
+      let cum = 0;
+      const cumMap = new Map();
+      for (const item of bars) {
+        cum += item.volume;
+        cumMap.set(item.hhmm, cum);
+      }
+      dayCumVolMap.set(ymd, cumMap);
+    }
+
+    cm.dayCumVolMap = dayCumVolMap;
+    cm.tradingDays = dayList;
+
+    // 2. Compute Cumulative Relative Volume and Volume series data
+    cm.rvolData.clear();
+
+    const volData = [];
+    const rvolData = [];
+
+    for (let dayIdx = 0; dayIdx < dayList.length; dayIdx++) {
+      const ymd = dayList[dayIdx];
+      const bars = dayBarsMap.get(ymd);
+      const cumMap = dayCumVolMap.get(ymd);
+
+      // Prior 20 trading days
+      const priorDays = dayList.slice(Math.max(0, dayIdx - 20), dayIdx);
+
+      for (const item of bars) {
+        const curCum = cumMap.get(item.hhmm) || 0;
+
+        let ratio = 1.0;
+        if (priorDays.length > 0) {
+          const priorCums = [];
+          for (const pd of priorDays) {
+            const pdMap = dayCumVolMap.get(pd);
+            if (!pdMap) continue;
+            if (pdMap.has(item.hhmm)) {
+              priorCums.push(pdMap.get(item.hhmm));
+            } else {
+              let latestCum = 0;
+              for (const [tHhmm, val] of pdMap.entries()) {
+                if (tHhmm <= item.hhmm) latestCum = val;
+                else break;
+              }
+              if (latestCum > 0) priorCums.push(latestCum);
+            }
+          }
+
+          if (priorCums.length > 0) {
+            const avgPrior = priorCums.reduce((a, b) => a + b, 0) / priorCums.length;
+            ratio = avgPrior > 0 ? (curCum / avgPrior) : 1.0;
+          }
+        }
+
+        ratio = Math.round(ratio * 100) / 100;
+        cm.rvolData.set(item.time, ratio);
+
+        // Volume series
+        if (cm.series.volume) {
+          const isBull = item.bar.close >= item.bar.open;
+          volData.push({
+            time: item.time,
+            value: item.volume,
+            color: isBull ? "rgba(38, 166, 154, 0.6)" : "rgba(239, 83, 80, 0.6)",
+          });
+        }
+
+        // Rel vol series: histbase = 1
+        if (cm.series.rvol) {
+          const isAbove = ratio > 1.0;
+          rvolData.push({
+            time: item.time,
+            value: ratio,
+            color: isAbove ? "rgba(38, 166, 154, 0.75)" : "rgba(239, 83, 80, 0.75)",
+          });
+        }
+      }
+    }
+
+    if (cm.series.volume) cm.series.volume.setData(volData);
+    if (cm.series.rvol) cm.series.rvol.setData(rvolData);
+  }
+
+  _updateVolumeAndRvolIncremental(cm, candleData) {
+    if (!cm.series.volume && !cm.series.rvol) return;
+
+    const t = candleData.time;
+    const vol = candleData.volume || 0;
+    const tz = cm.groupingState.sessionTZ || "Europe/Stockholm";
+    const { ymd, hour, minute } = this.getLocalParts(t, tz);
+    const hhmm = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+
+    // Calculate today's cumulative volume up to current bar
+    let todayCum = 0;
+    const sortedBars = Array.from(cm.data.values()).sort((a, b) => a.time - b.time);
+    for (const b of sortedBars) {
+      const bParts = this.getLocalParts(b.time, tz);
+      if (bParts.ymd === ymd) {
+        if (b.time < t) todayCum += (b.volume || 0);
+        else if (b.time === t) todayCum += vol;
+      }
+    }
+
+    // Update today's cumVolMap
+    if (!cm.dayCumVolMap) cm.dayCumVolMap = new Map();
+    if (!cm.dayCumVolMap.has(ymd)) cm.dayCumVolMap.set(ymd, new Map());
+    cm.dayCumVolMap.get(ymd).set(hhmm, todayCum);
+
+    // Calculate ratio against prior 20 trading days
+    let ratio = 1.0;
+    if (cm.tradingDays && cm.tradingDays.length > 0) {
+      const priorDays = cm.tradingDays.filter((d) => d < ymd).slice(-20);
+      if (priorDays.length > 0) {
+        const priorCums = [];
+        for (const pd of priorDays) {
+          const pdMap = cm.dayCumVolMap.get(pd);
+          if (!pdMap) continue;
+          if (pdMap.has(hhmm)) {
+            priorCums.push(pdMap.get(hhmm));
+          } else {
+            let latestCum = 0;
+            for (const [tHhmm, val] of pdMap.entries()) {
+              if (tHhmm <= hhmm) latestCum = val;
+              else break;
+            }
+            if (latestCum > 0) priorCums.push(latestCum);
+          }
+        }
+        if (priorCums.length > 0) {
+          const avgPrior = priorCums.reduce((a, b) => a + b, 0) / priorCums.length;
+          ratio = avgPrior > 0 ? (todayCum / avgPrior) : 1.0;
+        }
+      }
+    }
+
+    ratio = Math.round(ratio * 100) / 100;
+    cm.rvolData.set(t, ratio);
+
+    if (cm.series.volume) {
+      const isBull = candleData.close >= candleData.open;
+      cm.series.volume.update({
+        time: t,
+        value: vol,
+        color: isBull ? "rgba(38, 166, 154, 0.6)" : "rgba(239, 83, 80, 0.6)",
+      });
+    }
+
+    if (cm.series.rvol) {
+      const isAbove = ratio > 1.0;
+      cm.series.rvol.update({
+        time: t,
+        value: ratio,
+        color: isAbove ? "rgba(38, 166, 154, 0.75)" : "rgba(239, 83, 80, 0.75)",
+      });
     }
   }
 

@@ -8,12 +8,53 @@ class FutureChartApp extends PACChartApp {
   constructor() {
     super();
     window.PAC_TRADING_STATE = { futureInstrument: null };
-    this.chartFuture = this.createChartManager("chart-future", { toolTipId: "chart-ohlc-info-future" });
+    this.chartFuture = this.createChartManager("chart-future", {
+      toolTipId: "chart-ohlc-info-future",
+      enableVolume: true,
+      enableRvol: true,
+    });
     this.instrumentMapFlat = null;
     this._orderPollTimer = null;
     this._orderDrawingIds = [];
     this._currentPosition = null;
     this._recentTrades = [];
+
+    // Indicator toggle buttons
+    const btnVol = document.getElementById("btn-toggle-vol");
+    if (btnVol) {
+      btnVol.addEventListener("click", () => {
+        if (!this.chartFuture.series.volume) return;
+        const currentVis = this.chartFuture.series.volume.options().visible !== false;
+        const nextVis = !currentVis;
+        this.chartFuture.series.volume.applyOptions({ visible: nextVis });
+        if (this.chartFuture.series.volSma) {
+          this.chartFuture.series.volSma.applyOptions({ visible: nextVis });
+        }
+        btnVol.classList.toggle("active", nextVis);
+      });
+    }
+
+    const btnRvol = document.getElementById("btn-toggle-rvol");
+    if (btnRvol) {
+      btnRvol.addEventListener("click", () => {
+        if (!this.chartFuture.series.rvol) return;
+        const currentVis = this.chartFuture.series.rvol.options().visible !== false;
+        const nextVis = !currentVis;
+        this.chartFuture.series.rvol.applyOptions({ visible: nextVis });
+        btnRvol.classList.toggle("active", nextVis);
+
+        const panes = this.chartFuture.chart.panes();
+        if (panes && panes.length >= 2) {
+          if (!nextVis) {
+            panes[1].setHeight(0);
+            panes[0].setStretchFactor(1);
+          } else {
+            panes[0].setStretchFactor(4);
+            panes[1].setStretchFactor(1);
+          }
+        }
+      });
+    }
 
     // Global error trackers for remote backend logging
     window.addEventListener("error", (e) => {
@@ -221,7 +262,14 @@ class FutureChartApp extends PACChartApp {
     if (msg.instrument !== window.PAC_TRADING_STATE.futureInstrument || !msg.bar) return;
 
     const t = this.isoToLWTime(msg.bar.start_time);
-    const candleData = { time: t, open: +msg.bar.open, high: +msg.bar.high, low: +msg.bar.low, close: +msg.bar.close };
+    const candleData = {
+      time: t,
+      open: +msg.bar.open,
+      high: +msg.bar.high,
+      low: +msg.bar.low,
+      close: +msg.bar.close,
+      volume: +msg.bar.volume || 0,
+    };
 
     if (msg.type === "update") {
       this._applyBarUpdate(this.chartFuture, candleData);
