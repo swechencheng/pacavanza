@@ -175,36 +175,31 @@ class PACChartApp {
         tt.innerHTML = '<span style="color:#f44336; font-weight:bold;">IBKR disconnected</span>';
         return;
       }
-      const empty = [`<span style="color:#ddd">O:-</span>`, `<span style="color:#4caf50">H:-</span>`,
-        `<span style="color:#f44336">L:-</span>`, `<span style="color:#ddd">C:-</span>`,
-        `<span style="color:#ff9900">Bar -</span>`].join(" ");
-      if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) { tt.innerHTML = empty; return; }
+      if (!param.point || !param.time || param.point.x < 0 || param.point.y < 0) {
+        const sorted = Array.from(state.data.values()).sort((a, b) => a.time - b.time);
+        const last = sorted[sorted.length - 1];
+        if (last) {
+          const bg = state.barGroupMap.get(last.time);
+          tt.innerHTML = this.formatBarInfo(last, bg);
+        } else {
+          tt.innerHTML = this.formatBarInfo(null);
+        }
+        return;
+      }
       const cData = param.seriesData.get(candleSeries);
-      if (!cData || cData.open === undefined) { tt.innerHTML = empty; return; }
-      const { open, high, low, close } = cData;
+      if (!cData || cData.open === undefined) {
+        const sorted = Array.from(state.data.values()).sort((a, b) => a.time - b.time);
+        const last = sorted[sorted.length - 1];
+        if (last) {
+          const bg = state.barGroupMap.get(last.time);
+          tt.innerHTML = this.formatBarInfo(last, bg);
+        } else {
+          tt.innerHTML = this.formatBarInfo(null);
+        }
+        return;
+      }
       const bg = state.barGroupMap.get(cData.time);
-      const bar = state.data.get(cData.time);
-      const vol = (bar && bar.volume !== undefined) ? bar.volume : null;
-      const rvol = state.rvolData.get(cData.time);
-
-      const items = [
-        `<span style="color:#ddd">O:${open.toFixed(2)}</span>`,
-        `<span style="color:#4caf50">H:${high.toFixed(2)}</span>`,
-        `<span style="color:#f44336">L:${low.toFixed(2)}</span>`,
-        `<span style="color:#ddd">C:${close.toFixed(2)}</span>`,
-        `<span style="color:#ff9900">Bar ${bg !== undefined ? bg : "-"}</span>`,
-      ];
-
-      if (vol !== null && vol !== undefined) {
-        items.push(`<span style="color:#26a69a">Vol:${Math.round(vol)}</span>`);
-      }
-
-      if (rvol != null) {
-        const rvolColor = rvol > 1.0 ? "#26a69a" : (rvol < 1.0 ? "#ef5350" : "#ddd");
-        items.push(`<span style="color:${rvolColor}; font-weight:bold;">Rel vol:${rvol.toFixed(2)}</span>`);
-      }
-
-      tt.innerHTML = items.join(" ");
+      tt.innerHTML = this.formatBarInfo(cData, bg);
     });
 
     new ResizeObserver(() => {
@@ -236,6 +231,26 @@ class PACChartApp {
     }
 
     return state;
+  }
+
+  formatBarInfo(cData, barIndex) {
+    if (!cData || cData.open === undefined) {
+      return [
+        `<span style="color:#ddd">O:-</span>`,
+        `<span style="color:#4caf50">H:-</span>`,
+        `<span style="color:#f44336">L:-</span>`,
+        `<span style="color:#ddd">C:-</span>`,
+        `<span style="color:#ff9900; font-weight:bold;">Bar -</span>`,
+      ].join(" ");
+    }
+    const bg = barIndex !== undefined ? barIndex : "-";
+    return [
+      `<span style="color:#ddd">O:${cData.open.toFixed(2)}</span>`,
+      `<span style="color:#4caf50">H:${cData.high.toFixed(2)}</span>`,
+      `<span style="color:#f44336">L:${cData.low.toFixed(2)}</span>`,
+      `<span style="color:#ddd">C:${cData.close.toFixed(2)}</span>`,
+      `<span style="color:#ff9900; font-weight:bold;">Bar ${bg}</span>`,
+    ].join(" ");
   }
 
   // ── Time Helpers ──────────────────────────────────────────────────
@@ -312,7 +327,7 @@ class PACChartApp {
     const now = Math.floor(Date.now() / 1000);
     if (!this.isTradingHoursForBar(now, sessionConfig)) {
       if (!this._statusMessageActive) {
-        document.getElementById("status").textContent = "Market closed";
+        document.getElementById("status").textContent = "🔴 Mkt";
       }
       return;
     }
@@ -332,7 +347,7 @@ class PACChartApp {
       const el = document.getElementById("status");
       const gs = this.getStatusChartManager().groupingState;
       if (gs.sessionTZ) {
-        el.textContent = this.isTradingHoursForBar(Math.floor(Date.now() / 1000), gs) ? "Market open" : "Market closed";
+        el.textContent = this.isTradingHoursForBar(Math.floor(Date.now() / 1000), gs) ? "🟢 Mkt" : "🔴 Mkt";
       } else {
         el.textContent = "Disconnected";
       }
@@ -644,6 +659,11 @@ class PACChartApp {
       this.calculateVolumeIndicators(cm, sorted);
       this.calculateHistoryHighLow(cm, sorted);
       this._updateWhitespace(cm);
+      const lastBar = sorted[sorted.length - 1];
+      if (lastBar && cm.toolTipElement) {
+        const bg = cm.barGroupMap.get(lastBar.time);
+        cm.toolTipElement.innerHTML = this.formatBarInfo(lastBar, bg);
+      }
     }
   }
 

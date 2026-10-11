@@ -42,17 +42,6 @@ class FutureChartApp extends PACChartApp {
         const nextVis = !currentVis;
         this.chartFuture.series.rvol.applyOptions({ visible: nextVis });
         btnRvol.classList.toggle("active", nextVis);
-
-        const panes = this.chartFuture.chart.panes();
-        if (panes && panes.length >= 2) {
-          if (!nextVis) {
-            panes[1].setHeight(0);
-            panes[0].setStretchFactor(1);
-          } else {
-            panes[0].setStretchFactor(4);
-            panes[1].setStretchFactor(1);
-          }
-        }
       });
     }
 
@@ -168,7 +157,7 @@ class FutureChartApp extends PACChartApp {
         options.forEach(opt => {
           const o = document.createElement("option");
           o.value = opt.toLowerCase();
-          o.textContent = opt + (opt === activeInstr ? " (Active)" : "");
+          o.textContent = opt + (opt === activeInstr ? " ⚡" : "");
           if (opt === activeInstr) o.selected = true;
           selectorEl.appendChild(o);
         });
