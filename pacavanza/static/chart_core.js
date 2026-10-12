@@ -769,6 +769,53 @@ class PACChartApp {
     }
   }
 
+  _applyHistoryCorrection(cm, bars) {
+    if (!bars || !bars.length) return;
+    let anyChanged = false;
+    for (const b of bars) {
+      const t = this.isoToLWTime(b.start_time);
+      const existing = cm.data.get(t);
+      if (existing) {
+        if (
+          existing.volume !== b.volume ||
+          existing.close !== b.close ||
+          existing.high !== b.high ||
+          existing.low !== b.low ||
+          existing.open !== b.open
+        ) {
+          existing.volume = b.volume;
+          existing.open = b.open;
+          existing.high = b.high;
+          existing.low = b.low;
+          existing.close = b.close;
+          cm.series.candle.update(existing);
+          anyChanged = true;
+        }
+      } else {
+        const candleData = {
+          time: t,
+          open: b.open,
+          high: b.high,
+          low: b.low,
+          close: b.close,
+          volume: b.volume || 0,
+        };
+        cm.data.set(t, candleData);
+        cm.series.candle.update(candleData);
+        anyChanged = true;
+      }
+    }
+    if (anyChanged) {
+      const sorted = Array.from(cm.data.values()).sort((a, b) => a.time - b.time);
+      this.calculateVolumeIndicators(cm, sorted);
+      const lastBar = sorted[sorted.length - 1];
+      if (lastBar && cm.toolTipElement) {
+        const bg = cm.barGroupMap.get(lastBar.time);
+        cm.toolTipElement.innerHTML = this.formatBarInfo(lastBar, bg);
+      }
+    }
+  }
+
   // ── Cumulative Relative Volume (Rel vol) & Volume Calculations ───
   calculateVolumeIndicators(cm, sortedBars) {
     if (!cm.series.volume && !cm.series.rvol) return;

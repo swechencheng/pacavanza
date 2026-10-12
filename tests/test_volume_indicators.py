@@ -119,6 +119,101 @@ class TestVolumeIndicators(unittest.TestCase):
         )
         self.assertAlmostEqual(ratio, 2.0)
 
+    def test_instrument_data_trade_volume_aggregation(self):
+        from pacavanza.modules.instrument_data import InstrumentData
+
+        id_data = InstrumentData(interval_seconds=300, instrument_id="OMXS306J")
+
+        # Trade 1 at 09:01:00
+        t1 = datetime(2026, 10, 12, 7, 1, 0, tzinfo=timezone.utc)
+        id_data.add_trade(price=3250.0, volume=5, timestamp=t1)
+
+        bar = id_data.current_bars["OMXS306J"]
+        self.assertEqual(bar["open"], 3250.0)
+        self.assertEqual(bar["high"], 3250.0)
+        self.assertEqual(bar["low"], 3250.0)
+        self.assertEqual(bar["close"], 3250.0)
+        self.assertEqual(bar["volume"], 5)
+
+        # Trade 2 at 09:02:30 (higher price, vol 10)
+        t2 = datetime(2026, 10, 12, 7, 2, 30, tzinfo=timezone.utc)
+        id_data.add_trade(price=3255.0, volume=10, timestamp=t2)
+        self.assertEqual(bar["high"], 3255.0)
+        self.assertEqual(bar["low"], 3250.0)
+        self.assertEqual(bar["close"], 3255.0)
+        self.assertEqual(bar["volume"], 15)
+
+        # Trade 3 at 09:04:00 (lower price, vol 3)
+        t3 = datetime(2026, 10, 12, 7, 4, 0, tzinfo=timezone.utc)
+        id_data.add_trade(price=3248.0, volume=3, timestamp=t3)
+        self.assertEqual(bar["high"], 3255.0)
+        self.assertEqual(bar["low"], 3248.0)
+        self.assertEqual(bar["close"], 3248.0)
+        self.assertEqual(bar["volume"], 18)
+
+        # Trade 4 at 09:05:01 (next 5m bar starts!)
+        t4 = datetime(2026, 10, 12, 7, 5, 1, tzinfo=timezone.utc)
+        id_data.add_trade(price=3252.0, volume=7, timestamp=t4)
+
+        # Previous bar should be archived into completed_ohlc with its full volume 18
+        completed = id_data.completed_ohlc["OMXS306J"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["volume"], 18)
+        self.assertEqual(completed[0]["high"], 3255.0)
+        self.assertEqual(completed[0]["low"], 3248.0)
+
+        # New current bar should have volume 7
+        new_bar = id_data.current_bars["OMXS306J"]
+        self.assertEqual(new_bar["open"], 3252.0)
+        self.assertEqual(new_bar["volume"], 7)
+
+    def test_history_reconciliation_merging(self):
+        from pacavanza.modules.instrument_data import InstrumentData
+
+        id_data = InstrumentData(interval_seconds=300, instrument_id="OMXS306J")
+        t1 = datetime(2026, 10, 12, 7, 0, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 10, 12, 7, 5, 0, tzinfo=timezone.utc)
+
+        # Bar completed with partial/missing volume (e.g. 10)
+        id_data.completed_ohlc["OMXS306J"].append(
+            {
+                "start_time": t1,
+                "end_time": t2,
+                "open": 3250.0,
+                "high": 3255.0,
+                "low": 3248.0,
+                "close": 3252.0,
+                "volume": 10,
+            }
+        )
+
+        # Official Avanza history returns official volume 45
+        official_bars = [
+            {
+                "start_time": t1,
+                "end_time": t2,
+                "open": 3250.0,
+                "high": 3256.0,
+                "low": 3247.5,
+                "close": 3252.0,
+                "volume": 45.0,
+            }
+        ]
+
+        # Reconcile logic
+        with id_data.lock:
+            local_bars = id_data.completed_ohlc["OMXS306J"]
+            merged = {b["start_time"]: b for b in local_bars}
+            for b in official_bars:
+                merged[b["start_time"]] = b
+            id_data.completed_ohlc["OMXS306J"] = sorted(
+                merged.values(), key=lambda x: x["start_time"]
+            )
+
+        self.assertEqual(len(id_data.completed_ohlc["OMXS306J"]), 1)
+        self.assertEqual(id_data.completed_ohlc["OMXS306J"][0]["volume"], 45.0)
+        self.assertEqual(id_data.completed_ohlc["OMXS306J"][0]["high"], 3256.0)
+
 
 if __name__ == "__main__":
     unittest.main()

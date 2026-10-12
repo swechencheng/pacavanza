@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -205,7 +206,7 @@ class FutureMarketCollector(BaseMarketCollector):
     async def _trade_sse_callback(self, instrument_id, _id, event, data):
         """
         Async callback for trade-web-push SSE events.
-        Publishes trade events directly to Redis.
+        Publishes trade events to Redis and aggregates trade volume into current bar.
         """
         try:
             if not isinstance(data, dict):
@@ -223,8 +224,136 @@ class FutureMarketCollector(BaseMarketCollector):
                     self.logger.error(
                         f"[{instrument_id}] Failed to publish trade to Redis: {e}"
                     )
+
+            # Extract deal time if present
+            deal_time_str = data.get("dealTime")
+            dt = datetime.now(timezone.utc)
+            if deal_time_str:
+                try:
+                    parsed = datetime.strptime(deal_time_str, "%Y-%m-%dT%H:%M:%S.%f%z")
+                    dt = parsed.astimezone(timezone.utc)
+                except Exception:
+                    try:
+                        parsed = datetime.fromisoformat(
+                            deal_time_str.replace("Z", "+00:00")
+                        )
+                        dt = parsed.astimezone(timezone.utc)
+                    except Exception:
+                        pass
+
+            if not self.is_market_open(instrument_id, dt):
+                return
+
+            price = float(data["price"])
+            vol = int(data["volume"])
+
+            # Store last price
+            self.last_price[instrument_id] = price
+
+            # Aggregate into OHLC bar
+            sd = self.instrument_data.get(instrument_id)
+            if sd:
+                sd.add_trade(price, vol, dt)
+                self._dirty_current.add(instrument_id)
+                await self._publish_bar_update(
+                    instrument_id,
+                    extra_meta={
+                        "last_buy": self.last_buy_price.get(instrument_id),
+                        "last_sell": self.last_sell_price.get(instrument_id),
+                        "last_price": self.last_price.get(instrument_id),
+                    },
+                )
         except Exception as e:
             self.logger.exception(f"[{instrument_id}] Exception in trade callback: {e}")
+
+    async def on_bar_completed(self, instrument_id: str, completed_bar: dict):
+        """
+        Called when a bar completes. Schedules delayed Avanza history reconciliation.
+        """
+        self.logger.info(
+            f"[{instrument_id}] Bar completed ({completed_bar.get('start_time')}). "
+            f"Scheduling delayed Avanza history reconciliation in 10s..."
+        )
+        asyncio.create_task(self._reconcile_history_after_completion(instrument_id))
+
+    async def _reconcile_history_after_completion(self, sid: str):
+        # Wait 10 seconds for Avanza to finalize the closed bar in its price-chart API
+        await asyncio.sleep(10)
+        try:
+            info = self.instrument_list.get(sid, {})
+            orderbook_id = info.get("orderbookId")
+            if not orderbook_id:
+                return
+
+            tz_name = info.get("timezone", "Europe/Stockholm")
+            open_str = info.get("market_open", "09:00")
+            close_str = info.get("market_close", "17:45")
+
+            from pacavanza.utils.utils import fetch_avanza_chart_history
+
+            new_bars = await asyncio.to_thread(
+                fetch_avanza_chart_history,
+                orderbook_id=str(orderbook_id),
+                interval_seconds=self.interval_seconds,
+                tz_name=tz_name,
+                open_str=open_str,
+                close_str=close_str,
+            )
+            if not new_bars:
+                return
+
+            sd = self.instrument_data.get(sid)
+            if not sd:
+                return
+
+            corrected_bars = []
+            with sd.lock:
+                local_bars = sd.completed_ohlc.get(sid, [])
+                merged_bars_dict = {b["start_time"]: b for b in local_bars}
+
+                for b in new_bars:
+                    st = b["start_time"]
+                    existing = merged_bars_dict.get(st)
+                    if existing is None or existing.get("volume") != b.get("volume"):
+                        merged_bars_dict[st] = b
+                        corrected_bars.append(b)
+
+                sorted_bars = sorted(
+                    merged_bars_dict.values(), key=lambda x: x["start_time"]
+                )
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    hours=sd.max_history_hours
+                )
+                sd.completed_ohlc[sid] = [
+                    b for b in sorted_bars if b["end_time"] >= cutoff
+                ]
+
+            if corrected_bars:
+                self.logger.info(
+                    f"[{sid}] Reconciled Avanza history after bar completion: {len(corrected_bars)} bars updated/corrected."
+                )
+                self.force_save_instrument(sid)
+
+                if self._redis is not None:
+                    msg = {
+                        "type": "history_correction",
+                        "instrument": sid,
+                        "bars": [
+                            {
+                                "start_time": b["start_time"].isoformat(),
+                                "end_time": b["end_time"].isoformat(),
+                                "open": b["open"],
+                                "high": b["high"],
+                                "low": b["low"],
+                                "close": b["close"],
+                                "volume": b.get("volume", 0),
+                            }
+                            for b in corrected_bars
+                        ],
+                    }
+                    await self._redis.publish(self.redis_channel, json.dumps(msg))
+        except Exception as e:
+            self.logger.exception(f"[{sid}] Failed to reconcile Avanza history: {e}")
 
     # ── Market hours helper ──────────────────────────────────────────
 

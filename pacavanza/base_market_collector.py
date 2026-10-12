@@ -306,33 +306,45 @@ class BaseMarketCollector:
             if latest_completed and curr:
                 try:
                     if latest_completed["end_time"] <= curr["start_time"]:
-                        msg_completed = {
-                            "type": "completed",
-                            "instrument": instrument_id,
-                            "bar": {
-                                "start_time": latest_completed[
-                                    "start_time"
-                                ].isoformat(),
-                                "end_time": latest_completed["end_time"].isoformat(),
-                                "open": latest_completed["open"],
-                                "high": latest_completed["high"],
-                                "low": latest_completed["low"],
-                                "close": latest_completed["close"],
-                                "volume": latest_completed.get("volume", 0),
-                            },
-                        }
-                        if self._redis is not None:
-                            try:
-                                await self._redis.publish(
-                                    self.redis_channel, json.dumps(msg_completed)
-                                )
-                                self.logger.debug(
-                                    f"[{instrument_id}] Published completed bar to Redis"
-                                )
-                            except Exception as e:
-                                self.logger.error(
-                                    f"[{instrument_id}] Failed to publish completed bar to Redis: {e}"
-                                )
+                        if not hasattr(self, "_last_completed_published"):
+                            self._last_completed_published = {}
+                        if (
+                            self._last_completed_published.get(instrument_id)
+                            != latest_completed["start_time"]
+                        ):
+                            self._last_completed_published[instrument_id] = (
+                                latest_completed["start_time"]
+                            )
+                            msg_completed = {
+                                "type": "completed",
+                                "instrument": instrument_id,
+                                "bar": {
+                                    "start_time": latest_completed[
+                                        "start_time"
+                                    ].isoformat(),
+                                    "end_time": latest_completed[
+                                        "end_time"
+                                    ].isoformat(),
+                                    "open": latest_completed["open"],
+                                    "high": latest_completed["high"],
+                                    "low": latest_completed["low"],
+                                    "close": latest_completed["close"],
+                                    "volume": latest_completed.get("volume", 0),
+                                },
+                            }
+                            if self._redis is not None:
+                                try:
+                                    await self._redis.publish(
+                                        self.redis_channel, json.dumps(msg_completed)
+                                    )
+                                    self.logger.debug(
+                                        f"[{instrument_id}] Published completed bar to Redis"
+                                    )
+                                except Exception as e:
+                                    self.logger.error(
+                                        f"[{instrument_id}] Failed to publish completed bar to Redis: {e}"
+                                    )
+                            await self.on_bar_completed(instrument_id, latest_completed)
                 except Exception as e:
                     self.logger.exception(
                         f"[{instrument_id}] Error detecting/publishing completed bar: {e}"
@@ -342,6 +354,10 @@ class BaseMarketCollector:
             self.logger.exception(
                 f"[{instrument_id}] Failed to build or publish update message: {e}"
             )
+
+    async def on_bar_completed(self, instrument_id: str, completed_bar: dict):
+        """Hook called when a bar completes. Can be overridden by subclasses."""
+        pass
 
     # ── Periodic saver ────────────────────────────────────────────────
 

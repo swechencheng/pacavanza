@@ -583,8 +583,67 @@ def create_app(
             }
             await manager.broadcast(out)
 
+        elif mtype == "history_correction":
+            # Reconcile historical bars in recent_bars
+            bars = payload.get("bars", [])
+            if bars:
+                bars_lock = await _get_bars_lock_for(sid)
+                async with bars_lock:
+                    lst = recent_bars.get(sid, [])
+                    lst_dict = {
+                        (
+                            b["start_time"].isoformat()
+                            if hasattr(b["start_time"], "isoformat")
+                            else b["start_time"]
+                        ): b
+                        for b in lst
+                    }
+                    for b in bars:
+                        st = b["start_time"]
+                        if st in lst_dict:
+                            lst_dict[st].update(
+                                {
+                                    "open": b["open"],
+                                    "high": b["high"],
+                                    "low": b["low"],
+                                    "close": b["close"],
+                                    "volume": b.get("volume", 0),
+                                }
+                            )
+                        else:
+                            start_dt = datetime.fromisoformat(b["start_time"])
+                            end_dt = datetime.fromisoformat(b["end_time"])
+                            lst_dict[st] = {
+                                "start_time": start_dt,
+                                "end_time": end_dt,
+                                "open": b["open"],
+                                "high": b["high"],
+                                "low": b["low"],
+                                "close": b["close"],
+                                "volume": b.get("volume", 0),
+                            }
+                    sorted_keys = sorted(lst_dict.keys())
+                    recent_bars[sid] = [lst_dict[k] for k in sorted_keys][-1500:]
+
+            await manager.broadcast(payload)
+
         elif mtype in ("depth", "trade"):
-            # Order depth (tape) or trades — pass through to WebSocket clients, no storage
+            if mtype == "trade" and payload.get("data"):
+                # Aggregate trade volume into current bar in recent_bars
+                trade_data = payload["data"]
+                vol = trade_data.get("volume")
+                price = trade_data.get("price")
+                bars_lock = await _get_bars_lock_for(sid)
+                async with bars_lock:
+                    lst = recent_bars.get(sid)
+                    if lst:
+                        if vol:
+                            lst[-1]["volume"] = lst[-1].get("volume", 0) + int(vol)
+                        if price is not None:
+                            p = float(price)
+                            lst[-1]["close"] = p
+                            lst[-1]["high"] = max(lst[-1].get("high", p), p)
+                            lst[-1]["low"] = min(lst[-1].get("low", p), p)
             await manager.broadcast(payload)
 
     def check_daily_loss_limit(portfolio, target_local_symbol: str) -> bool:
@@ -1741,14 +1800,20 @@ def create_app(
             hp = float(str(high_price).strip().replace(",", "."))
             lp = float(str(low_price).strip().replace(",", "."))
         except (ValueError, TypeError) as e:
-            LOGGER.warning(f"ibkr_place_breakout_stop_oca invalid types: {e}, body={body}")
-            raise HTTPException(status_code=400, detail=f"Invalid volume or price types: {e}")
+            LOGGER.warning(
+                f"ibkr_place_breakout_stop_oca invalid types: {e}, body={body}"
+            )
+            raise HTTPException(
+                status_code=400, detail=f"Invalid volume or price types: {e}"
+            )
 
         if vol <= 0:
             LOGGER.warning(f"ibkr_place_breakout_stop_oca volume <= 0: {vol}")
             raise HTTPException(status_code=400, detail="Volume must be greater than 0")
         if hp <= lp:
-            LOGGER.warning(f"ibkr_place_breakout_stop_oca highPrice <= lowPrice: {hp} <= {lp}")
+            LOGGER.warning(
+                f"ibkr_place_breakout_stop_oca highPrice <= lowPrice: {hp} <= {lp}"
+            )
             raise HTTPException(
                 status_code=400,
                 detail=f"highPrice ({hp}) must be strictly greater than lowPrice ({lp})",

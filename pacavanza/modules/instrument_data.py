@@ -7,7 +7,10 @@ INTERVAL_MAP = {"10s": 10, "1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
 class InstrumentData:
     def __init__(
-        self, interval_seconds: int, instrument_id: str = "TEST", max_history_hours: int = 720
+        self,
+        interval_seconds: int,
+        instrument_id: str = "TEST",
+        max_history_hours: int = 720,
     ):
         self.interval_seconds = interval_seconds
         self.instrument_id = instrument_id
@@ -16,7 +19,7 @@ class InstrumentData:
         self.completed_ohlc = defaultdict(list)
         self.lock = threading.Lock()
 
-    def initialize_new_bar(self, timestamp: datetime, price: float):
+    def initialize_new_bar(self, timestamp: datetime, price: float, volume: int = 0):
         # Ensure timestamp is timezone-aware in UTC
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
@@ -40,10 +43,11 @@ class InstrumentData:
             "high": price,
             "low": price,
             "close": price,
+            "volume": volume,
             "end_time": bar_start + timedelta(seconds=self.interval_seconds),
         }
 
-    def update_ohlc_bar(self, price: float, timestamp: datetime):
+    def update_ohlc_bar(self, price: float, timestamp: datetime, volume: int = 0):
         with self.lock:
             current_bar = self.current_bars.get(self.instrument_id)
             if current_bar is None or timestamp >= current_bar["end_time"]:
@@ -51,7 +55,9 @@ class InstrumentData:
                     # Only append if current_bar is chronologically newer than the last completed bar
                     lst = self.completed_ohlc[self.instrument_id]
                     if not lst or current_bar["start_time"] > lst[-1]["start_time"]:
-                        self.completed_ohlc[self.instrument_id].append(current_bar.copy())
+                        self.completed_ohlc[self.instrument_id].append(
+                            current_bar.copy()
+                        )
                         cutoff = datetime.now(timezone.utc) - timedelta(
                             hours=self.max_history_hours
                         )
@@ -60,9 +66,35 @@ class InstrumentData:
                             for bar in self.completed_ohlc[self.instrument_id]
                             if bar["end_time"] >= cutoff
                         ]
-                self.initialize_new_bar(timestamp, price)
+                self.initialize_new_bar(timestamp, price, volume=volume)
             else:
                 current_bar["high"] = max(current_bar["high"], price)
                 current_bar["low"] = min(current_bar["low"], price)
                 current_bar["close"] = price
+                if volume:
+                    current_bar["volume"] = current_bar.get("volume", 0) + volume
 
+    def add_trade(self, price: float, volume: int, timestamp: datetime):
+        with self.lock:
+            current_bar = self.current_bars.get(self.instrument_id)
+            if current_bar is None or timestamp >= current_bar["end_time"]:
+                if current_bar is not None:
+                    lst = self.completed_ohlc[self.instrument_id]
+                    if not lst or current_bar["start_time"] > lst[-1]["start_time"]:
+                        self.completed_ohlc[self.instrument_id].append(
+                            current_bar.copy()
+                        )
+                        cutoff = datetime.now(timezone.utc) - timedelta(
+                            hours=self.max_history_hours
+                        )
+                        self.completed_ohlc[self.instrument_id] = [
+                            bar
+                            for bar in self.completed_ohlc[self.instrument_id]
+                            if bar["end_time"] >= cutoff
+                        ]
+                self.initialize_new_bar(timestamp, price, volume=volume)
+            else:
+                current_bar["high"] = max(current_bar["high"], price)
+                current_bar["low"] = min(current_bar["low"], price)
+                current_bar["close"] = price
+                current_bar["volume"] = current_bar.get("volume", 0) + volume
