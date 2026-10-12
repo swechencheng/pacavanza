@@ -207,12 +207,22 @@ class FutureMarketCollector(BaseMarketCollector):
         """
         Async callback for trade-web-push SSE events.
         Publishes trade events to Redis and aggregates trade volume into current bar.
+        Deduplicates by tradeId to avoid counting multi-stage order fills multiple times,
+        and ignores initialSubscription history dumps on reconnect.
         """
         try:
             if not isinstance(data, dict):
                 return
 
             if "price" not in data or "volume" not in data:
+                return
+
+            # Ignore initial subscription backlog sent upon SSE connection/reconnection
+            if data.get("initialSubscription") is True:
+                return
+
+            # Ignore cancelled trades
+            if data.get("cancelled") is True:
                 return
 
             msg = {"type": "trade", "instrument": instrument_id, "data": data}
@@ -225,17 +235,44 @@ class FutureMarketCollector(BaseMarketCollector):
                         f"[{instrument_id}] Failed to publish trade to Redis: {e}"
                     )
 
-            # Extract deal time if present
-            deal_time_str = data.get("dealTime")
+            # Deduplicate by tradeId to compute incremental trade volume
+            trade_id = str(data.get("tradeId", ""))
+            raw_vol = float(data.get("volume", 0))
+
+            if not hasattr(self, "_seen_trade_vols"):
+                self._seen_trade_vols = {}
+            seen_vols = self._seen_trade_vols.setdefault(instrument_id, {})
+
+            if trade_id:
+                prev_vol = seen_vols.get(trade_id, 0.0)
+                delta_vol = raw_vol - prev_vol
+                if delta_vol <= 0:
+                    return  # Duplicate message or already counted
+                seen_vols[trade_id] = raw_vol
+                if len(seen_vols) > 20000:
+                    for k in list(seen_vols.keys())[:5000]:
+                        del seen_vols[k]
+            else:
+                delta_vol = raw_vol
+
+            vol = int(delta_vol)
+            if vol <= 0:
+                return
+
+            # Extract deal time if present (handles milliseconds timestamp and ISO strings)
+            deal_time = data.get("dealTime")
             dt = datetime.now(timezone.utc)
-            if deal_time_str:
-                try:
-                    parsed = datetime.strptime(deal_time_str, "%Y-%m-%dT%H:%M:%S.%f%z")
-                    dt = parsed.astimezone(timezone.utc)
-                except Exception:
+            if deal_time is not None:
+                if isinstance(deal_time, (int, float)):
+                    dt = datetime.fromtimestamp(deal_time / 1000.0, tz=timezone.utc)
+                elif str(deal_time).isdigit():
+                    dt = datetime.fromtimestamp(
+                        int(deal_time) / 1000.0, tz=timezone.utc
+                    )
+                else:
                     try:
                         parsed = datetime.fromisoformat(
-                            deal_time_str.replace("Z", "+00:00")
+                            str(deal_time).replace("Z", "+00:00")
                         )
                         dt = parsed.astimezone(timezone.utc)
                     except Exception:
@@ -245,12 +282,11 @@ class FutureMarketCollector(BaseMarketCollector):
                 return
 
             price = float(data["price"])
-            vol = int(data["volume"])
 
             # Store last price
             self.last_price[instrument_id] = price
 
-            # Aggregate into OHLC bar
+            # Aggregate incremental volume into OHLC bar
             sd = self.instrument_data.get(instrument_id)
             if sd:
                 sd.add_trade(price, vol, dt)

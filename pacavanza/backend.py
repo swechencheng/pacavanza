@@ -628,22 +628,7 @@ def create_app(
             await manager.broadcast(payload)
 
         elif mtype in ("depth", "trade"):
-            if mtype == "trade" and payload.get("data"):
-                # Aggregate trade volume into current bar in recent_bars
-                trade_data = payload["data"]
-                vol = trade_data.get("volume")
-                price = trade_data.get("price")
-                bars_lock = await _get_bars_lock_for(sid)
-                async with bars_lock:
-                    lst = recent_bars.get(sid)
-                    if lst:
-                        if vol:
-                            lst[-1]["volume"] = lst[-1].get("volume", 0) + int(vol)
-                        if price is not None:
-                            p = float(price)
-                            lst[-1]["close"] = p
-                            lst[-1]["high"] = max(lst[-1].get("high", p), p)
-                            lst[-1]["low"] = min(lst[-1].get("low", p), p)
+            # Broadcast directly to websocket clients for order depth and trade tape
             await manager.broadcast(payload)
 
     def check_daily_loss_limit(portfolio, target_local_symbol: str) -> bool:

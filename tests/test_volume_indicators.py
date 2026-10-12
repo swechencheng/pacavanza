@@ -214,6 +214,79 @@ class TestVolumeIndicators(unittest.TestCase):
         self.assertEqual(id_data.completed_ohlc["OMXS306J"][0]["volume"], 45.0)
         self.assertEqual(id_data.completed_ohlc["OMXS306J"][0]["high"], 3256.0)
 
+    def test_trade_sse_deduplication_and_incremental_volume(self):
+        """
+        Verify that multi-stage fill updates for the same tradeId (e.g. 2 -> 3 -> 4)
+        only contribute incremental volume (total 4), not the sum (2 + 3 + 4 = 9),
+        and that initialSubscription backlog and cancelled trades are ignored.
+        """
+        from pacavanza.modules.instrument_data import InstrumentData
+
+        id_data = InstrumentData(interval_seconds=300, instrument_id="OMXS306J")
+        seen_vols = {}
+
+        def process_trade(trade_dict):
+            if trade_dict.get("initialSubscription") is True:
+                return 0
+            if trade_dict.get("cancelled") is True:
+                return 0
+            trade_id = str(trade_dict.get("tradeId", ""))
+            raw_vol = float(trade_dict.get("volume", 0))
+            if trade_id:
+                prev_vol = seen_vols.get(trade_id, 0.0)
+                delta_vol = raw_vol - prev_vol
+                if delta_vol <= 0:
+                    return 0
+                seen_vols[trade_id] = raw_vol
+            else:
+                delta_vol = raw_vol
+            vol = int(delta_vol)
+            if vol > 0:
+                id_data.add_trade(
+                    price=float(trade_dict["price"]),
+                    volume=vol,
+                    timestamp=datetime(2026, 10, 12, 7, 1, 0, tzinfo=timezone.utc),
+                )
+            return vol
+
+        # Stage 1: Initial subscription replay - MUST BE IGNORED
+        v0 = process_trade(
+            {
+                "tradeId": "T1",
+                "price": 3250.0,
+                "volume": 10.0,
+                "initialSubscription": True,
+            }
+        )
+        self.assertEqual(v0, 0)
+        self.assertNotIn("OMXS306J", id_data.current_bars)
+
+        # Stage 2: Trade T2 fills in 3 messages: 2 -> 3 -> 4
+        v1 = process_trade({"tradeId": "T2", "price": 3251.0, "volume": 2.0})
+        self.assertEqual(v1, 2)
+        v2 = process_trade({"tradeId": "T2", "price": 3251.0, "volume": 3.0})
+        self.assertEqual(v2, 1)  # 3 - 2 = 1
+        v3 = process_trade({"tradeId": "T2", "price": 3251.0, "volume": 4.0})
+        self.assertEqual(v3, 1)  # 4 - 3 = 1
+
+        # Duplicate message replay of 4.0
+        v4 = process_trade({"tradeId": "T2", "price": 3251.0, "volume": 4.0})
+        self.assertEqual(v4, 0)
+
+        # Cancelled trade
+        v5 = process_trade(
+            {"tradeId": "T3", "price": 3250.0, "volume": 5.0, "cancelled": True}
+        )
+        self.assertEqual(v5, 0)
+
+        # Another distinct trade T4 with 5.0
+        v6 = process_trade({"tradeId": "T4", "price": 3252.0, "volume": 5.0})
+        self.assertEqual(v6, 5)
+
+        # Total bar volume should be 4 (from T2) + 5 (from T4) = 9
+        current_bar = id_data.current_bars["OMXS306J"]
+        self.assertEqual(current_bar["volume"], 9)
+
 
 if __name__ == "__main__":
     unittest.main()

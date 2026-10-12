@@ -240,25 +240,6 @@ class FutureChartApp extends PACChartApp {
       }
       this._renderTrades();
 
-      // Aggregate live trade into current bar volume and close price
-      if (msg.data.volume && this.chartFuture && this.chartFuture.lastBarTime) {
-        const curBar = this.chartFuture.data.get(this.chartFuture.lastBarTime);
-        if (curBar) {
-          curBar.volume = (curBar.volume || 0) + Number(msg.data.volume);
-          if (msg.data.price) {
-            const p = Number(msg.data.price);
-            curBar.close = p;
-            curBar.high = Math.max(curBar.high, p);
-            curBar.low = Math.min(curBar.low, p);
-            this.chartFuture.series.candle.update(curBar);
-          }
-          this._updateVolumeAndRvolIncremental(this.chartFuture, curBar);
-          const bg = this.chartFuture.barGroupMap.get(curBar.time);
-          if (this.chartFuture.toolTipElement) {
-            this.chartFuture.toolTipElement.innerHTML = this.formatBarInfo(curBar, bg);
-          }
-        }
-      }
       return;
     }
 
