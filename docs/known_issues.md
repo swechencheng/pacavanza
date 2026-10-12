@@ -66,5 +66,5 @@ The bar retention limit has been expanded to `MAX_RECENT_BARS = 3600` (covering 
 Avanza's SSE trade feed sends an `initialSubscription` dump of recent fulfilled trades upon connecting or reconnecting. To prevent historical trades from artificially inflating the current forming bar's volume:
 
 - `future_market_daemon.py` filters out any trades tagged with `initialSubscription` or `cancelled`.
-- Trades are tracked per `tradeId` using an incremental volume delta ($\Delta = \text{new\_volume} - \text{prev\_volume}$), ensuring partial execution updates only accumulate their newly executed contracts.
+- Trades are tracked per `tradeId` using an incremental volume delta ($\Delta = V_{\text{new}} - V_{\text{prev}}$), ensuring partial execution updates only accumulate their newly executed contracts.
 - Completed bars are periodically cross-referenced and reconciled with Avanza's official chart history (`fetch_avanza_chart_history`) to maintain authoritative volume integrity.
