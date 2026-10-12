@@ -164,6 +164,8 @@ def create_app(
         with open(file_path, "w") as f:
             json.dump(fills, f, default=str)
 
+    MAX_RECENT_BARS = 3600
+
     # Initialize known instruments without overwriting the defaultdict
     for sid in instrument_list.keys():
         recent_bars[sid] = []
@@ -442,9 +444,9 @@ def create_app(
                             "volume": bar.get("volume", 0),
                         }
                     )
-                # limit history length (e.g. 1500 bars)
-                if len(lst) > 1500:
-                    lst[:] = lst[-1500:]
+                # limit history length (e.g. MAX_RECENT_BARS)
+                if len(lst) > MAX_RECENT_BARS:
+                    lst[:] = lst[-MAX_RECENT_BARS:]
 
             # Also mirror to ibkr_recent_bars if this is the active future
             if ibkr_trading is not None and sid in ibkr_trading.recent_bars:
@@ -471,8 +473,8 @@ def create_app(
                             "volume": bar.get("volume", 0),
                         }
                     )
-                if len(ibkr_lst) > 1500:
-                    ibkr_lst[:] = ibkr_lst[-1500:]
+                if len(ibkr_lst) > MAX_RECENT_BARS:
+                    ibkr_lst[:] = ibkr_lst[-MAX_RECENT_BARS:]
 
             # compute incremental EMA updates (fast) - uses the global recent_bars dict; reading latest snapshot is fine
             emas = {}
@@ -522,9 +524,9 @@ def create_app(
                             }
                         )
                         break
-                # limit history length (e.g. 1500 bars)
-                if len(lst) > 1500:
-                    lst[:] = lst[-1500:]
+                # limit history length (e.g. MAX_RECENT_BARS)
+                if len(lst) > MAX_RECENT_BARS:
+                    lst[:] = lst[-MAX_RECENT_BARS:]
 
             # Also mirror completed bar to ibkr_recent_bars
             if ibkr_trading is not None and sid in ibkr_trading.recent_bars:
@@ -561,8 +563,8 @@ def create_app(
                             "volume": bar.get("volume", 0),
                         }
                     )
-                if len(ibkr_lst) > 1500:
-                    ibkr_lst[:] = ibkr_lst[-1500:]
+                if len(ibkr_lst) > MAX_RECENT_BARS:
+                    ibkr_lst[:] = ibkr_lst[-MAX_RECENT_BARS:]
 
             # recompute EMAs using incremental update with the finalized close
             emas = {}
@@ -623,7 +625,7 @@ def create_app(
                                 "volume": b.get("volume", 0),
                             }
                     sorted_keys = sorted(lst_dict.keys())
-                    recent_bars[sid] = [lst_dict[k] for k in sorted_keys][-1500:]
+                    recent_bars[sid] = [lst_dict[k] for k in sorted_keys][-MAX_RECENT_BARS:]
 
             await manager.broadcast(payload)
 
@@ -1041,8 +1043,8 @@ def create_app(
                 new_live_bars = [
                     live_bars_dict[k] for k in sorted(live_bars_dict.keys())
                 ]
-                if len(new_live_bars) > 1500:
-                    new_live_bars = new_live_bars[-1500:]
+                if len(new_live_bars) > MAX_RECENT_BARS:
+                    new_live_bars = new_live_bars[-MAX_RECENT_BARS:]
                 live_bars[:] = new_live_bars
 
             for b in live_bars:

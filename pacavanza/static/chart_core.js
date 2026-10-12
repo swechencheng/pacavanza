@@ -112,9 +112,22 @@ class PACChartApp {
           type: "custom",
           formatter: (val) => val.toFixed(2),
         },
-        priceScaleId: "rvol",
+        priceScaleId: "right",
         lastValueVisible: true,
         priceLineVisible: false,
+        autoscaleInfoProvider: (original) => {
+          const res = original();
+          if (res !== null && res.priceRange !== null) {
+            return {
+              priceRange: {
+                minValue: Math.min(0.8, res.priceRange.minValue),
+                maxValue: Math.max(1.5, res.priceRange.maxValue),
+              },
+              margins: res.margins,
+            };
+          }
+          return res;
+        },
       }, 1);
 
       rvolSeries.createPriceLine({

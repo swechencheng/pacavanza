@@ -618,8 +618,8 @@ class FutureTradeMonitor:
                 return
 
         bars.append(bar)
-        if len(bars) > 1500:
-            excess = len(bars) - 1500
+        if len(bars) > 3600:
+            excess = len(bars) - 3600
             del bars[:excess]
             state = self._abc_state.get(instrument_id)
             if state and state.get("A_idx") is not None:
