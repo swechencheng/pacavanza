@@ -31,6 +31,10 @@ The FastAPI backend (`backend.py`) acts as the central nervous system, consuming
 The local HTML dashboard (`http://localhost:8001`) offers a rich set of features to improve the manual trading and monitoring experience:
 
 - **Real-Time & Historical Charting**: Uses TradingView's Lightweight Charts to plot live OHLC data. A dropdown selector allows you to instantly pull up charts of historical futures.
+- **Volume & Relative Volume (RVol) Indicators**:
+  - **Volume Overlay (`Vol`)**: Optional volume histogram overlay on the main candle pane with bull/bear color coding and a 20-period Simple Moving Average (`Vol SMA`).
+  - **Relative Volume at Time (`RVol`) Pane**: A dedicated lower pane calculating TradingView-compatible cumulative relative volume ratios ($\text{Anchor}=\text{1D}$, $\text{Length}=20\text{ days}$). Evaluates today's cumulative intraday volume against the 20-day historical mean at that exact time of day, anchored around a 1.0 baseline.
+  - **Deduplicated Real-Time Trade Volume**: Aggregates live Avanza SSE fulfilled trades using incremental delta tracking (`tradeId` filtering) to prevent duplicate execution counts, with automated periodic reconciliation against Avanza's official chart history.
 - **Historical Trade Markers**: Past filled orders are plotted directly on the chart as color-coded dots, giving you immediate visual context of your entry and exit points over time.
 - **Advanced Order Management**:
   - **Quick Execution Controls**:
