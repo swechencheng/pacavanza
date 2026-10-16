@@ -2111,6 +2111,27 @@ class IbkrTrading(BaseAvanzaTrading):
                 return {"position": int(pos.position), "avgCost": price}
         return None
 
+    def is_order_related_to_position(self, order_id: int) -> bool:
+        """Check whether an active order is related to the current open position.
+
+        Returns True if there is an active open position and the order's action
+        opposes the position (i.e. an exit/protective order: SELL for Long, BUY for Short).
+        Returns False if flat or if the order is in the same direction as the position.
+        """
+        pos_info = self.get_position_info()
+        if not pos_info or pos_info.get("position", 0) == 0:
+            return False
+        pos = pos_info["position"]
+        trade = self._find_trade_by_order_id(order_id)
+        if not trade or not trade.order:
+            return False
+        action = str(trade.order.action).upper()
+        if pos > 0 and action == "SELL":
+            return True
+        if pos < 0 and action == "BUY":
+            return True
+        return False
+
     # --------------------------------------------------------------------------
     # Override: Avanza-specific account/position methods
     # --------------------------------------------------------------------------

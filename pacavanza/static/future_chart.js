@@ -291,17 +291,81 @@ class FutureChartApp extends PACChartApp {
         if (tt) tt.innerHTML = '';
       }
     }
-    const disableInput = !connected || tradingDisabled;
-    const controls = document.querySelectorAll('.trading-controls button, .trading-controls input, .trading-controls select, .order-panel button');
-    controls.forEach(ctrl => {
-      ctrl.disabled = disableInput;
-      if (disableInput) {
+
+    const disableTrading = !connected || tradingDisabled;
+    const hasPosition = this._currentPosition && this._currentPosition.position !== 0;
+
+    // Trading controls (new order creation)
+    const newOrderControls = document.querySelectorAll(
+      '.trading-controls button:not(#btn-market-close-future), .trading-controls input, .trading-controls select'
+    );
+    newOrderControls.forEach(ctrl => {
+      ctrl.disabled = disableTrading;
+      if (disableTrading) {
         ctrl.style.opacity = '0.5';
         ctrl.style.cursor = 'not-allowed';
       } else {
         ctrl.style.opacity = '1';
         ctrl.style.cursor = ctrl.tagName === 'INPUT' ? 'text' : (ctrl.tagName === 'SELECT' ? 'pointer' : 'pointer');
       }
+    });
+
+    // Close position button: enabled when connected and there is an active position
+    const closeBtn = document.getElementById('btn-market-close-future');
+    if (closeBtn) {
+      const disableClose = !connected || !hasPosition;
+      closeBtn.disabled = disableClose;
+      closeBtn.style.opacity = disableClose ? '0.5' : '1';
+      closeBtn.style.cursor = disableClose ? 'not-allowed' : 'pointer';
+    }
+
+    // Refresh orders button: always enabled when connected
+    const refreshBtn = document.getElementById('btn-refresh-orders');
+    if (refreshBtn) {
+      refreshBtn.disabled = !connected;
+      refreshBtn.style.opacity = !connected ? '0.5' : '1';
+      refreshBtn.style.cursor = !connected ? 'not-allowed' : 'pointer';
+    }
+
+    // Active orders panel: update buttons and inputs per order
+    const pos = hasPosition ? this._currentPosition.position : 0;
+    const orderRows = document.querySelectorAll('.order-panel .order-row');
+    orderRows.forEach(row => {
+      const action = row.getAttribute('data-action');
+      const isFulfilled = row.getAttribute('data-fulfilled') === 'true';
+      const isDone = row.getAttribute('data-done') === 'true';
+      const isRelated = pos !== 0 && ((pos > 0 && action === "SELL") || (pos < 0 && action === "BUY"));
+      const canModify = connected && (!tradingDisabled || isRelated);
+
+      // Cancel button: enabled as long as connected and not done
+      const cancelBtn = row.querySelector('.order-btn-danger');
+      if (cancelBtn) {
+        cancelBtn.disabled = !connected || isDone;
+        cancelBtn.style.opacity = (!connected || isDone) ? '0.5' : '1';
+        cancelBtn.style.cursor = (!connected || isDone) ? 'not-allowed' : 'pointer';
+      }
+
+      // Edit button, Market button, Price input, Qty input
+      const editBtn = row.querySelector('.order-btn:not(.order-btn-market):not(.order-btn-danger)');
+      const mktBtn = row.querySelector('.order-btn-market');
+      const priceInput = row.querySelector('.order-price-input');
+      const qtyInput = row.querySelector('.order-qty-input');
+
+      const disableEdit = isFulfilled || isDone || !canModify;
+      [editBtn, mktBtn].forEach(btn => {
+        if (btn) {
+          btn.disabled = disableEdit;
+          btn.style.opacity = disableEdit ? '0.5' : '1';
+          btn.style.cursor = disableEdit ? 'not-allowed' : 'pointer';
+        }
+      });
+      [priceInput, qtyInput].forEach(inp => {
+        if (inp) {
+          inp.disabled = disableEdit;
+          inp.style.opacity = disableEdit ? '0.5' : '1';
+          inp.style.cursor = disableEdit ? 'not-allowed' : 'text';
+        }
+      });
     });
   }
 
@@ -850,6 +914,7 @@ class FutureChartApp extends PACChartApp {
       return;
     }
 
+    const pos = this._currentPosition ? this._currentPosition.position : 0;
     container.innerHTML = orders.map(o => {
       const actionCls = o.action === "BUY" ? "tag-buy" : "tag-sell";
       const priceVal = o.price != null ? o.price : "";
@@ -862,18 +927,24 @@ class FutureChartApp extends PACChartApp {
       const fulfilledCls = isFulfilled ? "order-row-fulfilled" : (isCancelled ? "order-row-cancelled" : "");
       const purpleStyle = isFulfilled ? 'style="color: #b388ff !important;"' : "";
 
-      return `<div class="order-row ${fulfilledCls}" data-order-id="${o.orderId}" ${purpleStyle}>
+      const isRelated = pos !== 0 && ((pos > 0 && o.action === "SELL") || (pos < 0 && o.action === "BUY"));
+      const canModify = !window.TRADING_DISABLED || isRelated;
+      const disableEdit = !window.IBKR_CONNECTED || isFulfilled || isDone || !canModify;
+      const editDisabledAttr = disableEdit ? "disabled" : "";
+      const editStyleAttr = disableEdit ? 'style="opacity:0.5; cursor:not-allowed;"' : "";
+
+      return `<div class="order-row ${fulfilledCls}" data-order-id="${o.orderId}" data-action="${o.action}" data-fulfilled="${isFulfilled}" data-done="${isDone}" ${purpleStyle}>
         <span class="tag ${actionCls}">${o.action}</span>
         <span class="tag tag-type">${o.orderType}</span>
         ${isFulfilled || isDone ? `<span style="color:#888; ${purpleStyle}">×${o.totalQuantity}</span>` :
-          `×<input type="number" class="order-qty-input" value="${o.totalQuantity}" step="1" min="1" data-oid="${o.orderId}" />`}
+          `×<input type="number" class="order-qty-input" value="${o.totalQuantity}" step="1" min="1" data-oid="${o.orderId}" ${editDisabledAttr} ${editStyleAttr} />`}
         ${isMkt ? '<span style="color:#ff9900;">MKT</span>' :
-          `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${(isFulfilled || isDone) ? "disabled" : ""} ${purpleStyle} />`}
+          `<input type="number" class="order-price-input" value="${priceVal}" step="${this.tickSize || 0.25}" data-oid="${o.orderId}" ${(isFulfilled || isDone || disableEdit) ? "disabled" : ""} ${disableEdit ? 'style="opacity:0.5; cursor:not-allowed;"' : purpleStyle} />`}
         <span style="color:#555; ${isFulfilled ? "color: #b388ff !important;" : ""}">${o.status}</span>
         ${ocaInfo}
         <span style="flex:1;"></span>
-        ${(!isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrder(${o.orderId}, this)">✏️</button>` : ""}
-        ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})">→MKT</button>` : ""}
+        ${(!isFulfilled && !isDone) ? `<button class="order-btn" onclick="_futureApp._editOrder(${o.orderId}, this)" ${editDisabledAttr} ${editStyleAttr}>✏️</button>` : ""}
+        ${(!isMkt && !isFulfilled && !isDone) ? `<button class="order-btn order-btn-market" onclick="_futureApp._toMarket(${o.orderId})" ${editDisabledAttr} ${editStyleAttr}>→MKT</button>` : ""}
         ${!isDone ? `<button class="order-btn order-btn-danger" onclick="_futureApp._cancelOrder(${o.orderId})">❌</button>` : ""}
       </div>`;
     }).join("");
@@ -1251,6 +1322,17 @@ class FutureChartApp extends PACChartApp {
   }
 
   async _editOrder(orderId, btn) {
+    if (window.TRADING_DISABLED) {
+      const orders = this._lastOrders || [];
+      const order = orders.find(o => o.orderId === orderId);
+      const pos = this._currentPosition ? this._currentPosition.position : 0;
+      const isRelated = order && pos !== 0 && ((pos > 0 && order.action === "SELL") || (pos < 0 && order.action === "BUY"));
+      if (!isRelated) {
+        alert("Daily loss limit reached. Orders not related to an active position cannot be modified.");
+        return;
+      }
+    }
+
     const row = btn.closest(".order-row");
 
     // Read price if input exists
@@ -1273,7 +1355,7 @@ class FutureChartApp extends PACChartApp {
 
     if (payload.price === undefined && payload.quantity === undefined) return;
 
-    const res = await this._callApi("/ibkr/edit_order", payload);
+    const res = await this._callApi("/ibkr/edit_order", payload, "POST", true);
     if (res) {
       console.log("[ibkr] Edited order:", res);
       this._refreshOrders();
@@ -1281,7 +1363,17 @@ class FutureChartApp extends PACChartApp {
   }
 
   async _toMarket(orderId) {
-    const res = await this._callApi("/ibkr/edit_order_follow_market", { orderId });
+    if (window.TRADING_DISABLED) {
+      const orders = this._lastOrders || [];
+      const order = orders.find(o => o.orderId === orderId);
+      const pos = this._currentPosition ? this._currentPosition.position : 0;
+      const isRelated = order && pos !== 0 && ((pos > 0 && order.action === "SELL") || (pos < 0 && order.action === "BUY"));
+      if (!isRelated) {
+        alert("Daily loss limit reached. Orders not related to an active position cannot be modified.");
+        return;
+      }
+    }
+    const res = await this._callApi("/ibkr/edit_order_follow_market", { orderId }, "POST", true);
     if (res) {
       console.log("[ibkr] Converted to market:", res);
       this._refreshOrders();
@@ -1414,8 +1506,17 @@ class FutureChartApp extends PACChartApp {
 
     this._remoteLog("DEBUG", `Submitting order updates from drawing: ${JSON.stringify(updates)}`);
     for (const update of updates) {
+      if (window.TRADING_DISABLED) {
+        const order = orders.find(o => o.orderId === update.orderId);
+        const pos = this._currentPosition ? this._currentPosition.position : 0;
+        const isRelated = order && pos !== 0 && ((pos > 0 && order.action === "SELL") || (pos < 0 && order.action === "BUY"));
+        if (!isRelated) {
+          this._remoteLog("WARN", `Cannot update order ${update.orderId}: daily loss limit reached and order is not related to active position.`);
+          continue;
+        }
+      }
       try {
-        const res = await this._callApi("/ibkr/edit_order", update);
+        const res = await this._callApi("/ibkr/edit_order", update, "POST", true);
         if (res) {
           this._remoteLog("DEBUG", `Successfully updated order ${update.orderId} to price ${update.price}`);
         }

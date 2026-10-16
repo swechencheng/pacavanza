@@ -70,6 +70,8 @@ def create_app(
     redis_url=REDIS_URL,
     redis_channels=["pacavanza:ticker_updates", "pacavanza:future_updates"],
     static_html_path: str | Path = STATIC_HTML,
+    ibkr_trading=None,
+    ibkr_portfolio=None,
 ):
     """
     Create FastAPI app. Uses lifespan async context manager to start/stop background
@@ -214,9 +216,9 @@ def create_app(
     # instantiate IbkrTrading (if IBKR connection is available)
     # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
     # so that Avanza SSE price updates don't corrupt IBKR bar data.
-    # ── IBKR trading state (populated in lifespan once IB connects) ─────────
-    ibkr_trading = None
-    ibkr_portfolio = None
+    # ── IBKR trading state (populated in lifespan once IB connects or injected) ──
+    ibkr_trading = ibkr_trading
+    ibkr_portfolio = ibkr_portfolio
 
     # Build separate bar storage for the active future.
     # IbkrTrading gets its OWN recent_bars (not shared with Avanza redis subscriber)
@@ -1483,12 +1485,26 @@ def create_app(
                 detail="IBKR trading not active",
             )
 
+    def _require_daily_loss_limit_not_reached():
+        """Raise 403 if daily loss limit is reached."""
+        target_local_symbol = (
+            ibkr_trading.contract.localSymbol
+            if (ibkr_trading and getattr(ibkr_trading, "contract", None))
+            else None
+        )
+        if check_daily_loss_limit(ibkr_portfolio, target_local_symbol):
+            raise HTTPException(
+                status_code=403,
+                detail="Daily loss limit reached. New orders cannot be created.",
+            )
+
     # ── IBKR stop/market/cancel endpoints (mirror /trade/* but use ibkr_trading) ──
 
     @app.post("/ibkr/market_buy")
     async def ibkr_market_buy(req: Request):
         """Place a market buy order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1507,6 +1523,7 @@ def create_app(
     async def ibkr_market_sell(req: Request):
         """Place a market sell order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1553,6 +1570,7 @@ def create_app(
     async def ibkr_buy_stop(req: Request):
         """Schedule a buy stop order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1570,6 +1588,7 @@ def create_app(
     async def ibkr_late_buy_stop(req: Request):
         """Place a late buy stop order immediately via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1587,6 +1606,7 @@ def create_app(
     async def ibkr_sell_stop(req: Request):
         """Schedule a sell stop order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1605,6 +1625,7 @@ def create_app(
     async def ibkr_late_sell_stop(req: Request):
         """Place a late sell stop order immediately via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         instrument_id = body.get("instrumentId")
         percentage = body.get("percentage")
@@ -1668,6 +1689,7 @@ def create_app(
         """
         Edit the price and/or quantity of an existing IBKR order.
         Accepts: { orderId: int, price: float (optional), quantity: int (optional) }
+        Exempt from daily loss limit if the order is related to an active open position.
         """
         _require_ibkr()
         body = await req.json()
@@ -1680,12 +1702,34 @@ def create_app(
             raise HTTPException(
                 status_code=400, detail="Either price or quantity must be provided"
             )
+
+        target_local_symbol = (
+            ibkr_trading.contract.localSymbol
+            if getattr(ibkr_trading, "contract", None)
+            else None
+        )
+        if check_daily_loss_limit(ibkr_portfolio, target_local_symbol):
+            if not ibkr_trading.is_order_related_to_position(int(order_id)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Daily loss limit reached. Orders not related to an active position cannot be modified.",
+                )
+            pos_info = ibkr_trading.get_position_info()
+            pos_size = abs(pos_info["position"]) if pos_info else 0
+            if quantity is not None and int(quantity) > pos_size:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot increase order quantity ({quantity}) beyond active position size ({pos_size}) when daily loss limit is reached.",
+                )
+
         try:
             p_val = float(price) if price is not None else None
             q_val = int(quantity) if quantity is not None else None
             result = ibkr_trading.edit_order(
                 order_id=int(order_id), price=p_val, quantity=q_val
             )
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
@@ -1695,14 +1739,30 @@ def create_app(
         """
         Convert an existing IBKR order to a market order.
         Accepts: { orderId: int }
+        Exempt from daily loss limit if the order is related to an active open position.
         """
         _require_ibkr()
         body = await req.json()
         order_id = body.get("orderId")
         if order_id is None:
             raise HTTPException(status_code=400, detail="orderId required")
+
+        target_local_symbol = (
+            ibkr_trading.contract.localSymbol
+            if getattr(ibkr_trading, "contract", None)
+            else None
+        )
+        if check_daily_loss_limit(ibkr_portfolio, target_local_symbol):
+            if not ibkr_trading.is_order_related_to_position(int(order_id)):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Daily loss limit reached. Orders not related to an active position cannot be modified.",
+                )
+
         try:
             result = ibkr_trading.edit_order_follow_market(order_id=int(order_id))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
@@ -1724,6 +1784,30 @@ def create_app(
                 status_code=400,
                 detail="action, volume, and stopPrice required",
             )
+
+        target_local_symbol = (
+            ibkr_trading.contract.localSymbol
+            if getattr(ibkr_trading, "contract", None)
+            else None
+        )
+        if check_daily_loss_limit(ibkr_portfolio, target_local_symbol):
+            pos_info = ibkr_trading.get_position_info()
+            pos = pos_info.get("position", 0) if pos_info else 0
+            is_related = pos != 0 and (
+                (pos > 0 and str(action).upper() == "SELL")
+                or (pos < 0 and str(action).upper() == "BUY")
+            )
+            if not is_related:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Daily loss limit reached. Cannot place stop order without a related active position.",
+                )
+            if int(volume) > abs(pos):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot place stop order volume ({volume}) larger than active position size ({abs(pos)}) when daily loss limit is reached.",
+                )
+
         try:
             result = ibkr_trading.place_stop_order(
                 action=action,
@@ -1731,6 +1815,8 @@ def create_app(
                 stop_price=float(stop_price),
                 order_ref=str(order_ref),
             )
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
@@ -1752,6 +1838,30 @@ def create_app(
                 status_code=400,
                 detail="action, volume, limitPrice, and stopPrice required",
             )
+
+        target_local_symbol = (
+            ibkr_trading.contract.localSymbol
+            if getattr(ibkr_trading, "contract", None)
+            else None
+        )
+        if check_daily_loss_limit(ibkr_portfolio, target_local_symbol):
+            pos_info = ibkr_trading.get_position_info()
+            pos = pos_info.get("position", 0) if pos_info else 0
+            is_related = pos != 0 and (
+                (pos > 0 and str(action).upper() == "SELL")
+                or (pos < 0 and str(action).upper() == "BUY")
+            )
+            if not is_related:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Daily loss limit reached. Cannot place bracket without a related active position.",
+                )
+            if int(volume) > abs(pos):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot place bracket volume ({volume}) larger than active position size ({abs(pos)}) when daily loss limit is reached.",
+                )
+
         try:
             result = ibkr_trading.place_oca_bracket(
                 action=action,
@@ -1759,6 +1869,8 @@ def create_app(
                 limit_price=float(limit_price),
                 stop_price=float(stop_price),
             )
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", **result})
@@ -1771,6 +1883,7 @@ def create_app(
         Only allowed when flat (no active position).
         """
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         LOGGER.info(f"ibkr_place_breakout_stop_oca received: {body}")
         volume = body.get("volume")
@@ -1813,6 +1926,8 @@ def create_app(
                 low_price=lp,
             )
             LOGGER.info(f"ibkr_place_breakout_stop_oca succeeded: {result}")
+        except HTTPException:
+            raise
         except Exception as e:
             LOGGER.error(f"ibkr_place_breakout_stop_oca error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
@@ -1822,6 +1937,7 @@ def create_app(
     async def ibkr_limit_buy(req: Request):
         """Place a limit buy order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         volume = body.get("volume")
         price = body.get("price")
@@ -1829,6 +1945,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_limit_buy(int(volume), float(price))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
@@ -1837,6 +1955,7 @@ def create_app(
     async def ibkr_limit_sell(req: Request):
         """Place a limit sell order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         volume = body.get("volume")
         price = body.get("price")
@@ -1844,6 +1963,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_limit_sell(int(volume), float(price))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
@@ -1852,6 +1973,7 @@ def create_app(
     async def ibkr_bare_buy_stop(req: Request):
         """Place a bare buy stop order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         volume = body.get("volume")
         price = body.get("price")
@@ -1859,6 +1981,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_bare_buy_stop(int(volume), float(price))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
@@ -1867,6 +1991,7 @@ def create_app(
     async def ibkr_bare_sell_stop(req: Request):
         """Place a bare sell stop order via IBKR."""
         _require_ibkr()
+        _require_daily_loss_limit_not_reached()
         body = await req.json()
         volume = body.get("volume")
         price = body.get("price")
@@ -1874,6 +1999,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="volume and price required")
         try:
             order = ibkr_trading.place_bare_sell_stop(int(volume), float(price))
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
         return JSONResponse(content={"status": "ok", "order": order})
