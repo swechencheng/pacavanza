@@ -711,7 +711,7 @@ class FutureTradeMonitor:
                         )
                         LOGGER.info(msg)
                         asyncio.create_task(self._send_telegram_text(msg))
-                        stop_price = round(c_val - TICK_SIZE, 2)
+                        stop_price = round(c_val - (TICK_SIZE * 3), 2)
                         await self._place_sell_stop(stop_price)
 
                         state["A"] = c_val
@@ -745,7 +745,7 @@ class FutureTradeMonitor:
                         )
                         LOGGER.info(msg)
                         asyncio.create_task(self._send_telegram_text(msg))
-                        stop_price = round(c_val + TICK_SIZE, 2)
+                        stop_price = round(c_val + (TICK_SIZE * 3), 2)
                         await self._place_buy_stop(stop_price)
 
                         state["A"] = c_val
