@@ -19,17 +19,9 @@ try:
 except RuntimeError:
     pass
 
-# Initialize AVANZA once in the parent process!
+# Initialize AVANZA in the parent process!
 # It will serialize the session to a file for child processes to use.
 from pacavanza.modules.avanza_instance import get_avanza
-
-while True:
-    try:
-        get_avanza()
-        break
-    except Exception as e:
-        print(f"Failed to initialize Avanza: {e}. Retrying in 10s...")
-        time.sleep(30)
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +35,52 @@ logging.getLogger("ib_async").setLevel(logging.WARNING)
 logger = logging.getLogger("controller")
 
 PROCESS_MAP = {}
+PROCESS_CRASH_HISTORY = {}
+MAX_CRASH_COUNT = 5
+CRASH_WINDOW_SECONDS = 30
+
+
+def _init_avanza_session():
+    """Initialize AVANZA once in the parent process.
+    It serializes the session to a file for child processes to use.
+    """
+    while True:
+        try:
+            get_avanza()
+            break
+        except Exception as e:
+            logger.warning(f"Failed to initialize Avanza: {e}. Retrying in 30s...")
+            time.sleep(30)
+
+
+def check_crash_loop(name, now=None):
+    """
+    Record a crash timestamp for process `name`.
+    Returns True if crash count exceeds MAX_CRASH_COUNT within CRASH_WINDOW_SECONDS.
+    """
+    if now is None:
+        now = time.time()
+    crashes = PROCESS_CRASH_HISTORY.setdefault(name, [])
+    crashes.append(now)
+    crashes[:] = [t for t in crashes if now - t <= CRASH_WINDOW_SECONDS]
+    return len(crashes) >= MAX_CRASH_COUNT
+
+
+def reset_crash_history(name=None):
+    """Reset crash history for testing or manual reset."""
+    if name:
+        PROCESS_CRASH_HISTORY.pop(name, None)
+    else:
+        PROCESS_CRASH_HISTORY.clear()
+
+
+def is_active_trading_window(now=None):
+    """Return True if `now` (Stockholm time) is within operating hours (08:00:00 to 23:00:00)."""
+    if now is None:
+        now = datetime.now(ZoneInfo("Europe/Stockholm"))
+    start_time_limit = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    stop_time_limit = now.replace(hour=23, minute=0, second=0, microsecond=0)
+    return start_time_limit <= now < stop_time_limit
 
 
 def _run_module(module_name, log_prefix):
@@ -67,10 +105,19 @@ def start_process(name, module_name, log_prefix):
         if PROCESS_MAP[name].is_alive():
             return False  # Still running
         else:
+            exitcode = PROCESS_MAP[name].exitcode
             logger.warning(
-                f"{name} died (exit code {PROCESS_MAP[name].exitcode}). Restarting..."
+                f"{name} died (exit code {exitcode}). Restarting..."
             )
             del PROCESS_MAP[name]
+
+            if check_crash_loop(name):
+                logger.critical(
+                    f"CRASH LOOP DETECTED for {name} ({MAX_CRASH_COUNT} crashes within {CRASH_WINDOW_SECONDS}s). "
+                    f"Exiting daemon controller so launchd can restart with a clean environment."
+                )
+                stop_all()
+                sys.exit(1)
 
     logger.info(f"Starting {name}...")
 
@@ -82,6 +129,13 @@ def start_process(name, module_name, log_prefix):
         return True
     except Exception as e:
         logger.error(f"Failed to start {name}: {e}")
+        if check_crash_loop(name):
+            logger.critical(
+                f"CRASH LOOP DETECTED for {name} on spawn failure ({MAX_CRASH_COUNT} crashes within {CRASH_WINDOW_SECONDS}s). "
+                f"Exiting daemon controller so launchd can restart with a clean environment."
+            )
+            stop_all()
+            sys.exit(1)
         return False
 
 
@@ -125,6 +179,9 @@ def main():
         f"Daemon Controller Started. IBKR_HOST: {IBKR_HOST}, IBKR_PORT: {IBKR_PORT}"
     )
 
+    logger.info("Initializing Avanza session...")
+    _init_avanza_session()
+
     def signal_handler(sig, _frame):
         logger.info(f"Received signal {sig}. Shutting down all processes.")
         stop_all()
@@ -133,14 +190,25 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    was_active_window = None
+
     while True:
         try:
             now = datetime.now(ZoneInfo("Europe/Stockholm"))
-            # Operating hours: 08:00:00 to 23:00:00
-            start_time_limit = now.replace(hour=8, minute=0, second=0, microsecond=0)
-            stop_time_limit = now.replace(hour=23, minute=0, second=0, microsecond=0)
+            is_active_window = is_active_trading_window(now)
 
-            is_active_window = start_time_limit <= now < stop_time_limit
+            # On the first iteration, initialize was_active_window to the current window
+            if was_active_window is None:
+                was_active_window = is_active_window
+
+            # Check for morning transition: inactive (overnight) -> active (08:00 morning open)
+            if not was_active_window and is_active_window:
+                logger.info(
+                    "Transitioning to active trading window (08:00). Exiting controller to let launchd "
+                    "start a fresh process with updated environment for the new trading day..."
+                )
+                stop_all()
+                sys.exit(0)
 
             if is_active_window:
                 # 1. Dashboard
@@ -196,6 +264,7 @@ def main():
                     )
                     stop_all()
 
+            was_active_window = is_active_window
             time.sleep(1)
 
         except Exception as e:
