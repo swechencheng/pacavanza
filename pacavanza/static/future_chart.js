@@ -8,6 +8,8 @@ class FutureChartApp extends PACChartApp {
   constructor() {
     super();
     window.PAC_TRADING_STATE = { futureInstrument: null };
+    window.IBKR_CONNECTED = true;
+    window.TRADING_DISABLED = false;
     this.chartFuture = this.createChartManager("chart-future", {
       toolTipId: "chart-ohlc-info-future",
       enableVolume: true,
@@ -278,7 +280,20 @@ class FutureChartApp extends PACChartApp {
     this._applyEMAFromMsg(this.chartFuture, msg);
   }
 
+  _updateCloseButtonState() {
+    const closeBtn = document.getElementById('btn-market-close-future');
+    if (!closeBtn) return;
+    const connected = window.IBKR_CONNECTED !== false;
+    const hasPosition = this._currentPosition && this._currentPosition.position !== 0;
+    const disableClose = !connected || !hasPosition;
+    closeBtn.disabled = disableClose;
+    closeBtn.style.opacity = disableClose ? '0.5' : '1';
+    closeBtn.style.cursor = disableClose ? 'not-allowed' : 'pointer';
+  }
+
   _updateIbkrStatus(connected, tradingDisabled) {
+    if (connected === undefined) connected = window.IBKR_CONNECTED !== false;
+    if (tradingDisabled === undefined) tradingDisabled = !!window.TRADING_DISABLED;
     window.IBKR_CONNECTED = connected;
     window.TRADING_DISABLED = tradingDisabled;
     if (this.chartFuture) {
@@ -311,13 +326,7 @@ class FutureChartApp extends PACChartApp {
     });
 
     // Close position button: enabled when connected and there is an active position
-    const closeBtn = document.getElementById('btn-market-close-future');
-    if (closeBtn) {
-      const disableClose = !connected || !hasPosition;
-      closeBtn.disabled = disableClose;
-      closeBtn.style.opacity = disableClose ? '0.5' : '1';
-      closeBtn.style.cursor = disableClose ? 'not-allowed' : 'pointer';
-    }
+    this._updateCloseButtonState();
 
     // Refresh orders button: always enabled when connected
     const refreshBtn = document.getElementById('btn-refresh-orders');
@@ -949,9 +958,7 @@ class FutureChartApp extends PACChartApp {
       </div>`;
     }).join("");
 
-    if (window.TRADING_DISABLED) {
-      this._updateIbkrStatus(window.IBKR_CONNECTED, window.TRADING_DISABLED);
-    }
+    this._updateIbkrStatus(window.IBKR_CONNECTED, window.TRADING_DISABLED);
   }
 
   _updateOrderDrawings(orders) {
@@ -1291,6 +1298,8 @@ class FutureChartApp extends PACChartApp {
 
   // ── Position Info Overlay ─────────────────────────────────────────
   _updatePositionOverlay() {
+    this._updateCloseButtonState();
+
     const container = document.getElementById('chart-future');
     if (!container) return;
 
